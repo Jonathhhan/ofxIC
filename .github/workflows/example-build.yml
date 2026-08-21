@@ -1,0 +1,311 @@
+name: openFrameworks example
+
+on:
+  pull_request:
+    paths:
+      - "src/**"
+      - "addon_config.mk"
+      - "ofxICChatExample/**"
+      - ".github/workflows/example-build.yml"
+  push:
+    branches:
+      - main
+    tags:
+      - "v*"
+    paths:
+      - "src/**"
+      - "addon_config.mk"
+      - "ofxICChatExample/**"
+      - ".github/workflows/example-build.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: openframeworks-example-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  OFXIMGUI_COMMIT: 4b5d04a3e73bbae34d564c9b78143e021f67377a
+
+jobs:
+  build-linux-nightly:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Resolve current openFrameworks nightly
+        id: nightly
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          release_json="$(curl --fail --silent --show-error --location \
+            --header "Authorization: Bearer $GH_TOKEN" \
+            https://api.github.com/repos/openframeworks/openFrameworks/releases/tags/nightly)"
+          asset_url="$(jq -r '.assets[] | select(.name | endswith("_linux64_gcc6_release.tar.gz")) | .browser_download_url' <<<"$release_json")"
+          if [[ -z "$asset_url" || "$asset_url" == "null" ]]; then
+            echo "The nightly release has no linux64_gcc6 archive" >&2
+            exit 1
+          fi
+          asset_name="${asset_url##*/}"
+          echo "asset_name=$asset_name" >> "$GITHUB_OUTPUT"
+          echo "asset_url=$asset_url" >> "$GITHUB_OUTPUT"
+          echo "Using $asset_name"
+
+      - name: Cache openFrameworks archive
+        id: of-cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/of-download/${{ steps.nightly.outputs.asset_name }}
+          key: openframeworks-${{ runner.os }}-${{ steps.nightly.outputs.asset_name }}
+
+      - name: Download openFrameworks nightly
+        if: steps.of-cache.outputs.cache-hit != 'true'
+        env:
+          ASSET_NAME: ${{ steps.nightly.outputs.asset_name }}
+          ASSET_URL: ${{ steps.nightly.outputs.asset_url }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/of-download"
+          curl --fail --location --retry 3 --show-error \
+            "$ASSET_URL" \
+            --output "$RUNNER_TEMP/of-download/$ASSET_NAME"
+
+      - name: Extract openFrameworks
+        env:
+          ASSET_NAME: ${{ steps.nightly.outputs.asset_name }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          of_root="$RUNNER_TEMP/openframeworks/${ASSET_NAME%.tar.gz}"
+          mkdir -p "$RUNNER_TEMP/openframeworks"
+          tar -xzf "$RUNNER_TEMP/of-download/$ASSET_NAME" \
+            -C "$RUNNER_TEMP/openframeworks"
+          test -d "$of_root"
+          echo "OF_ROOT=$of_root" >> "$GITHUB_ENV"
+          echo "OF_NIGHTLY_ASSET=$ASSET_NAME" >> "$GITHUB_ENV"
+
+      - name: Install openFrameworks dependencies
+        shell: bash
+        run: sudo "$OF_ROOT/scripts/linux/ubuntu/install_dependencies.sh" -y
+
+      - name: Prepare addon example
+        shell: bash
+        run: |
+          set -euo pipefail
+          ln -s "$GITHUB_WORKSPACE" "$OF_ROOT/addons/ofxIC"
+          git -C "$OF_ROOT/addons" init ofxImGui
+          git -C "$OF_ROOT/addons/ofxImGui" remote add origin https://github.com/jvcleave/ofxImGui.git
+          git -C "$OF_ROOT/addons/ofxImGui" fetch --depth 1 origin "$OFXIMGUI_COMMIT"
+          git -C "$OF_ROOT/addons/ofxImGui" checkout --detach FETCH_HEAD
+          app="$OF_ROOT/apps/myApps/ofxICChatExample"
+          mkdir -p "${app%/*}"
+          cp -R "$GITHUB_WORKSPACE/ofxICChatExample" "$app"
+          cp "$OF_ROOT/scripts/templates/linux64/Makefile" "$app/Makefile"
+          cp "$OF_ROOT/scripts/templates/linux64/config.make" "$app/config.make"
+
+      - name: Build example
+        shell: bash
+        run: |
+          set -euo pipefail
+          app="$OF_ROOT/apps/myApps/ofxICChatExample"
+          make -C "$app" Release -j2
+          test -x "$app/bin/ofxICChatExample"
+          echo "Built with $OF_NIGHTLY_ASSET"
+
+      - name: Install virtual display tools
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            imagemagick \
+            xauth \
+            xdotool \
+            xvfb
+
+      - name: Launch example and capture GUI
+        shell: bash
+        env:
+          LIBGL_ALWAYS_SOFTWARE: "1"
+        run: |
+          set -euo pipefail
+          app="$OF_ROOT/apps/myApps/ofxICChatExample"
+          artifact_dir="$RUNNER_TEMP/gui-smoke"
+          mkdir -p "$artifact_dir"
+
+          xvfb-run \
+            --auto-servernum \
+            --server-args="-screen 0 1280x720x24 -nolisten tcp" \
+            bash -euo pipefail -c '
+              binary="$1"
+              log="$2"
+              screenshot="$3"
+              geometry="$4"
+
+              "$binary" >"$log" 2>&1 &
+              app_pid=$!
+              cleanup() {
+                kill "$app_pid" 2>/dev/null || true
+                wait "$app_pid" 2>/dev/null || true
+              }
+              trap cleanup EXIT
+
+              window_id=""
+              for _ in $(seq 1 60); do
+                if ! kill -0 "$app_pid" 2>/dev/null; then
+                  echo "Example exited before its window appeared" >&2
+                  cat "$log" >&2
+                  exit 1
+                fi
+                window_id="$(xdotool search --name "^ofxIC Document Tool$" 2>/dev/null | head -n 1 || true)"
+                [[ -n "$window_id" ]] && break
+                sleep 0.25
+              done
+
+              if [[ -z "$window_id" ]]; then
+                echo "Example window did not appear" >&2
+                cat "$log" >&2
+                exit 1
+              fi
+
+              sleep 1
+              xdotool getwindowgeometry --shell "$window_id" >"$geometry"
+              import -display "$DISPLAY" -window "$window_id" "$screenshot"
+              test -s "$screenshot"
+            ' bash \
+            "$app/bin/ofxICChatExample" \
+            "$artifact_dir/ofxICChatExample.log" \
+            "$artifact_dir/ofxICChatExample.png" \
+            "$artifact_dir/window.txt"
+
+          {
+            echo "openFrameworks=$OF_NIGHTLY_ASSET"
+            echo "runner=${RUNNER_OS}-${RUNNER_ARCH}"
+          } >"$artifact_dir/build.txt"
+          file "$artifact_dir/ofxICChatExample.png"
+
+      - name: Upload GUI smoke artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ofxICChatExample-gui-linux-nightly
+          path: ${{ runner.temp }}/gui-smoke
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Control GUI against Hugging Face
+        if: >-
+          github.ref == 'refs/heads/main' &&
+          contains(github.event.head_commit.message, '[hf-gui-smoke]')
+        timeout-minutes: 5
+        shell: bash
+        env:
+          LIBGL_ALWAYS_SOFTWARE: "1"
+          OFXIC_API_KEY: ${{ secrets.HF_TOKEN }}
+          OFXIC_MODEL: ${{ vars.HF_MODEL || 'openai/gpt-oss-120b' }}
+          OFXIC_ENDPOINT_URL: ${{ vars.HF_SERVER_URL || 'https://router.huggingface.co/v1' }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$OFXIC_API_KEY" ]]; then
+            echo "HF_TOKEN is missing" >&2
+            exit 1
+          fi
+
+          app="$OF_ROOT/apps/myApps/ofxICChatExample"
+          artifact_dir="$RUNNER_TEMP/hf-gui-smoke"
+          result="$artifact_dir/result.txt"
+          mkdir -p "$artifact_dir"
+          export OFXIC_GUI_RESULT_PATH="$result"
+
+          xvfb-run \
+            --auto-servernum \
+            --server-args="-screen 0 1280x720x24 -nolisten tcp" \
+            bash -euo pipefail -c '
+              binary="$1"
+              log="$2"
+              result="$3"
+              screenshot="$4"
+              prompt="$5"
+
+              "$binary" >"$log" 2>&1 &
+              app_pid=$!
+              cleanup() {
+                kill "$app_pid" 2>/dev/null || true
+                wait "$app_pid" 2>/dev/null || true
+              }
+              trap cleanup EXIT
+
+              window_id=""
+              for _ in $(seq 1 60); do
+                if ! kill -0 "$app_pid" 2>/dev/null; then
+                  echo "Example exited before its window appeared" >&2
+                  cat "$log" >&2
+                  exit 1
+                fi
+                window_id="$(xdotool search --name "^ofxIC Document Tool$" 2>/dev/null | head -n 1 || true)"
+                [[ -n "$window_id" ]] && break
+                sleep 0.25
+              done
+              [[ -n "$window_id" ]] || { echo "Example window did not appear" >&2; exit 1; }
+
+              xdotool type --window "$window_id" --clearmodifiers --delay 1 "$prompt"
+              xdotool key --window "$window_id" Return
+
+              for _ in $(seq 1 360); do
+                [[ -s "$result" ]] && break
+                if ! kill -0 "$app_pid" 2>/dev/null; then
+                  echo "Example exited while waiting for Hugging Face" >&2
+                  cat "$log" >&2
+                  exit 1
+                fi
+                sleep 0.5
+              done
+
+              if [[ ! -s "$result" ]]; then
+                echo "Timed out waiting for the GUI result" >&2
+                cat "$log" >&2
+                exit 1
+              fi
+              if ! grep -Fq "Completed with 2 model request(s)" "$result"; then
+                echo "GUI request did not complete the expected tool round" >&2
+                cat "$result" >&2
+                exit 1
+              fi
+              if ! grep -Fq "architecture.md#chunk-1" "$result"; then
+                echo "GUI answer omitted the document source identifier" >&2
+                cat "$result" >&2
+                exit 1
+              fi
+
+              sleep 1
+              import -display "$DISPLAY" -window "$window_id" "$screenshot"
+              test -s "$screenshot"
+            ' bash \
+            "$app/bin/ofxICChatExample" \
+            "$artifact_dir/ofxICChatExample.log" \
+            "$result" \
+            "$artifact_dir/ofxICChatExample-huggingface.png" \
+            "Why is the model runtime outside the addon? Answer in one short sentence."
+
+          {
+            echo "model=$OFXIC_MODEL"
+            echo "endpoint=$OFXIC_ENDPOINT_URL"
+            echo "openFrameworks=$OF_NIGHTLY_ASSET"
+          } >"$artifact_dir/build.txt"
+          cat "$result"
+
+      - name: Upload Hugging Face GUI artifacts
+        if: >-
+          always() &&
+          github.ref == 'refs/heads/main' &&
+          contains(github.event.head_commit.message, '[hf-gui-smoke]')
+        uses: actions/upload-artifact@v4
+        with:
+          name: ofxICChatExample-huggingface-gui
+          path: ${{ runner.temp }}/hf-gui-smoke
+          if-no-files-found: error
+          retention-days: 14
