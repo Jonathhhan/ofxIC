@@ -16,9 +16,12 @@ OFXIC_TEST(endpoint_normalizes_openai_endpoint_urls) {
 	ofxIC::Endpoint endpoint(
 		"http://localhost:8001/v1/chat/completions", transport);
 	ofxIC::Endpoint defaultEndpoint("", transport);
+	ofxIC::Endpoint imageEndpoint(
+		"http://localhost:8001/v1/images/generations", transport);
 
 	OFXIC_REQUIRE(endpoint.getBaseUrl() == "http://localhost:8001");
 	OFXIC_REQUIRE(defaultEndpoint.getBaseUrl() == "http://127.0.0.1:8080");
+	OFXIC_REQUIRE(imageEndpoint.getBaseUrl() == "http://localhost:8001");
 	OFXIC_REQUIRE(endpoint.inspect());
 	OFXIC_REQUIRE(captured.url == "http://localhost:8001/v1/models");
 }

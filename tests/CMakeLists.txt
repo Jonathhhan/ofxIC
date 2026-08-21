@@ -7,11 +7,13 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 add_executable(ofxIC_tests
 	test_main.cpp
 	test_endpoint.cpp
+	test_media_client.cpp
 	test_chat_session.cpp
 	test_document_index.cpp
 	test_tool_loop.cpp
 	test_public_headers.cpp
 	../src/endpoint/ofxICEndpoint.cpp
+	../src/media/ofxICMediaClient.cpp
 	../src/chat/ofxICChatSession.cpp
 	../src/documents/ofxICDocumentIndex.cpp
 	../src/tools/ofxICToolRegistry.cpp

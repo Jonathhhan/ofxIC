@@ -3,7 +3,7 @@ set -eu
 
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 ADDON_ROOT=$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)
-EXAMPLE_ROOT="$ADDON_ROOT/ofxICChatExample"
+EXAMPLE_ROOT="$ADDON_ROOT/ofxICExample"
 ENDPOINT_URL="${OFXIC_ENDPOINT_URL:-http://127.0.0.1:8080}"
 MODEL="${OFXIC_MODEL:-}"
 SERVER="${OFXIC_LLAMA_SERVER:-llama-server}"
@@ -13,7 +13,7 @@ DRY_RUN=0
 
 usage() {
   cat <<'EOF'
-Usage: sh scripts/run-chat-example.sh [options]
+Usage: sh scripts/run-example.sh [options]
 
 Options:
   --endpoint-url URL endpoint (default http://127.0.0.1:8080)
@@ -41,8 +41,8 @@ done
 
 find_example() {
   for candidate in \
-    "$EXAMPLE_ROOT/bin/ofxICChatExample" \
-    "$EXAMPLE_ROOT/bin/ofxICChatExample.app/Contents/MacOS/ofxICChatExample"; do
+    "$EXAMPLE_ROOT/bin/ofxICExample" \
+    "$EXAMPLE_ROOT/bin/ofxICExample.app/Contents/MacOS/ofxICExample"; do
     if [ -x "$candidate" ]; then
       printf '%s\n' "$candidate"
       return 0
@@ -126,9 +126,9 @@ if [ "$DRY_RUN" -eq 1 ]; then
 fi
 
 if [ -z "$EXAMPLE_BIN" ]; then
-  echo "ofxICChatExample executable was not found." >&2
-  echo "Generate/build ofxICChatExample first; on macOS the expected path is:" >&2
-  echo "  $EXAMPLE_ROOT/bin/ofxICChatExample.app/Contents/MacOS/ofxICChatExample" >&2
+  echo "ofxICExample executable was not found." >&2
+  echo "Generate/build ofxICExample first; on macOS the expected path is:" >&2
+  echo "  $EXAMPLE_ROOT/bin/ofxICExample.app/Contents/MacOS/ofxICExample" >&2
   exit 1
 fi
 
@@ -137,5 +137,5 @@ if [ "$READY" -eq 0 ]; then
   exit 1
 fi
 
-echo "Starting ofxICChatExample"
+echo "Starting ofxICExample"
 exec "$EXAMPLE_BIN"

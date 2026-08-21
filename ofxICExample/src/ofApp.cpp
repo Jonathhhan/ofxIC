@@ -2,6 +2,8 @@
 
 #include <algorithm>
 #include <array>
+#include <cctype>
+#include <cstdint>
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
@@ -31,6 +33,40 @@ std::string environmentValue(const char * name) {
 std::string configuredEndpointUrl() {
 	const std::string value = environmentValue("OFXIC_ENDPOINT_URL");
 	return value.empty() ? "http://127.0.0.1:8080" : value;
+}
+
+std::string decodeBase64(const std::string & encoded) {
+	static const std::string alphabet =
+		"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+	std::string decoded;
+	unsigned int value = 0;
+	int bits = -8;
+	for (const unsigned char character : encoded) {
+		if (character == '=') break;
+		const std::size_t position = alphabet.find(static_cast<char>(character));
+		if (position == std::string::npos) {
+			if (std::isspace(character)) continue;
+			return {};
+		}
+		value = (value << 6U) + static_cast<unsigned int>(position);
+		bits += 6;
+		if (bits >= 0) {
+			decoded.push_back(static_cast<char>((value >> bits) & 0xff));
+			bits -= 8;
+		}
+	}
+	return decoded;
+}
+
+const char * mediaJobStateLabel(ofxIC::MediaJobState state) {
+	switch (state) {
+	case ofxIC::MediaJobState::Queued: return "queued";
+	case ofxIC::MediaJobState::Generating: return "generating";
+	case ofxIC::MediaJobState::Completed: return "completed";
+	case ofxIC::MediaJobState::Failed: return "failed";
+	case ofxIC::MediaJobState::Cancelled: return "cancelled";
+	default: return "unknown";
+	}
 }
 
 template <std::size_t Size>
@@ -75,6 +111,7 @@ void writeAutomationResult(const std::string & status, const std::string & outpu
 ofApp::ofApp()
 	: endpoint(configuredEndpointUrl())
 	, chat(endpoint)
+	, media(endpoint)
 	, toolLoop(chat, tools) {
 	selectedProfile = profileForUrl(configuredEndpointUrl());
 	setTextBuffer(endpointUrl, configuredEndpointUrl());
@@ -84,10 +121,11 @@ ofApp::ofApp()
 
 ofApp::~ofApp() {
 	finishWorker();
+	finishMediaWorker();
 }
 
 void ofApp::setup() {
-	ofSetWindowTitle("ofxIC Document Tool");
+	ofSetWindowTitle("ofxIC Endpoint Workbench");
 	ofSetBackgroundColor(20);
 	gui.setup(nullptr, true);
 	chat.setSystemPrompt(
@@ -103,24 +141,63 @@ void ofApp::setup() {
 		"access, chat history, explicit document search, and allowlisted tools.");
 	tools.addDocumentSearch(documents);
 	status = "Ready. Inspect the endpoint, then send a message.";
+	setTextBuffer(mediaInput, "A small paper sculpture on a clean studio background");
+	mediaStatus = "Images use /v1/images/generations; video uses native sdcpp jobs.";
 }
 
 void ofApp::update() {
-	if (!finished.exchange(false)) return;
-	finishWorker();
-	busy = false;
-	std::lock_guard<std::mutex> lock(resultMutex);
-	output = std::move(pendingOutput);
-	status = std::move(pendingStatus);
-	availableModels = std::move(pendingModels);
-	if (!pendingModelSelection.empty()) {
-		setTextBuffer(modelId, pendingModelSelection);
-		ofxIC::ChatOptions options = chat.getOptions();
-		options.model = pendingModelSelection;
-		chat.setOptions(options);
-		pendingModelSelection.clear();
+	if (finished.exchange(false)) {
+		finishWorker();
+		busy = false;
+		std::lock_guard<std::mutex> lock(resultMutex);
+		output = std::move(pendingOutput);
+		status = std::move(pendingStatus);
+		availableModels = std::move(pendingModels);
+		if (!pendingModelSelection.empty()) {
+			setTextBuffer(modelId, pendingModelSelection);
+			ofxIC::ChatOptions options = chat.getOptions();
+			options.model = pendingModelSelection;
+			chat.setOptions(options);
+			pendingModelSelection.clear();
+		}
+		writeAutomationResult(status, output);
 	}
-	writeAutomationResult(status, output);
+	if (mediaFinished.exchange(false)) {
+		finishMediaWorker();
+		mediaBusy = false;
+		std::string base64;
+		std::string format;
+		bool isVideo = false;
+		{
+			std::lock_guard<std::mutex> lock(mediaResultMutex);
+			mediaStatus = std::move(pendingMediaStatus);
+			mediaOutput = std::move(pendingMediaOutput);
+			currentMediaJob = std::move(pendingMediaJob);
+			base64 = std::move(pendingMediaBase64);
+			format = std::move(pendingMediaFormat);
+			isVideo = pendingMediaIsVideo;
+			pendingMediaIsVideo = false;
+		}
+		if (!base64.empty()) {
+			const std::string bytes = decodeBase64(base64);
+			const std::string extension = format.empty() ? (isVideo ? "webm" : "png") : format;
+			const std::string path = ofToDataPath("ofxIC-last-media." + extension, true);
+			if (ofBufferToFile(path, ofBuffer(bytes.data(), bytes.size()))) {
+				if (isVideo) {
+					generatedImage.clear();
+					generatedVideo.close();
+					generatedVideo.load(path);
+					generatedVideo.setLoopState(OF_LOOP_NORMAL);
+					generatedVideo.play();
+				} else {
+					generatedVideo.close();
+					generatedImage.load(path);
+				}
+				mediaOutput += "\nSaved: " + path;
+			}
+		}
+	}
+	generatedVideo.update();
 }
 
 void ofApp::draw() {
@@ -128,12 +205,14 @@ void ofApp::draw() {
 	bool inspectRequested = false;
 	bool sendRequested = false;
 	bool clearRequested = false;
+	bool generateMediaRequested = false;
+	bool pollMediaRequested = false;
 
 	gui.begin();
 	ImGui::SetNextWindowPos(ImVec2(16, 16), ImGuiCond_FirstUseEver);
-	ImGui::SetNextWindowSize(ImVec2(928, 190), ImGuiCond_FirstUseEver);
+	ImGui::SetNextWindowSize(ImVec2(1168, 190), ImGuiCond_FirstUseEver);
 	ImGui::Begin("Connection");
-	ImGui::BeginDisabled(busy);
+	ImGui::BeginDisabled(busy || mediaBusy);
 	if (ImGui::BeginCombo("Endpoint", endpointProfiles[selectedProfile].name)) {
 		for (std::size_t index = 0; index < endpointProfiles.size(); ++index) {
 			const bool selected = selectedProfile == static_cast<int>(index);
@@ -180,7 +259,7 @@ void ofApp::draw() {
 	ImGui::End();
 
 	ImGui::SetNextWindowPos(ImVec2(16, 218), ImGuiCond_FirstUseEver);
-	ImGui::SetNextWindowSize(ImVec2(928, 406), ImGuiCond_FirstUseEver);
+	ImGui::SetNextWindowSize(ImVec2(568, 426), ImGuiCond_FirstUseEver);
 	ImGui::Begin("Document tool chat");
 	if (!lastMessage.empty()) {
 		ImGui::TextDisabled("Last message: %s", lastMessage.c_str());
@@ -210,6 +289,51 @@ void ofApp::draw() {
 	ImGui::TextWrapped("%s", output.empty() ? "No response yet." : output.c_str());
 	ImGui::EndChild();
 	ImGui::End();
+
+	ImGui::SetNextWindowPos(ImVec2(600, 218), ImGuiCond_FirstUseEver);
+	ImGui::SetNextWindowSize(ImVec2(584, 426), ImGuiCond_FirstUseEver);
+	ImGui::Begin("Image and video");
+	const char * mediaKinds[] = { "Image", "Video" };
+	ImGui::BeginDisabled(busy || mediaBusy);
+	ImGui::Combo("Kind", &selectedMediaKind, mediaKinds, 2);
+	ImGui::InputTextMultiline(
+		"##media-prompt",
+		mediaInput.data(),
+		mediaInput.size(),
+		ImVec2(-1, 64));
+	ImGui::InputInt("Width", &mediaWidth);
+	ImGui::SameLine();
+	ImGui::InputInt("Height", &mediaHeight);
+	if (selectedMediaKind == 1) {
+		ImGui::InputInt("Frames", &mediaFrames);
+		ImGui::SameLine();
+		ImGui::InputInt("FPS", &mediaFps);
+	}
+	generateMediaRequested = ImGui::Button(selectedMediaKind == 0
+		? "Generate image"
+		: "Submit video job");
+	if (!currentMediaJob.id.empty() && !currentMediaJob.terminal()) {
+		ImGui::SameLine();
+		pollMediaRequested = ImGui::Button("Poll job");
+	}
+	ImGui::EndDisabled();
+	if (mediaBusy) ImGui::TextDisabled("Waiting for media endpoint...");
+	ImGui::TextWrapped("%s", mediaStatus.c_str());
+	if (!mediaOutput.empty()) ImGui::TextWrapped("%s", mediaOutput.c_str());
+	if (generatedImage.isAllocated()) {
+		const float available = ImGui::GetContentRegionAvail().x;
+		const float scale = std::min(1.0f, available / generatedImage.getWidth());
+		ImGui::Image(
+			(ImTextureID)(uintptr_t)generatedImage.getTexture().getTextureData().textureID,
+			ImVec2(generatedImage.getWidth() * scale, generatedImage.getHeight() * scale));
+	} else if (generatedVideo.isLoaded()) {
+		const float available = ImGui::GetContentRegionAvail().x;
+		const float scale = std::min(1.0f, available / generatedVideo.getWidth());
+		ImGui::Image(
+			(ImTextureID)(uintptr_t)generatedVideo.getTexture().getTextureData().textureID,
+			ImVec2(generatedVideo.getWidth() * scale, generatedVideo.getHeight() * scale));
+	}
+	ImGui::End();
 	gui.end();
 
 	if (applyRequested) applyConfiguration();
@@ -228,13 +352,18 @@ void ofApp::draw() {
 		if (configurationDirty) applyConfiguration();
 		sendMessage();
 	}
+	if (generateMediaRequested) {
+		if (configurationDirty) applyConfiguration();
+		generateMedia();
+	}
+	if (pollMediaRequested) pollMediaJob();
 }
 
 void ofApp::keyPressed(int key) {
 	if (ImGui::GetCurrentContext() && ImGui::GetIO().WantCaptureKeyboard) return;
 	if (key == OF_KEY_F1) {
 		if (configurationDirty) applyConfiguration();
-		inspectEndpoint();
+		if (!mediaBusy) inspectEndpoint();
 		return;
 	}
 	if (key == OF_KEY_F2) {
@@ -267,10 +396,11 @@ void ofApp::keyPressed(int key) {
 
 void ofApp::exit() {
 	finishWorker();
+	finishMediaWorker();
 }
 
 void ofApp::applyConfiguration() {
-	if (busy) return;
+	if (busy || mediaBusy) return;
 	endpoint.setBaseUrl(endpointUrl.data());
 	endpoint.setBearerToken(configuredToken());
 	ofxIC::ChatOptions options = chat.getOptions();
@@ -309,7 +439,7 @@ std::string ofApp::configuredTokenSource() const {
 }
 
 void ofApp::inspectEndpoint() {
-	if (busy.exchange(true)) return;
+	if (mediaBusy || busy.exchange(true)) return;
 	status = "Inspecting endpoint...";
 	const std::string currentOutput = output;
 	const std::string currentModel = chat.getOptions().model;
@@ -334,7 +464,7 @@ void ofApp::inspectEndpoint() {
 }
 
 void ofApp::sendMessage() {
-	if (!input[0] || busy.exchange(true)) return;
+	if (!input[0] || mediaBusy || busy.exchange(true)) return;
 	const std::string message(input.data());
 	input[0] = '\0';
 	lastMessage = message;
@@ -353,6 +483,94 @@ void ofApp::sendMessage() {
 	});
 }
 
+void ofApp::generateMedia() {
+	if (!mediaInput[0] || busy || mediaBusy.exchange(true)) return;
+	const std::string prompt(mediaInput.data());
+	const int width = std::max(1, mediaWidth);
+	const int height = std::max(1, mediaHeight);
+	const int frames = std::max(1, mediaFrames);
+	const int fps = std::max(1, mediaFps);
+	const bool video = selectedMediaKind == 1;
+	mediaStatus = video ? "Submitting native video job..." : "Generating image...";
+	mediaWorker = std::thread([this, prompt, width, height, frames, fps, video]() {
+		std::string nextStatus;
+		std::string nextOutput;
+		std::string nextBase64;
+		std::string nextFormat;
+		ofxIC::MediaJob nextJob;
+		if (video) {
+			ofxIC::MediaJobRequest request;
+			request.kind = ofxIC::MediaKind::Video;
+			request.prompt = prompt;
+			request.width = width;
+			request.height = height;
+			request.videoFrames = frames;
+			request.fps = fps;
+			nextJob = media.submit(request);
+			nextStatus = nextJob
+				? "Video job " + nextJob.id + " is " + mediaJobStateLabel(nextJob.state)
+				: "Video submission failed: " + nextJob.error;
+			nextOutput = nextJob.pollUrl;
+		} else {
+			ofxIC::ImageRequest request;
+			request.prompt = prompt;
+			request.model = modelId.data();
+			request.width = width;
+			request.height = height;
+			const auto result = media.generateImage(request);
+			nextStatus = result
+				? "Image generation completed"
+				: "Image generation failed: " + result.error;
+			if (!result.imagesBase64.empty()) {
+				nextBase64 = result.imagesBase64.front();
+				nextFormat = result.outputFormat.empty() ? "png" : result.outputFormat;
+				nextOutput = "Received " + ofToString(result.imagesBase64.size()) + " image payload(s)";
+			} else if (!result.urls.empty()) {
+				nextOutput = result.urls.front();
+			}
+		}
+		std::lock_guard<std::mutex> lock(mediaResultMutex);
+		pendingMediaStatus = std::move(nextStatus);
+		pendingMediaOutput = std::move(nextOutput);
+		pendingMediaBase64 = std::move(nextBase64);
+		pendingMediaFormat = std::move(nextFormat);
+		pendingMediaIsVideo = video;
+		pendingMediaJob = std::move(nextJob);
+		mediaFinished = true;
+	});
+}
+
+void ofApp::pollMediaJob() {
+	if (currentMediaJob.id.empty() || busy || mediaBusy.exchange(true)) return;
+	const ofxIC::MediaJob job = currentMediaJob;
+	mediaStatus = "Polling media job " + job.id + "...";
+	mediaWorker = std::thread([this, job]() {
+		ofxIC::MediaJob nextJob = media.poll(job);
+		std::string nextStatus = nextJob
+			? "Media job " + nextJob.id + " is " + mediaJobStateLabel(nextJob.state)
+			: "Media job failed: " + nextJob.error;
+		std::string nextOutput;
+		std::string nextBase64;
+		if (nextJob.state == ofxIC::MediaJobState::Completed &&
+			!nextJob.payloadsBase64.empty()) {
+			nextBase64 = nextJob.payloadsBase64.front();
+			nextOutput = "Received " + ofToString(nextJob.frameCount) + " frame(s)";
+		}
+		std::lock_guard<std::mutex> lock(mediaResultMutex);
+		pendingMediaStatus = std::move(nextStatus);
+		pendingMediaOutput = std::move(nextOutput);
+		pendingMediaBase64 = std::move(nextBase64);
+		pendingMediaFormat = nextJob.outputFormat;
+		pendingMediaIsVideo = nextJob.kind == ofxIC::MediaKind::Video;
+		pendingMediaJob = std::move(nextJob);
+		mediaFinished = true;
+	});
+}
+
 void ofApp::finishWorker() {
 	if (worker.joinable()) worker.join();
+}
+
+void ofApp::finishMediaWorker() {
+	if (mediaWorker.joinable()) mediaWorker.join();
 }

@@ -9,6 +9,8 @@
 
 namespace ofxIC {
 
+class MediaClient;
+
 enum class HttpMethod {
 	Get,
 	Post
@@ -66,9 +68,8 @@ public:
 		ChatChunkCallback onChunk = nullptr) const;
 
 private:
+	HttpResponse perform(HttpRequest request) const;
 	static std::string normalizeBaseUrl(const std::string & baseUrl);
-	static std::string modelsUrl(const std::string & baseUrl);
-	static std::string chatCompletionsUrl(const std::string & baseUrl);
 	static std::string buildChatBody(const ChatRequest & request);
 	static std::string extractChatText(const std::string & responseBody);
 	static std::vector<ToolCall> extractToolCalls(const std::string & responseBody);
@@ -78,6 +79,8 @@ private:
 	std::string baseUrl;
 	std::string bearerToken;
 	HttpTransport transport;
+
+	friend class MediaClient;
 };
 
 } // namespace ofxIC

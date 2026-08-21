@@ -1,10 +1,10 @@
 # ofxIC
 
 **Inference Connector for openFrameworks.** `ofxIC` connects an openFrameworks
-application to an external model endpoint. The addon currently follows one
-narrow OpenAI-compatible workflow: chat, search explicitly loaded documents
-through one allowlisted tool, and return a cited answer. The endpoint can be a
-local `llama-server` or a hosted provider.
+application to external model endpoints. Its compact surface covers chat with
+one allowlisted document tool, OpenAI-compatible image generation, and native
+asynchronous image/video jobs exposed by `stable-diffusion.cpp`. Inference
+always remains in a separate local or hosted process.
 
 The addon does **not** embed ggml, llama.cpp, CUDA, SAM, or another native model
 runtime. Run `llama-server` separately and update it independently.
@@ -19,7 +19,7 @@ git clone https://github.com/Jonathhhan/ofxIC.git
 git clone --branch develop https://github.com/jvcleave/ofxImGui.git
 ```
 
-Open `ofxICChatExample` with the openFrameworks Project Generator, or add
+Open `ofxICExample` with the openFrameworks Project Generator, or add
 `ofxIC` to an existing project. No model runtime or model file is installed
 with the addon.
 
@@ -73,12 +73,41 @@ if (status && !status.models.empty()) {
 }
 ```
 
+Image generation uses the same endpoint and token configuration:
+
+```cpp
+ofxIC::MediaClient media(endpoint);
+ofxIC::ImageRequest image;
+image.prompt = "A paper sculpture in soft studio light";
+image.width = 1024;
+image.height = 1024;
+
+const auto result = media.generateImage(image);
+// result.imagesBase64 or result.urls contains the generated output.
+```
+
+The native `stable-diffusion.cpp` video path is asynchronous:
+
+```cpp
+ofxIC::MediaJobRequest video;
+video.kind = ofxIC::MediaKind::Video;
+video.prompt = "The paper sculpture slowly turns";
+video.videoFrames = 33;
+video.fps = 16;
+
+auto job = media.submit(video);
+// Poll later; do not block the openFrameworks draw thread.
+job = media.poll(job);
+```
+
 ## Scope
 
 Implemented:
 
 - `/v1/models` endpoint inspection
 - `/v1/chat/completions`
+- `/v1/images/generations`
+- native `stable-diffusion.cpp` image/video submission and job polling
 - conversational history
 - optional streaming transport when openFrameworks exposes curl
 - injected HTTP transport for deterministic tests
@@ -104,12 +133,16 @@ Not part of the supported surface yet:
 - embedded native model runtimes
 - generic tensor, graph, or model abstractions
 - multi-agent orchestration
-- Whisper, SAM, Stable Diffusion, music, or video APIs
+- embedded Whisper, SAM, Stable Diffusion, music, or video runtimes
+- Hugging Face task routing for image and video generation
+- image editing and provider-specific media controls
 
 ## Example
 
-`ofxICChatExample` uses `ofxImGui` to switch between `llama-server`,
-LM Studio, Hugging Face, OpenAI, and a custom OpenAI-compatible endpoint.
+`ofxICExample` uses `ofxImGui` to switch between `llama-server`,
+LM Studio, Hugging Face, OpenAI, and a custom endpoint. The same GUI also
+generates images, submits native `stable-diffusion.cpp` video jobs, polls them,
+and displays returned image or video payloads.
 
 - Choose an endpoint preset or enter a custom base URL.
 - Inspect `/v1/models` and select or enter the model ID.
@@ -140,6 +173,10 @@ consume monthly credit or incur pay-as-you-go charges; see
 
 The same addon code works with local `llama-server`; only environment values
 change. Do not commit tokens or paste them into issue logs.
+
+Hugging Face's OpenAI-compatible router currently covers chat, not its image
+and video task APIs. Those media tasks therefore need a separate provider
+adapter; `ofxIC` does not silently send them to the chat router.
 
 Before building the openFrameworks example, verify that the selected hosted
 model supports the required two-request tool protocol:
@@ -173,7 +210,7 @@ The deterministic tests use an injected transport; live inference remains a
 separate, explicitly triggered check so protocol failures and provider costs
 cannot be confused with unit-test failures.
 
-GitHub Actions also builds `ofxICChatExample` against the current official
+GitHub Actions also builds `ofxICExample` against the current official
 openFrameworks Linux nightly. The workflow records the resolved archive name,
 opens the GUI on a virtual display, and uploads its screenshot and log. With
 `[hf-gui-smoke]`, it additionally types a question, waits for the model-backed

@@ -25,9 +25,9 @@ obj/
 *.ckpt
 models/
 
-ofxICChatExample/bin/
-ofxICChatExample/config.make
-ofxICChatExample/icon.rc
-ofxICChatExample/*.sln
-ofxICChatExample/*.vcxproj
-ofxICChatExample/*.vcxproj.filters
+ofxICExample/bin/
+ofxICExample/config.make
+ofxICExample/icon.rc
+ofxICExample/*.sln
+ofxICExample/*.vcxproj
+ofxICExample/*.vcxproj.filters

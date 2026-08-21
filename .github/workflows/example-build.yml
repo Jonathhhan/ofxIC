@@ -5,7 +5,7 @@ on:
     paths:
       - "src/**"
       - "addon_config.mk"
-      - "ofxICChatExample/**"
+      - "ofxICExample/**"
       - ".github/workflows/example-build.yml"
   push:
     branches:
@@ -15,7 +15,7 @@ on:
     paths:
       - "src/**"
       - "addon_config.mk"
-      - "ofxICChatExample/**"
+      - "ofxICExample/**"
       - ".github/workflows/example-build.yml"
 
 permissions:
@@ -102,9 +102,9 @@ jobs:
           git -C "$OF_ROOT/addons/ofxImGui" remote add origin https://github.com/jvcleave/ofxImGui.git
           git -C "$OF_ROOT/addons/ofxImGui" fetch --depth 1 origin "$OFXIMGUI_COMMIT"
           git -C "$OF_ROOT/addons/ofxImGui" checkout --detach FETCH_HEAD
-          app="$OF_ROOT/apps/myApps/ofxICChatExample"
+          app="$OF_ROOT/apps/myApps/ofxICExample"
           mkdir -p "${app%/*}"
-          cp -R "$GITHUB_WORKSPACE/ofxICChatExample" "$app"
+          cp -R "$GITHUB_WORKSPACE/ofxICExample" "$app"
           cp "$OF_ROOT/scripts/templates/linux64/Makefile" "$app/Makefile"
           cp "$OF_ROOT/scripts/templates/linux64/config.make" "$app/config.make"
 
@@ -112,9 +112,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          app="$OF_ROOT/apps/myApps/ofxICChatExample"
+          app="$OF_ROOT/apps/myApps/ofxICExample"
           make -C "$app" Release -j2
-          test -x "$app/bin/ofxICChatExample"
+          test -x "$app/bin/ofxICExample"
           echo "Built with $OF_NIGHTLY_ASSET"
 
       - name: Install virtual display tools
@@ -133,7 +133,7 @@ jobs:
           LIBGL_ALWAYS_SOFTWARE: "1"
         run: |
           set -euo pipefail
-          app="$OF_ROOT/apps/myApps/ofxICChatExample"
+          app="$OF_ROOT/apps/myApps/ofxICExample"
           artifact_dir="$RUNNER_TEMP/gui-smoke"
           mkdir -p "$artifact_dir"
 
@@ -161,7 +161,7 @@ jobs:
                   cat "$log" >&2
                   exit 1
                 fi
-                window_id="$(xdotool search --name "^ofxIC Document Tool$" 2>/dev/null | head -n 1 || true)"
+                window_id="$(xdotool search --name "^ofxIC Endpoint Workbench$" 2>/dev/null | head -n 1 || true)"
                 [[ -n "$window_id" ]] && break
                 sleep 0.25
               done
@@ -177,22 +177,22 @@ jobs:
               import -display "$DISPLAY" -window "$window_id" "$screenshot"
               test -s "$screenshot"
             ' bash \
-            "$app/bin/ofxICChatExample" \
-            "$artifact_dir/ofxICChatExample.log" \
-            "$artifact_dir/ofxICChatExample.png" \
+            "$app/bin/ofxICExample" \
+            "$artifact_dir/ofxICExample.log" \
+            "$artifact_dir/ofxICExample.png" \
             "$artifact_dir/window.txt"
 
           {
             echo "openFrameworks=$OF_NIGHTLY_ASSET"
             echo "runner=${RUNNER_OS}-${RUNNER_ARCH}"
           } >"$artifact_dir/build.txt"
-          file "$artifact_dir/ofxICChatExample.png"
+          file "$artifact_dir/ofxICExample.png"
 
       - name: Upload GUI smoke artifacts
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: ofxICChatExample-gui-linux-nightly
+          name: ofxICExample-gui-linux-nightly
           path: ${{ runner.temp }}/gui-smoke
           if-no-files-found: error
           retention-days: 14
@@ -215,7 +215,7 @@ jobs:
             exit 1
           fi
 
-          app="$OF_ROOT/apps/myApps/ofxICChatExample"
+          app="$OF_ROOT/apps/myApps/ofxICExample"
           artifact_dir="$RUNNER_TEMP/hf-gui-smoke"
           result="$artifact_dir/result.txt"
           mkdir -p "$artifact_dir"
@@ -246,7 +246,7 @@ jobs:
                   cat "$log" >&2
                   exit 1
                 fi
-                window_id="$(xdotool search --name "^ofxIC Document Tool$" 2>/dev/null | head -n 1 || true)"
+                window_id="$(xdotool search --name "^ofxIC Endpoint Workbench$" 2>/dev/null | head -n 1 || true)"
                 [[ -n "$window_id" ]] && break
                 sleep 0.25
               done
@@ -285,10 +285,10 @@ jobs:
               import -display "$DISPLAY" -window "$window_id" "$screenshot"
               test -s "$screenshot"
             ' bash \
-            "$app/bin/ofxICChatExample" \
-            "$artifact_dir/ofxICChatExample.log" \
+            "$app/bin/ofxICExample" \
+            "$artifact_dir/ofxICExample.log" \
             "$result" \
-            "$artifact_dir/ofxICChatExample-huggingface.png" \
+            "$artifact_dir/ofxICExample-huggingface.png" \
             "Why is the model runtime outside the addon? Answer in one short sentence."
 
           {
@@ -305,7 +305,7 @@ jobs:
           contains(github.event.head_commit.message, '[hf-gui-smoke]')
         uses: actions/upload-artifact@v4
         with:
-          name: ofxICChatExample-huggingface-gui
+          name: ofxICExample-huggingface-gui
           path: ${{ runner.temp }}/hf-gui-smoke
           if-no-files-found: error
           retention-days: 14

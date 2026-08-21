@@ -9,6 +9,7 @@ common:
 	ADDON_INCLUDES = src
 	ADDON_SOURCES = src/endpoint/ofxICEndpoint.cpp
 	ADDON_SOURCES += src/chat/ofxICChatSession.cpp
+	ADDON_SOURCES += src/media/ofxICMediaClient.cpp
 	ADDON_SOURCES += src/documents/ofxICDocumentIndex.cpp
 	ADDON_SOURCES += src/tools/ofxICToolRegistry.cpp
 	ADDON_SOURCES += src/tools/ofxICToolLoop.cpp

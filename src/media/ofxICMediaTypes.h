@@ -1,0 +1,86 @@
+#pragma once
+
+#include <string>
+#include <vector>
+
+namespace ofxIC {
+
+enum class MediaKind {
+	Image,
+	Video
+};
+
+enum class MediaJobState {
+	Unknown,
+	Queued,
+	Generating,
+	Completed,
+	Failed,
+	Cancelled
+};
+
+struct ImageRequest {
+	std::string prompt;
+	std::string model;
+	int width = 1024;
+	int height = 1024;
+	int count = 1;
+	std::string outputFormat = "png";
+};
+
+struct ImageResult {
+	bool success = false;
+	int httpStatus = 0;
+	std::string outputFormat;
+	std::vector<std::string> imagesBase64;
+	std::vector<std::string> urls;
+	std::string error;
+	std::string rawResponse;
+
+	explicit operator bool() const {
+		return success;
+	}
+};
+
+struct MediaJobRequest {
+	MediaKind kind = MediaKind::Image;
+	std::string prompt;
+	std::string negativePrompt;
+	int width = 1024;
+	int height = 1024;
+	int seed = -1;
+	int steps = 28;
+	float guidance = 7.0f;
+	int imageCount = 1;
+	int videoFrames = 33;
+	int fps = 16;
+	std::string outputFormat;
+};
+
+struct MediaJob {
+	bool success = false;
+	int httpStatus = 0;
+	MediaKind kind = MediaKind::Image;
+	MediaJobState state = MediaJobState::Unknown;
+	std::string id;
+	std::string pollUrl;
+	std::string outputFormat;
+	std::string mimeType;
+	int fps = 0;
+	int frameCount = 0;
+	std::vector<std::string> payloadsBase64;
+	std::string error;
+	std::string rawResponse;
+
+	bool terminal() const {
+		return state == MediaJobState::Completed ||
+			state == MediaJobState::Failed ||
+			state == MediaJobState::Cancelled;
+	}
+
+	explicit operator bool() const {
+		return success;
+	}
+};
+
+} // namespace ofxIC
