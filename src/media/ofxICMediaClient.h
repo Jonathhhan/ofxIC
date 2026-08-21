@@ -13,6 +13,7 @@ public:
 
 	ImageResult generateImage(const ImageRequest & request) const;
 	MediaJob submit(const MediaJobRequest & request) const;
+	MediaJob submitHuggingFace(const MediaJobRequest & request) const;
 	MediaJob poll(const MediaJob & job) const;
 	MediaJob poll(const std::string & idOrPollUrl) const;
 	MediaJob cancel(const MediaJob & job) const;
@@ -20,10 +21,13 @@ public:
 private:
 	static std::string buildImageBody(const ImageRequest & request);
 	static std::string buildJobBody(const MediaJobRequest & request);
+	static std::string buildHuggingFaceBody(const MediaJobRequest & request);
 	static MediaJob parseJob(
 		const HttpResponse & response,
 		MediaKind fallbackKind,
 		std::string fallbackPollUrl = {});
+	MediaJob pollHuggingFace(const MediaJob & job) const;
+	bool downloadHuggingFaceOutput(const std::string & url, MediaJob & job) const;
 
 	Endpoint & endpoint;
 };

@@ -21,8 +21,9 @@ addon.
 
 - `Endpoint` owns endpoint configuration and HTTP transport.
 - `ChatSession` owns conversation history.
-- `MediaClient` owns no runtime; it maps typed image requests and native
-  `stable-diffusion.cpp` media jobs onto the configured endpoint.
+- `MediaClient` owns no runtime; it maps typed OpenAI image requests, native
+  `stable-diffusion.cpp` jobs, and explicit Hugging Face fal-ai media jobs onto
+  configured endpoints.
 - `DocumentIndex` chunks explicitly loaded text and performs deterministic
   lexical search. It does not watch directories or accept model-selected paths.
 - `ToolRegistry` is the execution allowlist; `ToolLoop` bounds repeated calls.
@@ -34,7 +35,8 @@ addon.
 
 - No Core addon or common native runtime.
 - No tensor, graph, or universal model abstraction.
-- No automatic backend discovery beyond the configured endpoint.
+- No automatic runtime discovery; HF model metadata is queried only to resolve
+  the requested model's current fal-ai route.
 - No general agent framework around the one bounded document tool loop.
 - No provider SDK or claim that chat, image, and video share one universal API.
 - No ecosystem manifest or cross-repository control plane.

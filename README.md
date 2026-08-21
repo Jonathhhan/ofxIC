@@ -3,8 +3,9 @@
 **Inference Connector for openFrameworks.** `ofxIC` connects an openFrameworks
 application to external model endpoints. Its compact surface covers chat with
 one allowlisted document tool, OpenAI-compatible image generation, and native
-asynchronous image/video jobs exposed by `stable-diffusion.cpp`. Inference
-always remains in a separate local or hosted process.
+asynchronous image/video jobs exposed by `stable-diffusion.cpp`. A separate
+Hugging Face media path routes text-to-image and text-to-video through fal-ai.
+Inference always remains in a separate local or hosted process.
 
 The addon does **not** embed ggml, llama.cpp, CUDA, SAM, or another native model
 runtime. Run `llama-server` separately and update it independently.
@@ -100,6 +101,28 @@ auto job = media.submit(video);
 job = media.poll(job);
 ```
 
+Hugging Face media deliberately uses its task protocol instead of pretending
+that the chat router implements OpenAI image/video routes. The first compact
+adapter supports fal-ai for both image and video:
+
+```cpp
+ofxIC::Endpoint hf("https://router.huggingface.co");
+hf.setBearerToken(environmentToken);
+ofxIC::MediaClient hostedMedia(hf);
+
+ofxIC::MediaJobRequest video;
+video.kind = ofxIC::MediaKind::Video;
+video.model = "Wan-AI/Wan2.2-TI2V-5B";
+video.prompt = "A paper sculpture slowly turns";
+
+auto job = hostedMedia.submitHuggingFace(video);
+// fal-ai video is queued; call poll(job) later until it is terminal.
+```
+
+The client resolves the HF model's current fal-ai mapping, keeps the HF token
+on router requests, and downloads the returned media bytes without forwarding
+that token to the output CDN.
+
 ## Scope
 
 Implemented:
@@ -108,6 +131,7 @@ Implemented:
 - `/v1/chat/completions`
 - `/v1/images/generations`
 - native `stable-diffusion.cpp` image/video submission and job polling
+- Hugging Face text-to-image and queued text-to-video through fal-ai routing
 - conversational history
 - optional streaming transport when openFrameworks exposes curl
 - injected HTTP transport for deterministic tests
@@ -134,15 +158,15 @@ Not part of the supported surface yet:
 - generic tensor, graph, or model abstractions
 - multi-agent orchestration
 - embedded Whisper, SAM, Stable Diffusion, music, or video runtimes
-- Hugging Face task routing for image and video generation
-- image editing and provider-specific media controls
+- additional Hugging Face media providers beyond fal-ai
+- image editing and broader provider-specific media controls
 
 ## Example
 
 `ofxICExample` uses `ofxImGui` to switch between `llama-server`,
 LM Studio, Hugging Face, OpenAI, and a custom endpoint. The same GUI also
-generates images, submits native `stable-diffusion.cpp` video jobs, polls them,
-and displays returned image or video payloads.
+selects an independent media backend, generates images, submits native or
+Hugging Face video jobs, polls them, and displays returned media.
 
 - Choose an endpoint preset or enter a custom base URL.
 - Inspect `/v1/models` and select or enter the model ID.
@@ -152,6 +176,9 @@ and displays returned image or video payloads.
   loaded and never displays or stores its value.
 - `OFXIC_ENDPOINT_URL`, `OFXIC_MODEL`, and `OFXIC_API_KEY` configure
   the initial state for scripts and CI.
+- `OFXIC_MEDIA_BACKEND`, `OFXIC_MEDIA_ENDPOINT_URL`,
+  `OFXIC_MEDIA_IMAGE_MODEL`, `OFXIC_MEDIA_VIDEO_MODEL`, and
+  `OFXIC_MEDIA_API_KEY` configure media independently from chat.
 - `F1` and `F2` remain shortcuts for inspect and clear.
 
 ### Testing without a local GPU
@@ -175,8 +202,9 @@ The same addon code works with local `llama-server`; only environment values
 change. Do not commit tokens or paste them into issue logs.
 
 Hugging Face's OpenAI-compatible router currently covers chat, not its image
-and video task APIs. Those media tasks therefore need a separate provider
-adapter; `ofxIC` does not silently send them to the chat router.
+and video task APIs. `ofxIC` therefore uses an explicit fal-ai task adapter for
+HF media and never silently sends media to the chat route. A live media request
+can consume provider credit.
 
 Before building the openFrameworks example, verify that the selected hosted
 model supports the required two-request tool protocol:
@@ -197,6 +225,13 @@ the workflows use `openai/gpt-oss-120b` and the Hugging Face router. On `main`,
 compiled openFrameworks GUI through the same hosted tool path. Normal pushes
 run neither live inference test, so they cannot consume provider credit
 accidentally.
+
+To exercise media explicitly, open the `openFrameworks example` workflow,
+choose **Run workflow**, and select `image` or `video` for `hf_media_task`.
+This manual run uses `HF_TOKEN`, launches the compiled GUI, waits for the fal-ai
+job, saves and opens the returned media, and uploads its screenshot, result,
+and log. A selected media task can incur provider charges; `none` is the
+default.
 
 ## Tests
 

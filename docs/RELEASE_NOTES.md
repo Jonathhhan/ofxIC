@@ -19,6 +19,7 @@ variables use the `OFXIC_` prefix.
 - OpenAI-compatible endpoint inspection and chat completions;
 - OpenAI-compatible image generation;
 - native asynchronous `stable-diffusion.cpp` image/video jobs and polling;
+- Hugging Face text-to-image and queued text-to-video through fal-ai;
 - conversation history and optional response streaming;
 - explicitly loaded local documents and one allowlisted search tool;
 - a bounded tool loop that returns source identifiers;
@@ -43,6 +44,6 @@ candidate cannot consume Hugging Face credit accidentally.
 
 - an embedded native runtime;
 - embedded Whisper, SAM, Stable Diffusion, music, and video runtimes;
-- Hugging Face media-task routing and provider-specific media adapters;
+- Hugging Face media providers beyond the initial fal-ai adapter;
 - generic agents or unrestricted tool execution;
 - automatic model downloads or provider selection.

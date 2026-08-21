@@ -10,6 +10,11 @@ enum class MediaKind {
 	Video
 };
 
+enum class MediaProtocol {
+	StableDiffusionCpp,
+	HuggingFace
+};
+
 enum class MediaJobState {
 	Unknown,
 	Queued,
@@ -45,6 +50,8 @@ struct ImageResult {
 struct MediaJobRequest {
 	MediaKind kind = MediaKind::Image;
 	std::string prompt;
+	std::string model;
+	std::string provider = "fal-ai";
 	std::string negativePrompt;
 	int width = 1024;
 	int height = 1024;
@@ -61,14 +68,18 @@ struct MediaJob {
 	bool success = false;
 	int httpStatus = 0;
 	MediaKind kind = MediaKind::Image;
+	MediaProtocol protocol = MediaProtocol::StableDiffusionCpp;
 	MediaJobState state = MediaJobState::Unknown;
 	std::string id;
 	std::string pollUrl;
+	std::string resultUrl;
+	std::string provider;
 	std::string outputFormat;
 	std::string mimeType;
 	int fps = 0;
 	int frameCount = 0;
 	std::vector<std::string> payloadsBase64;
+	std::vector<std::string> payloadBytes;
 	std::string error;
 	std::string rawResponse;
 

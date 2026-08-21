@@ -21,8 +21,10 @@ struct HttpRequest {
 	std::string url;
 	std::string body;
 	std::string contentType = "application/json";
+	std::string accept = "application/json";
 	std::vector<std::pair<std::string, std::string>> headers;
 	int timeoutSeconds = 180;
+	bool useBearerToken = true;
 	bool stream = false;
 	ChatChunkCallback onChunk;
 	std::function<bool()> shouldCancel;

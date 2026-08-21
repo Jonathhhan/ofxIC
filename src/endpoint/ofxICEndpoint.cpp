@@ -414,7 +414,7 @@ HttpResponse Endpoint::perform(HttpRequest request) const {
 		}
 		request.url = baseUrl + request.url;
 	}
-	if (!bearerToken.empty()) {
+	if (request.useBearerToken && !bearerToken.empty()) {
 		const auto authorization = std::find_if(
 			request.headers.begin(),
 			request.headers.end(),
@@ -707,7 +707,7 @@ HttpResponse Endpoint::runHttpRequest(const HttpRequest & request) {
 		: ofHttpRequest::GET;
 	ofRequest.body = request.body;
 	ofRequest.contentType = request.contentType;
-	ofRequest.headers["Accept"] = "application/json";
+	ofRequest.headers["Accept"] = request.accept;
 	ofRequest.headers["Content-Type"] = request.contentType;
 	for (const auto & header : request.headers) {
 		ofRequest.headers[header.first] = header.second;

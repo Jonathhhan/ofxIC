@@ -24,7 +24,9 @@ public:
 
 private:
 	void applyConfiguration();
+	void applyMediaConfiguration();
 	void selectEndpointProfile(int profileIndex);
+	void selectMediaBackend(int backendIndex);
 	void inspectEndpoint();
 	void sendMessage();
 	void generateMedia();
@@ -33,25 +35,33 @@ private:
 	void finishMediaWorker();
 	std::string configuredToken() const;
 	std::string configuredTokenSource() const;
+	std::string configuredMediaToken() const;
+	std::string configuredMediaTokenSource() const;
 
 	ofxImGui::Gui gui;
 	ofxIC::Endpoint endpoint;
+	ofxIC::Endpoint mediaEndpoint;
 	ofxIC::ChatSession chat;
 	ofxIC::MediaClient media;
 	ofxIC::DocumentIndex documents;
 	ofxIC::ToolRegistry tools;
 	ofxIC::ToolLoop toolLoop;
 	std::array<char, 512> endpointUrl{};
+	std::array<char, 512> mediaEndpointUrl{};
 	std::array<char, 256> modelId{};
+	std::array<char, 256> mediaImageModel{};
+	std::array<char, 256> mediaVideoModel{};
 	std::array<char, 2048> input{};
 	std::array<char, 2048> mediaInput{};
 	int selectedProfile = 0;
+	int selectedMediaBackend = 0;
 	int selectedMediaKind = 0;
 	int mediaWidth = 512;
 	int mediaHeight = 512;
 	int mediaFrames = 33;
 	int mediaFps = 16;
 	bool configurationDirty = false;
+	bool mediaConfigurationDirty = false;
 	bool focusMessageInput = true;
 	std::string lastMessage;
 	std::string output;
@@ -72,6 +82,7 @@ private:
 	std::string pendingMediaStatus;
 	std::string pendingMediaOutput;
 	std::string pendingMediaBase64;
+	std::string pendingMediaBytes;
 	std::string pendingMediaFormat;
 	bool pendingMediaIsVideo = false;
 	ofxIC::MediaJob currentMediaJob;

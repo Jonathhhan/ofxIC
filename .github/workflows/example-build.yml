@@ -1,6 +1,25 @@
 name: openFrameworks example
 
 on:
+  workflow_dispatch:
+    inputs:
+      hf_media_task:
+        description: "Optional paid Hugging Face media smoke"
+        required: true
+        type: choice
+        default: none
+        options:
+          - none
+          - image
+          - video
+      hf_image_model:
+        description: "HF text-to-image model routed through fal-ai"
+        required: true
+        default: "black-forest-labs/FLUX.1-dev"
+      hf_video_model:
+        description: "HF text-to-video model routed through fal-ai"
+        required: true
+        default: "Wan-AI/Wan2.2-TI2V-5B"
   pull_request:
     paths:
       - "src/**"
@@ -31,7 +50,7 @@ env:
 jobs:
   build-linux-nightly:
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v6
 
@@ -307,5 +326,90 @@ jobs:
         with:
           name: ofxICExample-huggingface-gui
           path: ${{ runner.temp }}/hf-gui-smoke
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Run selected Hugging Face media through the GUI example
+        if: >-
+          github.event_name == 'workflow_dispatch' &&
+          inputs.hf_media_task != 'none'
+        timeout-minutes: 20
+        shell: bash
+        env:
+          LIBGL_ALWAYS_SOFTWARE: "1"
+          OFXIC_MEDIA_API_KEY: ${{ secrets.HF_TOKEN }}
+          OFXIC_MEDIA_BACKEND: huggingface
+          OFXIC_MEDIA_AUTORUN: ${{ inputs.hf_media_task }}
+          OFXIC_MEDIA_IMAGE_MODEL: ${{ inputs.hf_image_model }}
+          OFXIC_MEDIA_VIDEO_MODEL: ${{ inputs.hf_video_model }}
+          OFXIC_MEDIA_PROMPT: "A small paper sculpture slowly turns on a clean studio background"
+        run: |
+          set -euo pipefail
+          if [[ -z "$OFXIC_MEDIA_API_KEY" ]]; then
+            echo "HF_TOKEN is missing" >&2
+            exit 1
+          fi
+
+          app="$OF_ROOT/apps/myApps/ofxICExample"
+          artifact_dir="$RUNNER_TEMP/hf-media-gui-smoke"
+          result="$artifact_dir/result.txt"
+          mkdir -p "$artifact_dir"
+          export OFXIC_MEDIA_RESULT_PATH="$result"
+
+          xvfb-run \
+            --auto-servernum \
+            --server-args="-screen 0 1280x720x24 -nolisten tcp" \
+            bash -euo pipefail -c '
+              binary="$1"
+              log="$2"
+              result="$3"
+              screenshot="$4"
+
+              "$binary" >"$log" 2>&1 &
+              app_pid=$!
+              cleanup() {
+                kill "$app_pid" 2>/dev/null || true
+                wait "$app_pid" 2>/dev/null || true
+              }
+              trap cleanup EXIT
+
+              window_id=""
+              for _ in $(seq 1 60); do
+                window_id="$(xdotool search --name "^ofxIC Endpoint Workbench$" 2>/dev/null | head -n 1 || true)"
+                [[ -n "$window_id" ]] && break
+                kill -0 "$app_pid" 2>/dev/null || { cat "$log" >&2; exit 1; }
+                sleep 0.25
+              done
+              [[ -n "$window_id" ]] || { echo "Example window did not appear" >&2; exit 1; }
+
+              for _ in $(seq 1 1800); do
+                [[ -s "$result" ]] && break
+                kill -0 "$app_pid" 2>/dev/null || { cat "$log" >&2; exit 1; }
+                sleep 0.5
+              done
+              [[ -s "$result" ]] || { echo "Timed out waiting for HF media" >&2; cat "$log" >&2; exit 1; }
+              if grep -Eiq "failed|timed out" "$result"; then
+                cat "$result" >&2
+                exit 1
+              fi
+              grep -Fq "Saved:" "$result"
+              import -display "$DISPLAY" -window "$window_id" "$screenshot"
+            ' bash \
+            "$app/bin/ofxICExample" \
+            "$artifact_dir/ofxICExample.log" \
+            "$result" \
+            "$artifact_dir/ofxICExample-hf-media.png"
+
+          cat "$result"
+
+      - name: Upload Hugging Face media GUI artifacts
+        if: >-
+          always() &&
+          github.event_name == 'workflow_dispatch' &&
+          inputs.hf_media_task != 'none'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ofxICExample-huggingface-${{ inputs.hf_media_task }}
+          path: ${{ runner.temp }}/hf-media-gui-smoke
           if-no-files-found: error
           retention-days: 14

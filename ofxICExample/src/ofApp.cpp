@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cctype>
 #include <cstdint>
 #include <cstdlib>
@@ -25,6 +26,18 @@ constexpr std::array<EndpointProfile, 5> endpointProfiles{{
 	{ "Custom", "", "OFXIC_API_KEY" },
 }};
 
+struct MediaBackendProfile {
+	const char * name;
+	const char * url;
+	const char * tokenEnvironment;
+};
+
+constexpr std::array<MediaBackendProfile, 3> mediaBackends{{
+	{ "OpenAI images", "https://api.openai.com/v1", "OPENAI_API_KEY" },
+	{ "Hugging Face", "https://router.huggingface.co", "HF_TOKEN" },
+	{ "stable-diffusion.cpp", "http://127.0.0.1:8080", "OFXIC_API_KEY" },
+}};
+
 std::string environmentValue(const char * name) {
 	const char * value = std::getenv(name);
 	return value && *value ? value : "";
@@ -33,6 +46,31 @@ std::string environmentValue(const char * name) {
 std::string configuredEndpointUrl() {
 	const std::string value = environmentValue("OFXIC_ENDPOINT_URL");
 	return value.empty() ? "http://127.0.0.1:8080" : value;
+}
+
+int configuredMediaBackend() {
+	const std::string configured = environmentValue("OFXIC_MEDIA_BACKEND");
+	if (configured == "openai") return 0;
+	if (configured == "huggingface" || configured == "hf") return 1;
+	if (configured == "stable-diffusion.cpp" || configured == "sdcpp") return 2;
+	const std::string chatUrl = configuredEndpointUrl();
+	if (chatUrl.find("huggingface.co") != std::string::npos) return 1;
+	if (chatUrl.find("api.openai.com") != std::string::npos) return 0;
+	return 2;
+}
+
+std::string configuredMediaEndpointUrl(int backend) {
+	const std::string configured = environmentValue("OFXIC_MEDIA_ENDPOINT_URL");
+	if (!configured.empty()) return configured;
+	if (backend >= 0 && backend < static_cast<int>(mediaBackends.size())) {
+		return mediaBackends[backend].url;
+	}
+	return mediaBackends[2].url;
+}
+
+std::string configuredMediaModel(const char * environment, const char * fallback) {
+	const std::string configured = environmentValue(environment);
+	return configured.empty() ? fallback : configured;
 }
 
 std::string decodeBase64(const std::string & encoded) {
@@ -106,17 +144,37 @@ void writeAutomationResult(const std::string & status, const std::string & outpu
 	result << status << "\n" << output << "\n";
 }
 
+void writeMediaAutomationResult(const std::string & status, const std::string & output) {
+	const std::string path = environmentValue("OFXIC_MEDIA_RESULT_PATH");
+	if (path.empty()) return;
+	std::ofstream result(path, std::ios::binary | std::ios::trunc);
+	if (!result) {
+		ofLogError("ofxIC") << "Could not write media GUI result to " << path;
+		return;
+	}
+	result << status << "\n" << output << "\n";
+}
+
 } // namespace
 
 ofApp::ofApp()
 	: endpoint(configuredEndpointUrl())
+	, mediaEndpoint(configuredMediaEndpointUrl(configuredMediaBackend()))
 	, chat(endpoint)
-	, media(endpoint)
+	, media(mediaEndpoint)
 	, toolLoop(chat, tools) {
 	selectedProfile = profileForUrl(configuredEndpointUrl());
+	selectedMediaBackend = configuredMediaBackend();
 	setTextBuffer(endpointUrl, configuredEndpointUrl());
+	setTextBuffer(mediaEndpointUrl, configuredMediaEndpointUrl(selectedMediaBackend));
 	setTextBuffer(modelId, environmentValue("OFXIC_MODEL"));
+	setTextBuffer(mediaImageModel, configuredMediaModel(
+		"OFXIC_MEDIA_IMAGE_MODEL",
+		selectedMediaBackend == 0 ? "gpt-image-2" : "black-forest-labs/FLUX.1-dev"));
+	setTextBuffer(mediaVideoModel, configuredMediaModel(
+		"OFXIC_MEDIA_VIDEO_MODEL", "Wan-AI/Wan2.2-TI2V-5B"));
 	endpoint.setBearerToken(configuredToken());
+	mediaEndpoint.setBearerToken(configuredMediaToken());
 }
 
 ofApp::~ofApp() {
@@ -142,7 +200,14 @@ void ofApp::setup() {
 	tools.addDocumentSearch(documents);
 	status = "Ready. Inspect the endpoint, then send a message.";
 	setTextBuffer(mediaInput, "A small paper sculpture on a clean studio background");
-	mediaStatus = "Images use /v1/images/generations; video uses native sdcpp jobs.";
+	mediaStatus = "Choose OpenAI images, Hugging Face media, or stable-diffusion.cpp jobs.";
+	const std::string mediaAutorun = environmentValue("OFXIC_MEDIA_AUTORUN");
+	if (mediaAutorun == "image" || mediaAutorun == "video") {
+		selectedMediaKind = mediaAutorun == "video" ? 1 : 0;
+		const std::string prompt = environmentValue("OFXIC_MEDIA_PROMPT");
+		if (!prompt.empty()) setTextBuffer(mediaInput, prompt);
+		generateMedia();
+	}
 }
 
 void ofApp::update() {
@@ -166,6 +231,7 @@ void ofApp::update() {
 		finishMediaWorker();
 		mediaBusy = false;
 		std::string base64;
+		std::string bytes;
 		std::string format;
 		bool isVideo = false;
 		{
@@ -174,12 +240,13 @@ void ofApp::update() {
 			mediaOutput = std::move(pendingMediaOutput);
 			currentMediaJob = std::move(pendingMediaJob);
 			base64 = std::move(pendingMediaBase64);
+			bytes = std::move(pendingMediaBytes);
 			format = std::move(pendingMediaFormat);
 			isVideo = pendingMediaIsVideo;
 			pendingMediaIsVideo = false;
 		}
-		if (!base64.empty()) {
-			const std::string bytes = decodeBase64(base64);
+		if (!base64.empty() || !bytes.empty()) {
+			if (bytes.empty()) bytes = decodeBase64(base64);
 			const std::string extension = format.empty() ? (isVideo ? "webm" : "png") : format;
 			const std::string path = ofToDataPath("ofxIC-last-media." + extension, true);
 			if (ofBufferToFile(path, ofBuffer(bytes.data(), bytes.size()))) {
@@ -196,6 +263,7 @@ void ofApp::update() {
 				mediaOutput += "\nSaved: " + path;
 			}
 		}
+		writeMediaAutomationResult(mediaStatus, mediaOutput);
 	}
 	generatedVideo.update();
 }
@@ -293,9 +361,26 @@ void ofApp::draw() {
 	ImGui::SetNextWindowPos(ImVec2(600, 218), ImGuiCond_FirstUseEver);
 	ImGui::SetNextWindowSize(ImVec2(584, 426), ImGuiCond_FirstUseEver);
 	ImGui::Begin("Image and video");
+	const char * backendNames[] = { "OpenAI images", "Hugging Face", "stable-diffusion.cpp" };
 	const char * mediaKinds[] = { "Image", "Video" };
 	ImGui::BeginDisabled(busy || mediaBusy);
+	int nextMediaBackend = selectedMediaBackend;
+	if (ImGui::Combo("Media backend", &nextMediaBackend, backendNames, 3)) {
+		selectMediaBackend(nextMediaBackend);
+	}
 	ImGui::Combo("Kind", &selectedMediaKind, mediaKinds, 2);
+	if (selectedMediaBackend != 1) {
+		if (ImGui::InputText(
+			"Media base URL", mediaEndpointUrl.data(), mediaEndpointUrl.size())) {
+			mediaConfigurationDirty = true;
+		}
+	} else {
+		ImGui::TextDisabled("Provider: fal-ai through Hugging Face routing");
+	}
+	if (selectedMediaBackend != 2) {
+		auto & mediaModel = selectedMediaKind == 0 ? mediaImageModel : mediaVideoModel;
+		ImGui::InputText("Media model", mediaModel.data(), mediaModel.size());
+	}
 	ImGui::InputTextMultiline(
 		"##media-prompt",
 		mediaInput.data(),
@@ -309,14 +394,25 @@ void ofApp::draw() {
 		ImGui::SameLine();
 		ImGui::InputInt("FPS", &mediaFps);
 	}
-	generateMediaRequested = ImGui::Button(selectedMediaKind == 0
-		? "Generate image"
-		: "Submit video job");
+	const bool unsupported = selectedMediaBackend == 0 && selectedMediaKind == 1;
+	ImGui::BeginDisabled(unsupported);
+	const char * generateLabel = selectedMediaBackend == 1
+		? (selectedMediaKind == 0 ? "Generate HF image" : "Submit HF video")
+		: (selectedMediaBackend == 2
+			? (selectedMediaKind == 0 ? "Submit image job" : "Submit video job")
+			: "Generate OpenAI image");
+	generateMediaRequested = ImGui::Button(generateLabel);
+	ImGui::EndDisabled();
 	if (!currentMediaJob.id.empty() && !currentMediaJob.terminal()) {
 		ImGui::SameLine();
 		pollMediaRequested = ImGui::Button("Poll job");
 	}
 	ImGui::EndDisabled();
+	if (unsupported) ImGui::TextDisabled("OpenAI video is not part of this compact adapter yet.");
+	const std::string mediaToken = configuredMediaToken();
+	ImGui::TextDisabled("Media token: %s (%s)",
+		mediaToken.empty() ? "not loaded" : "loaded",
+		configuredMediaTokenSource().c_str());
 	if (mediaBusy) ImGui::TextDisabled("Waiting for media endpoint...");
 	ImGui::TextWrapped("%s", mediaStatus.c_str());
 	if (!mediaOutput.empty()) ImGui::TextWrapped("%s", mediaOutput.c_str());
@@ -353,7 +449,7 @@ void ofApp::draw() {
 		sendMessage();
 	}
 	if (generateMediaRequested) {
-		if (configurationDirty) applyConfiguration();
+		if (mediaConfigurationDirty) applyMediaConfiguration();
 		generateMedia();
 	}
 	if (pollMediaRequested) pollMediaJob();
@@ -415,6 +511,16 @@ void ofApp::applyConfiguration() {
 		" at " + endpoint.getBaseUrl();
 }
 
+void ofApp::applyMediaConfiguration() {
+	if (busy || mediaBusy) return;
+	mediaEndpoint.setBaseUrl(mediaEndpointUrl.data());
+	mediaEndpoint.setBearerToken(configuredMediaToken());
+	mediaConfigurationDirty = false;
+	currentMediaJob = {};
+	mediaStatus = "Applied " + std::string(mediaBackends[selectedMediaBackend].name) +
+		" at " + mediaEndpoint.getBaseUrl();
+}
+
 void ofApp::selectEndpointProfile(int profileIndex) {
 	if (profileIndex < 0 || profileIndex >= static_cast<int>(endpointProfiles.size())) return;
 	selectedProfile = profileIndex;
@@ -427,6 +533,22 @@ void ofApp::selectEndpointProfile(int profileIndex) {
 	applyConfiguration();
 }
 
+void ofApp::selectMediaBackend(int backendIndex) {
+	if (backendIndex < 0 || backendIndex >= static_cast<int>(mediaBackends.size())) return;
+	selectedMediaBackend = backendIndex;
+	setTextBuffer(mediaEndpointUrl, mediaBackends[selectedMediaBackend].url);
+	const std::string imageModel(mediaImageModel.data());
+	if (selectedMediaBackend == 0 &&
+		(imageModel.empty() || imageModel == "black-forest-labs/FLUX.1-dev")) {
+		setTextBuffer(mediaImageModel, "gpt-image-2");
+	} else if (selectedMediaBackend == 1 &&
+		(imageModel.empty() || imageModel.compare(0, 9, "gpt-image") == 0)) {
+		setTextBuffer(mediaImageModel, "black-forest-labs/FLUX.1-dev");
+	}
+	mediaConfigurationDirty = true;
+	applyMediaConfiguration();
+}
+
 std::string ofApp::configuredToken() const {
 	const std::string generic = environmentValue("OFXIC_API_KEY");
 	if (!generic.empty()) return generic;
@@ -436,6 +558,22 @@ std::string ofApp::configuredToken() const {
 std::string ofApp::configuredTokenSource() const {
 	if (!environmentValue("OFXIC_API_KEY").empty()) return "OFXIC_API_KEY";
 	return endpointProfiles[selectedProfile].tokenEnvironment;
+}
+
+std::string ofApp::configuredMediaToken() const {
+	const std::string mediaSpecific = environmentValue("OFXIC_MEDIA_API_KEY");
+	if (!mediaSpecific.empty()) return mediaSpecific;
+	const std::string providerToken = environmentValue(
+		mediaBackends[selectedMediaBackend].tokenEnvironment);
+	if (!providerToken.empty()) return providerToken;
+	return environmentValue("OFXIC_API_KEY");
+}
+
+std::string ofApp::configuredMediaTokenSource() const {
+	if (!environmentValue("OFXIC_MEDIA_API_KEY").empty()) return "OFXIC_MEDIA_API_KEY";
+	const char * providerEnvironment = mediaBackends[selectedMediaBackend].tokenEnvironment;
+	if (!environmentValue(providerEnvironment).empty()) return providerEnvironment;
+	return "OFXIC_API_KEY";
 }
 
 void ofApp::inspectEndpoint() {
@@ -491,36 +629,29 @@ void ofApp::generateMedia() {
 	const int frames = std::max(1, mediaFrames);
 	const int fps = std::max(1, mediaFps);
 	const bool video = selectedMediaKind == 1;
-	mediaStatus = video ? "Submitting native video job..." : "Generating image...";
-	mediaWorker = std::thread([this, prompt, width, height, frames, fps, video]() {
+	const int backend = selectedMediaBackend;
+	const bool autoPoll = !environmentValue("OFXIC_MEDIA_AUTORUN").empty();
+	const std::string mediaModel = video ? mediaVideoModel.data() : mediaImageModel.data();
+	mediaStatus = backend == 1
+		? (video ? "Submitting Hugging Face video..." : "Generating Hugging Face image...")
+		: (backend == 2 ? "Submitting native media job..." : "Generating OpenAI image...");
+	mediaWorker = std::thread([this, prompt, width, height, frames, fps, video, backend, mediaModel, autoPoll]() {
 		std::string nextStatus;
 		std::string nextOutput;
 		std::string nextBase64;
+		std::string nextBytes;
 		std::string nextFormat;
 		ofxIC::MediaJob nextJob;
-		if (video) {
-			ofxIC::MediaJobRequest request;
-			request.kind = ofxIC::MediaKind::Video;
-			request.prompt = prompt;
-			request.width = width;
-			request.height = height;
-			request.videoFrames = frames;
-			request.fps = fps;
-			nextJob = media.submit(request);
-			nextStatus = nextJob
-				? "Video job " + nextJob.id + " is " + mediaJobStateLabel(nextJob.state)
-				: "Video submission failed: " + nextJob.error;
-			nextOutput = nextJob.pollUrl;
-		} else {
+		if (backend == 0) {
 			ofxIC::ImageRequest request;
 			request.prompt = prompt;
-			request.model = modelId.data();
+			request.model = mediaModel;
 			request.width = width;
 			request.height = height;
 			const auto result = media.generateImage(request);
 			nextStatus = result
-				? "Image generation completed"
-				: "Image generation failed: " + result.error;
+				? "OpenAI image generation completed"
+				: "OpenAI image generation failed: " + result.error;
 			if (!result.imagesBase64.empty()) {
 				nextBase64 = result.imagesBase64.front();
 				nextFormat = result.outputFormat.empty() ? "png" : result.outputFormat;
@@ -528,11 +659,44 @@ void ofApp::generateMedia() {
 			} else if (!result.urls.empty()) {
 				nextOutput = result.urls.front();
 			}
+		} else {
+			ofxIC::MediaJobRequest request;
+			request.kind = video ? ofxIC::MediaKind::Video : ofxIC::MediaKind::Image;
+			request.prompt = prompt;
+			request.model = mediaModel;
+			request.width = width;
+			request.height = height;
+			request.videoFrames = frames;
+			request.fps = fps;
+			nextJob = backend == 1 ? media.submitHuggingFace(request) : media.submit(request);
+			for (int attempt = 0;
+				autoPoll && nextJob && !nextJob.terminal() && attempt < 1200;
+				++attempt) {
+				std::this_thread::sleep_for(std::chrono::milliseconds(500));
+				nextJob = media.poll(nextJob);
+			}
+			if (autoPoll && nextJob && !nextJob.terminal()) {
+				nextJob.success = false;
+				nextJob.error = "media automation timed out while polling";
+			}
+			nextStatus = nextJob
+				? std::string(video ? "Video" : "Image") + " job " + nextJob.id +
+					" is " + mediaJobStateLabel(nextJob.state)
+				: std::string(video ? "Video" : "Image") + " request failed: " + nextJob.error;
+			nextOutput = nextJob.pollUrl;
+			nextFormat = nextJob.outputFormat;
+			if (!nextJob.payloadBytes.empty()) {
+				nextBytes = nextJob.payloadBytes.front();
+				nextOutput = "Received " + ofToString(nextBytes.size()) + " media bytes";
+			} else if (!nextJob.payloadsBase64.empty()) {
+				nextBase64 = nextJob.payloadsBase64.front();
+			}
 		}
 		std::lock_guard<std::mutex> lock(mediaResultMutex);
 		pendingMediaStatus = std::move(nextStatus);
 		pendingMediaOutput = std::move(nextOutput);
 		pendingMediaBase64 = std::move(nextBase64);
+		pendingMediaBytes = std::move(nextBytes);
 		pendingMediaFormat = std::move(nextFormat);
 		pendingMediaIsVideo = video;
 		pendingMediaJob = std::move(nextJob);
@@ -551,15 +715,21 @@ void ofApp::pollMediaJob() {
 			: "Media job failed: " + nextJob.error;
 		std::string nextOutput;
 		std::string nextBase64;
+		std::string nextBytes;
 		if (nextJob.state == ofxIC::MediaJobState::Completed &&
 			!nextJob.payloadsBase64.empty()) {
 			nextBase64 = nextJob.payloadsBase64.front();
 			nextOutput = "Received " + ofToString(nextJob.frameCount) + " frame(s)";
+		} else if (nextJob.state == ofxIC::MediaJobState::Completed &&
+			!nextJob.payloadBytes.empty()) {
+			nextBytes = nextJob.payloadBytes.front();
+			nextOutput = "Received " + ofToString(nextBytes.size()) + " media bytes";
 		}
 		std::lock_guard<std::mutex> lock(mediaResultMutex);
 		pendingMediaStatus = std::move(nextStatus);
 		pendingMediaOutput = std::move(nextOutput);
 		pendingMediaBase64 = std::move(nextBase64);
+		pendingMediaBytes = std::move(nextBytes);
 		pendingMediaFormat = nextJob.outputFormat;
 		pendingMediaIsVideo = nextJob.kind == ofxIC::MediaKind::Video;
 		pendingMediaJob = std::move(nextJob);

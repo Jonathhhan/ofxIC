@@ -155,3 +155,103 @@ OFXIC_TEST(media_client_cancels_native_jobs) {
 	OFXIC_REQUIRE(captured.method == ofxIC::HttpMethod::Post);
 	OFXIC_REQUIRE(captured.url == "http://localhost:1234/sdcpp/v1/jobs/job-cancel/cancel");
 }
+
+OFXIC_TEST(media_client_generates_hugging_face_images_through_fal) {
+	std::vector<ofxIC::HttpRequest> captured;
+	ofxIC::Endpoint endpoint("https://router.huggingface.co/v1", [&](const ofxIC::HttpRequest & request) {
+		captured.push_back(request);
+		ofxIC::HttpResponse response;
+		response.started = true;
+		if (captured.size() == 1) {
+			response.status = 200;
+			response.body = R"({"inferenceProviderMapping":{"fal-ai":{"status":"live","providerId":"fal-ai/flux/dev","task":"text-to-image"}}})";
+		} else if (captured.size() == 2) {
+			response.status = 200;
+			response.body = R"({"images":[{"url":"https://cdn.example/generated.png"}]})";
+		} else {
+			response.status = 200;
+			response.body = std::string("\x89PNG\0payload", 12);
+		}
+		return response;
+	});
+	endpoint.setBearerToken("hf_test_token");
+	ofxIC::MediaClient media(endpoint);
+	ofxIC::MediaJobRequest request;
+	request.kind = ofxIC::MediaKind::Image;
+	request.prompt = "A paper fox";
+	request.model = "black-forest-labs/FLUX.1-dev";
+	request.width = 640;
+	request.height = 480;
+
+	const auto result = media.submitHuggingFace(request);
+	OFXIC_REQUIRE(result);
+	OFXIC_REQUIRE(result.protocol == ofxIC::MediaProtocol::HuggingFace);
+	OFXIC_REQUIRE(result.state == ofxIC::MediaJobState::Completed);
+	OFXIC_REQUIRE(result.payloadBytes.size() == 1);
+	OFXIC_REQUIRE(result.outputFormat == "png");
+	OFXIC_REQUIRE(captured.size() == 3);
+	OFXIC_REQUIRE(captured[0].url.find("https://huggingface.co/api/models/black-forest-labs/FLUX.1-dev") == 0);
+	OFXIC_REQUIRE(captured[0].headers.empty());
+	OFXIC_REQUIRE(captured[1].url == "https://router.huggingface.co/fal-ai/fal-ai/flux/dev");
+	OFXIC_REQUIRE(captured[1].body.find("\"image_size\":{\"width\":640,\"height\":480}") != std::string::npos);
+	OFXIC_REQUIRE(captured[1].headers.size() == 1);
+	OFXIC_REQUIRE(captured[2].url == "https://cdn.example/generated.png");
+	OFXIC_REQUIRE(captured[2].headers.empty());
+	OFXIC_REQUIRE(captured[2].accept == "*/*");
+}
+
+OFXIC_TEST(media_client_submits_and_polls_hugging_face_video) {
+	std::vector<ofxIC::HttpRequest> captured;
+	ofxIC::Endpoint endpoint("https://router.huggingface.co/v1", [&](const ofxIC::HttpRequest & request) {
+		captured.push_back(request);
+		ofxIC::HttpResponse response;
+		response.started = true;
+		switch (captured.size()) {
+		case 1:
+			response.status = 200;
+			response.body = R"({"inferenceProviderMapping":{"fal-ai":{"status":"live","providerId":"fal-ai/wan/v2.2-5b/text-to-video","task":"text-to-video"}}})";
+			break;
+		case 2:
+			response.status = 200;
+			response.body = R"({"request_id":"queue-7","status":"IN_QUEUE","response_url":"https://queue.fal.run/fal-ai/wan/v2.2-5b/text-to-video/requests/queue-7"})";
+			break;
+		case 3:
+			response.status = 200;
+			response.body = R"({"status":"COMPLETED"})";
+			break;
+		case 4:
+			response.status = 200;
+			response.body = R"({"video":{"url":"https://cdn.example/generated.mp4"}})";
+			break;
+		default:
+			response.status = 200;
+			response.body = std::string("video\0bytes", 11);
+			break;
+		}
+		return response;
+	});
+	endpoint.setBearerToken("hf_test_token");
+	ofxIC::MediaClient media(endpoint);
+	ofxIC::MediaJobRequest request;
+	request.kind = ofxIC::MediaKind::Video;
+	request.prompt = "A paper fox turns around";
+	request.model = "Wan-AI/Wan2.2-TI2V-5B";
+	request.videoFrames = 25;
+
+	const auto queued = media.submitHuggingFace(request);
+	OFXIC_REQUIRE(queued);
+	OFXIC_REQUIRE(queued.state == ofxIC::MediaJobState::Queued);
+	OFXIC_REQUIRE(queued.id == "queue-7");
+	OFXIC_REQUIRE(captured[1].url == "https://router.huggingface.co/fal-ai/fal-ai/wan/v2.2-5b/text-to-video?_subdomain=queue");
+	OFXIC_REQUIRE(captured[1].body.find("\"num_frames\":25") != std::string::npos);
+
+	const auto completed = media.poll(queued);
+	OFXIC_REQUIRE(completed);
+	OFXIC_REQUIRE(completed.state == ofxIC::MediaJobState::Completed);
+	OFXIC_REQUIRE(completed.outputFormat == "mp4");
+	OFXIC_REQUIRE(completed.payloadBytes.size() == 1);
+	OFXIC_REQUIRE(captured.size() == 5);
+	OFXIC_REQUIRE(captured[2].url.find("/status?_subdomain=queue") != std::string::npos);
+	OFXIC_REQUIRE(captured[3].url.find("/requests/queue-7?_subdomain=queue") != std::string::npos);
+	OFXIC_REQUIRE(captured[4].headers.empty());
+}

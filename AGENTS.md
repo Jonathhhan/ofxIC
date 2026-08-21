@@ -13,9 +13,10 @@ The supported path is:
 3. search local documents through an allowlisted tool;
 4. return a grounded answer.
 
-The same configured endpoint may also expose OpenAI-compatible image
-generation or native asynchronous `stable-diffusion.cpp` image/video jobs.
-These are protocol adapters, not embedded runtimes.
+An independently configured media endpoint may expose OpenAI-compatible image
+generation, native asynchronous `stable-diffusion.cpp` image/video jobs, or
+explicit Hugging Face fal-ai media routing. These are protocol adapters, not
+embedded runtimes.
 
 All four steps are covered by deterministic injected-transport tests and have
 passed through the real example GUI against a hosted model. Keep deterministic
