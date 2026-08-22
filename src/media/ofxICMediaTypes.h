@@ -12,7 +12,7 @@ enum class MediaKind {
 
 enum class MediaProtocol {
 	StableDiffusionCpp,
-	HuggingFace
+	HuggingFaceFal
 };
 
 enum class MediaJobState {
@@ -51,7 +51,6 @@ struct MediaJobRequest {
 	MediaKind kind = MediaKind::Image;
 	std::string prompt;
 	std::string model;
-	std::string provider = "fal-ai";
 	std::string negativePrompt;
 	int width = 1024;
 	int height = 1024;
@@ -73,7 +72,6 @@ struct MediaJob {
 	std::string id;
 	std::string pollUrl;
 	std::string resultUrl;
-	std::string provider;
 	std::string outputFormat;
 	std::string mimeType;
 	int fps = 0;

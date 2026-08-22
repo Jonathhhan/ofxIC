@@ -183,9 +183,9 @@ OFXIC_TEST(media_client_generates_hugging_face_images_through_fal) {
 	request.width = 640;
 	request.height = 480;
 
-	const auto result = media.submitHuggingFace(request);
+	const auto result = media.submitHuggingFaceFal(request);
 	OFXIC_REQUIRE(result);
-	OFXIC_REQUIRE(result.protocol == ofxIC::MediaProtocol::HuggingFace);
+	OFXIC_REQUIRE(result.protocol == ofxIC::MediaProtocol::HuggingFaceFal);
 	OFXIC_REQUIRE(result.state == ofxIC::MediaJobState::Completed);
 	OFXIC_REQUIRE(result.payloadBytes.size() == 1);
 	OFXIC_REQUIRE(result.outputFormat == "png");
@@ -238,7 +238,7 @@ OFXIC_TEST(media_client_submits_and_polls_hugging_face_video) {
 	request.model = "Wan-AI/Wan2.2-TI2V-5B";
 	request.videoFrames = 25;
 
-	const auto queued = media.submitHuggingFace(request);
+	const auto queued = media.submitHuggingFaceFal(request);
 	OFXIC_REQUIRE(queued);
 	OFXIC_REQUIRE(queued.state == ofxIC::MediaJobState::Queued);
 	OFXIC_REQUIRE(queued.id == "queue-7");

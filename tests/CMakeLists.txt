@@ -14,6 +14,7 @@ add_executable(ofxIC_tests
 	test_public_headers.cpp
 	../src/endpoint/ofxICEndpoint.cpp
 	../src/media/ofxICMediaClient.cpp
+	../src/media/ofxICMediaClientHuggingFaceFal.cpp
 	../src/chat/ofxICChatSession.cpp
 	../src/documents/ofxICDocumentIndex.cpp
 	../src/tools/ofxICToolRegistry.cpp

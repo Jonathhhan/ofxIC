@@ -34,7 +34,7 @@ struct MediaBackendProfile {
 
 constexpr std::array<MediaBackendProfile, 3> mediaBackends{{
 	{ "OpenAI images", "https://api.openai.com/v1", "OPENAI_API_KEY" },
-	{ "Hugging Face", "https://router.huggingface.co", "HF_TOKEN" },
+	{ "Hugging Face / fal-ai", "https://router.huggingface.co", "HF_TOKEN" },
 	{ "stable-diffusion.cpp", "http://127.0.0.1:8080", "OFXIC_API_KEY" },
 }};
 
@@ -51,7 +51,7 @@ std::string configuredEndpointUrl() {
 int configuredMediaBackend() {
 	const std::string configured = environmentValue("OFXIC_MEDIA_BACKEND");
 	if (configured == "openai") return 0;
-	if (configured == "huggingface" || configured == "hf") return 1;
+	if (configured == "huggingface" || configured == "hf" || configured == "fal-ai") return 1;
 	if (configured == "stable-diffusion.cpp" || configured == "sdcpp") return 2;
 	const std::string chatUrl = configuredEndpointUrl();
 	if (chatUrl.find("huggingface.co") != std::string::npos) return 1;
@@ -200,7 +200,7 @@ void ofApp::setup() {
 	tools.addDocumentSearch(documents);
 	status = "Ready. Inspect the endpoint, then send a message.";
 	setTextBuffer(mediaInput, "A small paper sculpture on a clean studio background");
-	mediaStatus = "Choose OpenAI images, Hugging Face media, or stable-diffusion.cpp jobs.";
+	mediaStatus = "Choose OpenAI images, Hugging Face / fal-ai, or stable-diffusion.cpp jobs.";
 	const std::string mediaAutorun = environmentValue("OFXIC_MEDIA_AUTORUN");
 	if (mediaAutorun == "image" || mediaAutorun == "video") {
 		selectedMediaKind = mediaAutorun == "video" ? 1 : 0;
@@ -361,7 +361,7 @@ void ofApp::draw() {
 	ImGui::SetNextWindowPos(ImVec2(600, 218), ImGuiCond_FirstUseEver);
 	ImGui::SetNextWindowSize(ImVec2(584, 426), ImGuiCond_FirstUseEver);
 	ImGui::Begin("Image and video");
-	const char * backendNames[] = { "OpenAI images", "Hugging Face", "stable-diffusion.cpp" };
+	const char * backendNames[] = { "OpenAI images", "Hugging Face / fal-ai", "stable-diffusion.cpp" };
 	const char * mediaKinds[] = { "Image", "Video" };
 	ImGui::BeginDisabled(busy || mediaBusy);
 	int nextMediaBackend = selectedMediaBackend;
@@ -375,7 +375,7 @@ void ofApp::draw() {
 			mediaConfigurationDirty = true;
 		}
 	} else {
-		ImGui::TextDisabled("Provider: fal-ai through Hugging Face routing");
+		ImGui::TextDisabled("fal-ai through Hugging Face routing");
 	}
 	if (selectedMediaBackend != 2) {
 		auto & mediaModel = selectedMediaKind == 0 ? mediaImageModel : mediaVideoModel;
@@ -668,7 +668,7 @@ void ofApp::generateMedia() {
 			request.height = height;
 			request.videoFrames = frames;
 			request.fps = fps;
-			nextJob = backend == 1 ? media.submitHuggingFace(request) : media.submit(request);
+			nextJob = backend == 1 ? media.submitHuggingFaceFal(request) : media.submit(request);
 			for (int attempt = 0;
 				autoPoll && nextJob && !nextJob.terminal() && attempt < 1200;
 				++attempt) {

@@ -115,7 +115,7 @@ video.kind = ofxIC::MediaKind::Video;
 video.model = "Wan-AI/Wan2.2-TI2V-5B";
 video.prompt = "A paper sculpture slowly turns";
 
-auto job = hostedMedia.submitHuggingFace(video);
+auto job = hostedMedia.submitHuggingFaceFal(video);
 // fal-ai video is queued; call poll(job) later until it is terminal.
 ```
 
