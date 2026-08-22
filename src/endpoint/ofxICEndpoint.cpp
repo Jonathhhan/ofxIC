@@ -406,16 +406,35 @@ bool Endpoint::hasBearerToken() const {
 	return !bearerToken.empty();
 }
 
+HttpResponse Endpoint::perform(HttpRequest request) const {
+	if (request.url.compare(0, 7, "http://") != 0 &&
+		request.url.compare(0, 8, "https://") != 0) {
+		if (request.url.empty() || request.url.front() != '/') {
+			request.url.insert(request.url.begin(), '/');
+		}
+		request.url = baseUrl + request.url;
+	}
+	if (request.useBearerToken && !bearerToken.empty()) {
+		const auto authorization = std::find_if(
+			request.headers.begin(),
+			request.headers.end(),
+			[](const std::pair<std::string, std::string> & header) {
+				return header.first == "Authorization";
+			});
+		if (authorization == request.headers.end()) {
+			request.headers.emplace_back("Authorization", "Bearer " + bearerToken);
+		}
+	}
+	return transport(request);
+}
+
 EndpointStatus Endpoint::inspect() const {
 	EndpointStatus status;
 	HttpRequest request;
 	request.method = HttpMethod::Get;
-	request.url = modelsUrl(baseUrl);
+	request.url = "/v1/models";
 	request.timeoutSeconds = 10;
-	if (!bearerToken.empty()) {
-		request.headers.emplace_back("Authorization", "Bearer " + bearerToken);
-	}
-	const HttpResponse response = transport(request);
+	const HttpResponse response = perform(request);
 	status.httpStatus = response.status;
 	if (!response.started) {
 		status.error = response.error.empty() ? "request did not start" : response.error;
@@ -448,16 +467,13 @@ ChatResult Endpoint::chat(
 
 	HttpRequest httpRequest;
 	httpRequest.method = HttpMethod::Post;
-	httpRequest.url = chatCompletionsUrl(baseUrl);
+	httpRequest.url = "/v1/chat/completions";
 	httpRequest.body = buildChatBody(request);
 	httpRequest.stream = request.options.stream;
 	httpRequest.onChunk = onChunk;
-	if (!bearerToken.empty()) {
-		httpRequest.headers.emplace_back("Authorization", "Bearer " + bearerToken);
-	}
 
 	const auto startedAt = std::chrono::steady_clock::now();
-	const HttpResponse response = transport(httpRequest);
+	const HttpResponse response = perform(httpRequest);
 	result.elapsedMs = std::chrono::duration<float, std::milli>(
 		std::chrono::steady_clock::now() - startedAt).count();
 	result.httpStatus = response.status;
@@ -510,7 +526,14 @@ std::string Endpoint::normalizeBaseUrl(const std::string & baseUrl) {
 	if (normalized.empty()) {
 		normalized = "http://127.0.0.1:8080";
 	}
-	for (const char * suffixValue : { "/v1/chat/completions", "/chat/completions", "/v1/models", "/models" }) {
+	for (const char * suffixValue : {
+		"/v1/chat/completions",
+		"/chat/completions",
+		"/v1/images/generations",
+		"/sdcpp/v1/img_gen",
+		"/sdcpp/v1/vid_gen",
+		"/v1/models",
+		"/models" }) {
 		const std::string suffix(suffixValue);
 		if (endsWith(normalized, suffix)) {
 			normalized.erase(normalized.size() - suffix.size());
@@ -521,14 +544,6 @@ std::string Endpoint::normalizeBaseUrl(const std::string & baseUrl) {
 		normalized.erase(normalized.size() - 3);
 	}
 	return stripTrailingSlash(normalized);
-}
-
-std::string Endpoint::modelsUrl(const std::string & baseUrl) {
-	return normalizeBaseUrl(baseUrl) + "/v1/models";
-}
-
-std::string Endpoint::chatCompletionsUrl(const std::string & baseUrl) {
-	return normalizeBaseUrl(baseUrl) + "/v1/chat/completions";
 }
 
 std::string Endpoint::buildChatBody(const ChatRequest & request) {
@@ -692,7 +707,7 @@ HttpResponse Endpoint::runHttpRequest(const HttpRequest & request) {
 		: ofHttpRequest::GET;
 	ofRequest.body = request.body;
 	ofRequest.contentType = request.contentType;
-	ofRequest.headers["Accept"] = "application/json";
+	ofRequest.headers["Accept"] = request.accept;
 	ofRequest.headers["Content-Type"] = request.contentType;
 	for (const auto & header : request.headers) {
 		ofRequest.headers[header.first] = header.second;
