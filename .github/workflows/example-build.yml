@@ -345,15 +345,16 @@ jobs:
           OFXIC_MEDIA_PROMPT: "A small paper sculpture slowly turns on a clean studio background"
         run: |
           set -euo pipefail
-          if [[ -z "$OFXIC_MEDIA_API_KEY" ]]; then
-            echo "HF_TOKEN is missing" >&2
-            exit 1
-          fi
-
           app="$OF_ROOT/apps/myApps/ofxICExample"
           artifact_dir="$RUNNER_TEMP/hf-media-gui-smoke"
           result="$artifact_dir/result.txt"
           mkdir -p "$artifact_dir"
+
+          if [[ -z "$OFXIC_MEDIA_API_KEY" ]]; then
+            echo "HF_TOKEN is missing" | tee "$result" >&2
+            exit 1
+          fi
+
           export OFXIC_MEDIA_RESULT_PATH="$result"
 
           xvfb-run \
@@ -393,12 +394,21 @@ jobs:
                 exit 1
               fi
               grep -Fq "Saved:" "$result"
+              sleep 1
               import -display "$DISPLAY" -window "$window_id" "$screenshot"
             ' bash \
             "$app/bin/ofxICExample" \
             "$artifact_dir/ofxICExample.log" \
             "$result" \
             "$artifact_dir/ofxICExample-hf-media.png"
+
+          media_path="$(sed -n 's/^Saved: //p' "$result" | tail -n 1)"
+          if [[ -z "$media_path" || ! -s "$media_path" ]]; then
+            echo "Generated media file is missing: $media_path" >&2
+            exit 1
+          fi
+          media_extension="${media_path##*.}"
+          cp "$media_path" "$artifact_dir/generated-${OFXIC_MEDIA_AUTORUN}.${media_extension}"
 
           cat "$result"
 
