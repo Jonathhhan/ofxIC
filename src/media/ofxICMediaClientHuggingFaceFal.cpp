@@ -239,6 +239,9 @@ MediaJob MediaClient::submitHuggingFaceFal(const MediaJobRequest & request) cons
 	}
 	if (response.status < 200 || response.status >= 300) {
 		job.error = "Hugging Face / fal-ai returned HTTP " + std::to_string(response.status);
+		if (response.status == 402) {
+			job.error += ": inference credits or pay-as-you-go billing are required";
+		}
 		const std::string message = extractStringField(response.body, "message");
 		if (!message.empty()) job.error += ": " + message;
 		else if (!response.error.empty()) job.error += ": " + response.error;
