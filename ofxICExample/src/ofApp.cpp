@@ -183,6 +183,7 @@ ofApp::~ofApp() {
 }
 
 void ofApp::setup() {
+	ofDisableArbTex();
 	ofSetWindowTitle("ofxIC Endpoint Workbench");
 	ofSetBackgroundColor(20);
 	gui.setup(nullptr, true);
