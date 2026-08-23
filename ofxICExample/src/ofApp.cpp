@@ -417,18 +417,21 @@ void ofApp::draw() {
 	if (mediaBusy) ImGui::TextDisabled("Waiting for media endpoint...");
 	ImGui::TextWrapped("%s", mediaStatus.c_str());
 	if (!mediaOutput.empty()) ImGui::TextWrapped("%s", mediaOutput.c_str());
+	const auto fitMediaPreview = [](float width, float height) {
+		const ImVec2 available = ImGui::GetContentRegionAvail();
+		const float scale = std::min(1.0f, std::min(
+			std::max(1.0f, available.x) / width,
+			std::max(1.0f, available.y) / height));
+		return ImVec2(width * scale, height * scale);
+	};
 	if (generatedImage.isAllocated()) {
-		const float available = ImGui::GetContentRegionAvail().x;
-		const float scale = std::min(1.0f, available / generatedImage.getWidth());
 		ImGui::Image(
 			(ImTextureID)(uintptr_t)generatedImage.getTexture().getTextureData().textureID,
-			ImVec2(generatedImage.getWidth() * scale, generatedImage.getHeight() * scale));
+			fitMediaPreview(generatedImage.getWidth(), generatedImage.getHeight()));
 	} else if (generatedVideo.isLoaded()) {
-		const float available = ImGui::GetContentRegionAvail().x;
-		const float scale = std::min(1.0f, available / generatedVideo.getWidth());
 		ImGui::Image(
 			(ImTextureID)(uintptr_t)generatedVideo.getTexture().getTextureData().textureID,
-			ImVec2(generatedVideo.getWidth() * scale, generatedVideo.getHeight() * scale));
+			fitMediaPreview(generatedVideo.getWidth(), generatedVideo.getHeight()));
 	}
 	ImGui::End();
 	gui.end();
