@@ -30,13 +30,34 @@ struct MediaBackendProfile {
 	const char * name;
 	const char * url;
 	const char * tokenEnvironment;
+	bool supportsImage;
+	bool supportsVideo;
+	const char * capabilityNote;
 };
 
 constexpr std::array<MediaBackendProfile, 3> mediaBackends{{
-	{ "OpenAI images", "https://api.openai.com/v1", "OPENAI_API_KEY" },
-	{ "Hugging Face / fal-ai", "https://router.huggingface.co", "HF_TOKEN" },
-	{ "stable-diffusion.cpp", "http://127.0.0.1:8080", "OFXIC_API_KEY" },
+	{ "OpenAI images", "https://api.openai.com/v1", "OPENAI_API_KEY",
+		true, false, "Image generation only; no OpenAI video adapter." },
+	{ "Hugging Face / fal-ai", "https://router.huggingface.co", "HF_TOKEN",
+		true, true, "Hosted image and queued video; provider credit may be required." },
+	{ "stable-diffusion.cpp", "http://127.0.0.1:8080", "OFXIC_API_KEY",
+		true, true, "External native image and video jobs." },
 }};
+
+bool supportsMediaKind(int backend, int kind) {
+	if (backend < 0 || backend >= static_cast<int>(mediaBackends.size())) return false;
+	return kind == 0
+		? mediaBackends[backend].supportsImage
+		: kind == 1 && mediaBackends[backend].supportsVideo;
+}
+
+std::string unsupportedMediaMessage(int backend, int kind) {
+	if (backend < 0 || backend >= static_cast<int>(mediaBackends.size())) {
+		return "Unknown media backend";
+	}
+	return std::string(mediaBackends[backend].name) + " does not support " +
+		(kind == 1 ? "video" : "image") + " in ofxIC";
+}
 
 std::string environmentValue(const char * name) {
 	const char * value = std::getenv(name);
@@ -207,7 +228,12 @@ void ofApp::setup() {
 		selectedMediaKind = mediaAutorun == "video" ? 1 : 0;
 		const std::string prompt = environmentValue("OFXIC_MEDIA_PROMPT");
 		if (!prompt.empty()) setTextBuffer(mediaInput, prompt);
-		generateMedia();
+		if (supportsMediaKind(selectedMediaBackend, selectedMediaKind)) {
+			generateMedia();
+		} else {
+			mediaStatus = unsupportedMediaMessage(selectedMediaBackend, selectedMediaKind);
+			writeMediaAutomationResult(mediaStatus, "");
+		}
 	}
 }
 
@@ -369,7 +395,18 @@ void ofApp::draw() {
 	if (ImGui::Combo("Media backend", &nextMediaBackend, backendNames, 3)) {
 		selectMediaBackend(nextMediaBackend);
 	}
-	ImGui::Combo("Kind", &selectedMediaKind, mediaKinds, 2);
+	const MediaBackendProfile & mediaProfile = mediaBackends[selectedMediaBackend];
+	ImGui::TextDisabled(
+		"Capabilities: Image: %s | Video: %s",
+		mediaProfile.supportsImage ? "yes" : "no",
+		mediaProfile.supportsVideo ? "yes" : "no");
+	ImGui::TextWrapped("%s", mediaProfile.capabilityNote);
+	if (mediaProfile.supportsImage && mediaProfile.supportsVideo) {
+		ImGui::Combo("Kind", &selectedMediaKind, mediaKinds, 2);
+	} else {
+		selectedMediaKind = mediaProfile.supportsVideo ? 1 : 0;
+		ImGui::Text("Kind: %s", mediaKinds[selectedMediaKind]);
+	}
 	if (selectedMediaBackend != 1) {
 		if (ImGui::InputText(
 			"Media base URL", mediaEndpointUrl.data(), mediaEndpointUrl.size())) {
@@ -395,21 +432,17 @@ void ofApp::draw() {
 		ImGui::SameLine();
 		ImGui::InputInt("FPS", &mediaFps);
 	}
-	const bool unsupported = selectedMediaBackend == 0 && selectedMediaKind == 1;
-	ImGui::BeginDisabled(unsupported);
 	const char * generateLabel = selectedMediaBackend == 1
 		? (selectedMediaKind == 0 ? "Generate HF image" : "Submit HF video")
 		: (selectedMediaBackend == 2
 			? (selectedMediaKind == 0 ? "Submit image job" : "Submit video job")
 			: "Generate OpenAI image");
 	generateMediaRequested = ImGui::Button(generateLabel);
-	ImGui::EndDisabled();
 	if (!currentMediaJob.id.empty() && !currentMediaJob.terminal()) {
 		ImGui::SameLine();
 		pollMediaRequested = ImGui::Button("Poll job");
 	}
 	ImGui::EndDisabled();
-	if (unsupported) ImGui::TextDisabled("OpenAI video is not part of this compact adapter yet.");
 	const std::string mediaToken = configuredMediaToken();
 	ImGui::TextDisabled("Media token: %s (%s)",
 		mediaToken.empty() ? "not loaded" : "loaded",
@@ -540,6 +573,9 @@ void ofApp::selectEndpointProfile(int profileIndex) {
 void ofApp::selectMediaBackend(int backendIndex) {
 	if (backendIndex < 0 || backendIndex >= static_cast<int>(mediaBackends.size())) return;
 	selectedMediaBackend = backendIndex;
+	if (!supportsMediaKind(selectedMediaBackend, selectedMediaKind)) {
+		selectedMediaKind = mediaBackends[selectedMediaBackend].supportsImage ? 0 : 1;
+	}
 	setTextBuffer(mediaEndpointUrl, mediaBackends[selectedMediaBackend].url);
 	const std::string imageModel(mediaImageModel.data());
 	if (selectedMediaBackend == 0 &&
@@ -626,7 +662,14 @@ void ofApp::sendMessage() {
 }
 
 void ofApp::generateMedia() {
-	if (!mediaInput[0] || busy || mediaBusy.exchange(true)) return;
+	if (!mediaInput[0] || busy) return;
+	if (!supportsMediaKind(selectedMediaBackend, selectedMediaKind)) {
+		mediaStatus = unsupportedMediaMessage(selectedMediaBackend, selectedMediaKind);
+		mediaOutput.clear();
+		writeMediaAutomationResult(mediaStatus, mediaOutput);
+		return;
+	}
+	if (mediaBusy.exchange(true)) return;
 	const std::string prompt(mediaInput.data());
 	const int width = std::max(1, mediaWidth);
 	const int height = std::max(1, mediaHeight);

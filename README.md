@@ -168,6 +168,18 @@ LM Studio, Hugging Face, OpenAI, and a custom endpoint. The same GUI also
 selects an independent media backend, generates images, submits native or
 Hugging Face video jobs, polls them, and displays returned media.
 
+| Media backend | Image | Video | Behavior |
+| --- | --- | --- | --- |
+| OpenAI | Yes | No | `/v1/images/generations`; video is intentionally not offered |
+| Hugging Face / fal-ai | Yes | Yes | Hosted task routes; provider credit may be required |
+| `stable-diffusion.cpp` | Yes | Yes | External asynchronous image/video jobs |
+
+The GUI shows these capabilities and does not allow unsupported combinations.
+An OpenAI video adapter is deliberately absent: it would require paid API
+access, while the current Sora video API is deprecated and scheduled to shut
+down on September 24, 2026. ChatGPT application access is not API credit and
+cannot be used as an `ofxIC` endpoint.
+
 - Choose an endpoint preset or enter a custom base URL.
 - Inspect `/v1/models` and select or enter the model ID.
 - Use `OFXIC_API_KEY` as the universal token override. The Hugging Face and
@@ -244,6 +256,10 @@ ctest --test-dir tests/build --output-on-failure
 The deterministic tests use an injected transport; live inference remains a
 separate, explicitly triggered check so protocol failures and provider costs
 cannot be confused with unit-test failures.
+
+The default GUI workflow additionally exercises video download and playback
+against a local fixture server. It therefore validates the complete client and
+rendering path without a GPU, provider account, token, or payment method.
 
 GitHub Actions also builds `ofxICExample` against the current official
 openFrameworks Linux nightly. The workflow records the resolved archive name,
