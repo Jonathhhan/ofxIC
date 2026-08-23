@@ -255,3 +255,28 @@ OFXIC_TEST(media_client_submits_and_polls_hugging_face_video) {
 	OFXIC_REQUIRE(captured[3].url.find("/requests/queue-7?_subdomain=queue") != std::string::npos);
 	OFXIC_REQUIRE(captured[4].headers.empty());
 }
+
+OFXIC_TEST(media_client_explains_hugging_face_payment_required) {
+	int calls = 0;
+	ofxIC::Endpoint endpoint("https://router.huggingface.co/v1", [&](const ofxIC::HttpRequest &) {
+		ofxIC::HttpResponse response;
+		response.started = true;
+		if (calls++ == 0) {
+			response.status = 200;
+			response.body = R"({"inferenceProviderMapping":{"fal-ai":{"status":"live","providerId":"fal-ai/wan/v2.2-5b/text-to-video","task":"text-to-video"}}})";
+		} else {
+			response.status = 402;
+		}
+		return response;
+	});
+	ofxIC::MediaClient media(endpoint);
+	ofxIC::MediaJobRequest request;
+	request.kind = ofxIC::MediaKind::Video;
+	request.prompt = "A paper fox turns around";
+	request.model = "Wan-AI/Wan2.2-TI2V-5B";
+
+	const auto failed = media.submitHuggingFaceFal(request);
+	OFXIC_REQUIRE(!failed);
+	OFXIC_REQUIRE(failed.httpStatus == 402);
+	OFXIC_REQUIRE(failed.error.find("inference credits or pay-as-you-go billing are required") != std::string::npos);
+}
