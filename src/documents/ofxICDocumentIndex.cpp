@@ -82,12 +82,16 @@ bool DocumentIndex::addText(const std::string & source, const std::string & text
 }
 
 bool DocumentIndex::addFile(const std::string & path) {
+	return addFile(path, path);
+}
+
+bool DocumentIndex::addFile(const std::string & path, const std::string & source) {
 	std::ifstream input(path, std::ios::binary);
 	if (!input) return false;
 	const std::string text(
 		(std::istreambuf_iterator<char>(input)),
 		std::istreambuf_iterator<char>());
-	return addText(path, text);
+	return addText(source, text);
 }
 
 std::vector<DocumentSearchHit> DocumentIndex::search(

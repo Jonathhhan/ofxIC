@@ -157,6 +157,14 @@ jobs:
           artifact_dir="$RUNNER_TEMP/gui-smoke"
           mkdir -p "$artifact_dir"
 
+          document_fixture="$artifact_dir/fixture.md"
+          document_result="$artifact_dir/document-result.txt"
+          printf '%s\n' \
+            'The fixture says the process boundary keeps model runtimes outside ofxIC.' \
+            >"$document_fixture"
+          export OFXIC_DOCUMENT_PATH="$document_fixture"
+          export OFXIC_DOCUMENT_RESULT_PATH="$document_result"
+
           xvfb-run \
             --auto-servernum \
             --server-args="-screen 0 1280x720x24 -nolisten tcp" \
@@ -206,6 +214,8 @@ jobs:
             echo "openFrameworks=$OF_NIGHTLY_ASSET"
             echo "runner=${RUNNER_OS}-${RUNNER_ARCH}"
           } >"$artifact_dir/build.txt"
+          grep -Fxq "Loaded fixture.md" "$document_result"
+          grep -Fxq "fixture.md" "$document_result"
           file "$artifact_dir/ofxICExample.png"
 
       - name: Upload GUI smoke artifacts

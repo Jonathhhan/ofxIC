@@ -18,6 +18,7 @@ class DocumentIndex {
 public:
 	bool addText(const std::string & source, const std::string & text);
 	bool addFile(const std::string & path);
+	bool addFile(const std::string & path, const std::string & source);
 	std::vector<DocumentSearchHit> search(
 		const std::string & query,
 		std::size_t maxResults = 5) const;
