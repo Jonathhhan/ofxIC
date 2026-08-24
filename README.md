@@ -182,12 +182,17 @@ cannot be used as an `ofxIC` endpoint.
 
 - Choose an endpoint preset or enter a custom base URL.
 - Inspect `/v1/models` and select or enter the model ID.
+- Load deliberately selected `.md` or `.txt` files with the GUI button or by
+  dropping them on the window. The example sends only their file names as
+  source identifiers, not their full local paths.
 - Use `OFXIC_API_KEY` as the universal token override. The Hugging Face and
   OpenAI presets also recognize `HF_TOKEN` and `OPENAI_API_KEY` respectively.
 - Tokens are read from the environment; the GUI displays only whether one was
   loaded and never displays or stores its value.
 - `OFXIC_ENDPOINT_URL`, `OFXIC_MODEL`, and `OFXIC_API_KEY` configure
   the initial state for scripts and CI.
+- `OFXIC_DOCUMENT_PATH` deliberately loads one document at startup;
+  `OFXIC_DOCUMENT_RESULT_PATH` records its GUI automation status.
 - `OFXIC_MEDIA_BACKEND`, `OFXIC_MEDIA_ENDPOINT_URL`,
   `OFXIC_MEDIA_IMAGE_MODEL`, `OFXIC_MEDIA_VIDEO_MODEL`, and
   `OFXIC_MEDIA_API_KEY` configure media independently from chat.

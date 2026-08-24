@@ -20,6 +20,7 @@ public:
 	void update() override;
 	void draw() override;
 	void keyPressed(int key) override;
+	void dragEvent(ofDragInfo dragInfo) override;
 	void exit() override;
 
 private:
@@ -29,6 +30,7 @@ private:
 	void selectMediaBackend(int backendIndex);
 	void inspectEndpoint();
 	void sendMessage();
+	bool loadDocument(const std::string & path);
 	void generateMedia();
 	void pollMediaJob();
 	void finishWorker();
@@ -66,6 +68,8 @@ private:
 	std::string lastMessage;
 	std::string output;
 	std::string status;
+	std::string documentStatus;
+	std::vector<std::string> loadedDocumentSources;
 	std::vector<std::string> availableModels;
 	std::thread worker;
 	std::mutex resultMutex;

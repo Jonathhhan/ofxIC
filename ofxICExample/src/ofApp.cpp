@@ -94,6 +94,22 @@ std::string configuredMediaModel(const char * environment, const char * fallback
 	return configured.empty() ? fallback : configured;
 }
 
+std::string documentSourceName(const std::string & path) {
+	const std::size_t separator = path.find_last_of("/\\");
+	return separator == std::string::npos ? path : path.substr(separator + 1);
+}
+
+bool supportedDocumentPath(const std::string & path) {
+	const std::string source = documentSourceName(path);
+	const std::size_t dot = source.find_last_of('.');
+	if (dot == std::string::npos) return false;
+	std::string extension = source.substr(dot);
+	std::transform(extension.begin(), extension.end(), extension.begin(), [](unsigned char c) {
+		return static_cast<char>(std::tolower(c));
+	});
+	return extension == ".md" || extension == ".txt";
+}
+
 std::string decodeBase64(const std::string & encoded) {
 	static const std::string alphabet =
 		"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
@@ -176,6 +192,20 @@ void writeMediaAutomationResult(const std::string & status, const std::string & 
 	result << status << "\n" << output << "\n";
 }
 
+void writeDocumentAutomationResult(
+	const std::string & status,
+	const std::vector<std::string> & sources) {
+	const std::string path = environmentValue("OFXIC_DOCUMENT_RESULT_PATH");
+	if (path.empty()) return;
+	std::ofstream result(path, std::ios::binary | std::ios::trunc);
+	if (!result) {
+		ofLogError("ofxIC") << "Could not write document GUI result to " << path;
+		return;
+	}
+	result << status << "\n";
+	for (const std::string & source : sources) result << source << "\n";
+}
+
 } // namespace
 
 ofApp::ofApp()
@@ -209,17 +239,22 @@ void ofApp::setup() {
 	ofSetBackgroundColor(20);
 	gui.setup(nullptr, true);
 	chat.setSystemPrompt(
-		"Use search_documents for questions about the addon. "
+		"Use search_documents for questions that may be answered by loaded sources. "
 		"Ground answers only in returned text and include its citation values.");
 	ofxIC::ChatOptions options;
 	options.model = modelId.data();
 	chat.setOptions(options);
-	documents.addText(
+	if (documents.addText(
 		"architecture.md",
 		"ofxIC keeps llama-server, ggml, CUDA, and model runtimes outside "
 		"the addon behind an HTTP process boundary. The addon provides endpoint "
-		"access, chat history, explicit document search, and allowlisted tools.");
+		"access, chat history, explicit document search, and allowlisted tools.")) {
+		loadedDocumentSources.push_back("architecture.md");
+	}
 	tools.addDocumentSearch(documents);
+	documentStatus = "Drop a .md or .txt file here, or choose one explicitly.";
+	const std::string documentPath = environmentValue("OFXIC_DOCUMENT_PATH");
+	if (!documentPath.empty()) loadDocument(documentPath);
 	status = "Ready. Inspect the endpoint, then send a message.";
 	setTextBuffer(mediaInput, "A small paper sculpture on a clean studio background");
 	mediaStatus = "Choose OpenAI images, Hugging Face / fal-ai, or stable-diffusion.cpp jobs.";
@@ -300,6 +335,7 @@ void ofApp::draw() {
 	bool inspectRequested = false;
 	bool sendRequested = false;
 	bool clearRequested = false;
+	bool loadDocumentRequested = false;
 	bool generateMediaRequested = false;
 	bool pollMediaRequested = false;
 
@@ -356,6 +392,17 @@ void ofApp::draw() {
 	ImGui::SetNextWindowPos(ImVec2(16, 218), ImGuiCond_FirstUseEver);
 	ImGui::SetNextWindowSize(ImVec2(568, 426), ImGuiCond_FirstUseEver);
 	ImGui::Begin("Document tool chat");
+	loadDocumentRequested = ImGui::Button("Load .md / .txt");
+	ImGui::SameLine();
+	ImGui::TextDisabled("%zu document(s), %zu chunk(s)",
+		documents.documentCount(), documents.chunkCount());
+	ImGui::TextWrapped("%s", documentStatus.c_str());
+	if (ImGui::CollapsingHeader("Loaded sources", ImGuiTreeNodeFlags_DefaultOpen)) {
+		for (const std::string & source : loadedDocumentSources) {
+			ImGui::BulletText("%s", source.c_str());
+		}
+	}
+	ImGui::Separator();
 	if (!lastMessage.empty()) {
 		ImGui::TextDisabled("Last message: %s", lastMessage.c_str());
 	}
@@ -469,6 +516,10 @@ void ofApp::draw() {
 	ImGui::End();
 	gui.end();
 
+	if (loadDocumentRequested && !busy && !mediaBusy) {
+		ofFileDialogResult selection = ofSystemLoadDialog("Load a Markdown or text document");
+		if (selection.bSuccess) loadDocument(selection.getPath());
+	}
 	if (applyRequested) applyConfiguration();
 	if (inspectRequested) {
 		if (configurationDirty) applyConfiguration();
@@ -527,9 +578,37 @@ void ofApp::keyPressed(int key) {
 	}
 }
 
+void ofApp::dragEvent(ofDragInfo dragInfo) {
+	if (busy || mediaBusy) {
+		documentStatus = "Wait for the current request before loading documents.";
+		return;
+	}
+	for (const auto & path : dragInfo.files) loadDocument(path.string());
+}
+
 void ofApp::exit() {
 	finishWorker();
 	finishMediaWorker();
+}
+
+bool ofApp::loadDocument(const std::string & path) {
+	const std::string source = documentSourceName(path);
+	if (source.empty() || !supportedDocumentPath(path)) {
+		documentStatus = "Rejected " + (source.empty() ? std::string("document") : source) +
+			": only .md and .txt files are accepted.";
+		writeDocumentAutomationResult(documentStatus, loadedDocumentSources);
+		return false;
+	}
+	if (!documents.addFile(path, source)) {
+		documentStatus = "Could not load " + source +
+			": it is missing, unreadable, empty, or already loaded.";
+		writeDocumentAutomationResult(documentStatus, loadedDocumentSources);
+		return false;
+	}
+	loadedDocumentSources.push_back(source);
+	documentStatus = "Loaded " + source;
+	writeDocumentAutomationResult(documentStatus, loadedDocumentSources);
+	return true;
 }
 
 void ofApp::applyConfiguration() {
