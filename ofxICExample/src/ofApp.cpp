@@ -517,7 +517,7 @@ void ofApp::draw() {
 	gui.end();
 
 	if (loadDocumentRequested && !busy && !mediaBusy) {
-		const ofFileDialogResult selection = ofSystemLoadDialog("Load a Markdown or text document");
+		ofFileDialogResult selection = ofSystemLoadDialog("Load a Markdown or text document");
 		if (selection.bSuccess) loadDocument(selection.getPath());
 	}
 	if (applyRequested) applyConfiguration();
@@ -583,7 +583,7 @@ void ofApp::dragEvent(ofDragInfo dragInfo) {
 		documentStatus = "Wait for the current request before loading documents.";
 		return;
 	}
-	for (const std::string & path : dragInfo.files) loadDocument(path);
+	for (const auto & path : dragInfo.files) loadDocument(path.string());
 }
 
 void ofApp::exit() {
