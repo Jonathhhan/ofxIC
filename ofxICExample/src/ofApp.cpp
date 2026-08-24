@@ -61,8 +61,25 @@ std::string unsupportedMediaMessage(int backend, int kind) {
 }
 
 std::string environmentValue(const char * name) {
+#if defined(_WIN32)
+	char * value = nullptr;
+	std::size_t length = 0;
+	if (_dupenv_s(&value, &length, name) != 0 || !value) return {};
+	std::string result(value);
+	std::free(value);
+	return result;
+#else
 	const char * value = std::getenv(name);
 	return value && *value ? value : "";
+#endif
+}
+
+std::string tokenSetupHint(const std::string & variable) {
+#if defined(_WIN32)
+	return "PowerShell before launch: $env:" + variable + " = \"your_token\"";
+#else
+	return "Shell before launch: export " + variable + "=your_token";
+#endif
 }
 
 std::map<std::string, std::string> settingsEnvironment() {
@@ -207,6 +224,17 @@ ofApp::ofApp()
 	}
 	ofxICExample::applyEnvironmentOverrides(settings, settingsEnvironment());
 	applySettingsToUi(settings);
+	if (ofxICExample::credentialStoreAvailable()) {
+		for (const char * variable : { "HF_TOKEN", "OPENAI_API_KEY", "OFXIC_API_KEY" }) {
+			std::string token;
+			std::string error;
+			if (ofxICExample::loadCredential(variable, token, error) && !token.empty()) {
+				storedTokens[variable] = std::move(token);
+			} else if (!error.empty()) {
+				credentialStatus = error;
+			}
+		}
+	}
 	endpoint.setBaseUrl(endpointUrl.data());
 	mediaEndpoint.setBaseUrl(mediaEndpointUrl.data());
 	endpoint.setBearerToken(configuredToken());
@@ -214,8 +242,15 @@ ofApp::ofApp()
 }
 
 ofApp::~ofApp() {
+	cancellationRequested = true;
 	finishWorker();
 	finishMediaWorker();
+	tokenInput.fill('\0');
+	mediaTokenInput.fill('\0');
+	for (auto & entry : storedTokens) {
+		std::fill(entry.second.begin(), entry.second.end(), '\0');
+	}
+	storedTokens.clear();
 }
 
 void ofApp::setup() {
@@ -241,6 +276,7 @@ void ofApp::setup() {
 	const std::string documentPath = environmentValue("OFXIC_DOCUMENT_PATH");
 	if (!documentPath.empty()) loadDocument(documentPath);
 	status = "Ready. Inspect the endpoint, then send a message.";
+	if (environmentValue("OFXIC_INSPECT_AUTORUN") == "1") inspectEndpoint();
 	setTextBuffer(mediaInput, "A small paper sculpture on a clean studio background");
 	mediaStatus = "Choose OpenAI images, Hugging Face / fal-ai, or stable-diffusion.cpp jobs.";
 	const std::string mediaAutorun = environmentValue("OFXIC_MEDIA_AUTORUN");
@@ -258,9 +294,14 @@ void ofApp::setup() {
 }
 
 void ofApp::update() {
+	if (busy && requestCanCancel) {
+		std::lock_guard<std::mutex> lock(resultMutex);
+		if (!pendingProgressStatus.empty()) status = pendingProgressStatus;
+	}
 	if (finished.exchange(false)) {
 		finishWorker();
 		busy = false;
+		requestCanCancel = false;
 		std::lock_guard<std::mutex> lock(resultMutex);
 		output = std::move(pendingOutput);
 		status = std::move(pendingStatus);
@@ -319,6 +360,11 @@ void ofApp::draw() {
 	bool applyRequested = false;
 	bool inspectRequested = false;
 	bool sendRequested = false;
+	bool cancelRequested = false;
+	bool saveTokenRequested = false;
+	bool forgetTokenRequested = false;
+	bool saveMediaTokenRequested = false;
+	bool forgetMediaTokenRequested = false;
 	bool clearRequested = false;
 	bool loadDocumentRequested = false;
 	bool generateMediaRequested = false;
@@ -374,11 +420,28 @@ void ofApp::draw() {
 	const std::string tokenSource = configuredTokenSource();
 	if (token.empty()) {
 		ImGui::TextDisabled("Token: not loaded (%s)", tokenSource.c_str());
+		ImGui::TextWrapped("If authentication is required, set it without storing it: %s",
+			tokenSetupHint(tokenSource).c_str());
 	} else {
 		ImGui::Text("Token: loaded from %s", tokenSource.c_str());
 	}
+	if (ofxICExample::credentialStoreAvailable()) {
+		ImGui::SetNextItemWidth(280);
+		ImGui::InputText("Token##chat-token", tokenInput.data(), tokenInput.size(),
+			ImGuiInputTextFlags_Password);
+		ImGui::SameLine();
+		ImGui::BeginDisabled(busy || mediaBusy || !tokenInput[0]);
+		saveTokenRequested = ImGui::Button("Save securely##chat-token");
+		ImGui::EndDisabled();
+		ImGui::SameLine();
+		const std::string preferredToken = endpointProfiles[selectedProfile].tokenEnvironment;
+		ImGui::BeginDisabled(busy || mediaBusy || storedTokens.count(preferredToken) == 0);
+		forgetTokenRequested = ImGui::Button("Forget saved token##chat-token");
+		ImGui::EndDisabled();
+	}
+	if (!credentialStatus.empty()) ImGui::TextWrapped("%s", credentialStatus.c_str());
 	ImGui::TextWrapped("%s", status.c_str());
-	ImGui::TextDisabled("%s Tokens are never stored.", settingsStatus.c_str());
+	ImGui::TextDisabled("%s Tokens are never stored in settings.", settingsStatus.c_str());
 	ImGui::End();
 
 	ImGui::SetNextWindowPos(ImVec2(16, 248), ImGuiCond_FirstUseEver);
@@ -416,7 +479,13 @@ void ofApp::draw() {
 	ImGui::EndDisabled();
 	if (busy) {
 		ImGui::SameLine();
-		ImGui::TextDisabled("Waiting for model...");
+		if (requestCanCancel) {
+			cancelRequested = ImGui::Button("Cancel request");
+			ImGui::SameLine();
+			ImGui::TextDisabled(cancellationRequested ? "Cancelling..." : "Waiting for endpoint...");
+		} else {
+			ImGui::TextDisabled("Waiting for endpoint...");
+		}
 	}
 	ImGui::SeparatorText("Response");
 	ImGui::BeginChild("response", ImVec2(0, 0), true);
@@ -486,6 +555,24 @@ void ofApp::draw() {
 	ImGui::TextDisabled("Media token: %s (%s)",
 		mediaToken.empty() ? "not loaded" : "loaded",
 		configuredMediaTokenSource().c_str());
+	if (mediaToken.empty()) {
+		ImGui::TextWrapped("If authentication is required: %s",
+			tokenSetupHint(mediaBackends[selectedMediaBackend].tokenEnvironment).c_str());
+	}
+	if (ofxICExample::credentialStoreAvailable()) {
+		ImGui::SetNextItemWidth(280);
+		ImGui::InputText("Token##media-token", mediaTokenInput.data(), mediaTokenInput.size(),
+			ImGuiInputTextFlags_Password);
+		ImGui::SameLine();
+		ImGui::BeginDisabled(busy || mediaBusy || !mediaTokenInput[0]);
+		saveMediaTokenRequested = ImGui::Button("Save securely##media-token");
+		ImGui::EndDisabled();
+		ImGui::SameLine();
+		const std::string preferredMediaToken = mediaBackends[selectedMediaBackend].tokenEnvironment;
+		ImGui::BeginDisabled(busy || mediaBusy || storedTokens.count(preferredMediaToken) == 0);
+		forgetMediaTokenRequested = ImGui::Button("Forget saved token##media-token");
+		ImGui::EndDisabled();
+	}
 	if (mediaBusy) ImGui::TextDisabled("Waiting for media endpoint...");
 	ImGui::TextWrapped("%s", mediaStatus.c_str());
 	if (!mediaOutput.empty()) ImGui::TextWrapped("%s", mediaOutput.c_str());
@@ -529,6 +616,19 @@ void ofApp::draw() {
 	if (sendRequested) {
 		if (configurationDirty) applyConfiguration();
 		sendMessage();
+	}
+	if (cancelRequested) cancelRequest();
+	if (saveTokenRequested) {
+		saveTokenCredential(endpointProfiles[selectedProfile].tokenEnvironment, tokenInput);
+	}
+	if (forgetTokenRequested) {
+		forgetTokenCredential(endpointProfiles[selectedProfile].tokenEnvironment);
+	}
+	if (saveMediaTokenRequested) {
+		saveTokenCredential(mediaBackends[selectedMediaBackend].tokenEnvironment, mediaTokenInput);
+	}
+	if (forgetMediaTokenRequested) {
+		forgetTokenCredential(mediaBackends[selectedMediaBackend].tokenEnvironment);
 	}
 	if (generateMediaRequested) {
 		if (mediaConfigurationDirty) applyMediaConfiguration();
@@ -581,6 +681,7 @@ void ofApp::dragEvent(ofDragInfo dragInfo) {
 }
 
 void ofApp::exit() {
+	cancellationRequested = true;
 	finishWorker();
 	finishMediaWorker();
 }
@@ -726,12 +827,24 @@ void ofApp::selectMediaBackend(int backendIndex) {
 std::string ofApp::configuredToken() const {
 	const std::string generic = environmentValue("OFXIC_API_KEY");
 	if (!generic.empty()) return generic;
-	return environmentValue(endpointProfiles[selectedProfile].tokenEnvironment);
+	const std::string variable = endpointProfiles[selectedProfile].tokenEnvironment;
+	const std::string provider = environmentValue(variable.c_str());
+	if (!provider.empty()) return provider;
+	const auto stored = storedTokens.find(variable);
+	if (stored != storedTokens.end()) return stored->second;
+	const auto storedGeneric = storedTokens.find("OFXIC_API_KEY");
+	return storedGeneric == storedTokens.end() ? std::string{} : storedGeneric->second;
 }
 
 std::string ofApp::configuredTokenSource() const {
 	if (!environmentValue("OFXIC_API_KEY").empty()) return "OFXIC_API_KEY";
-	return endpointProfiles[selectedProfile].tokenEnvironment;
+	const std::string variable = endpointProfiles[selectedProfile].tokenEnvironment;
+	if (!environmentValue(variable.c_str()).empty()) return variable;
+	if (storedTokens.count(variable)) return "Windows Credential Manager (" + variable + ")";
+	if (storedTokens.count("OFXIC_API_KEY")) {
+		return "Windows Credential Manager (OFXIC_API_KEY)";
+	}
+	return variable;
 }
 
 std::string ofApp::configuredMediaToken() const {
@@ -740,35 +853,60 @@ std::string ofApp::configuredMediaToken() const {
 	const std::string providerToken = environmentValue(
 		mediaBackends[selectedMediaBackend].tokenEnvironment);
 	if (!providerToken.empty()) return providerToken;
-	return environmentValue("OFXIC_API_KEY");
+	const std::string generic = environmentValue("OFXIC_API_KEY");
+	if (!generic.empty()) return generic;
+	const std::string variable = mediaBackends[selectedMediaBackend].tokenEnvironment;
+	const auto stored = storedTokens.find(variable);
+	if (stored != storedTokens.end()) return stored->second;
+	const auto storedGeneric = storedTokens.find("OFXIC_API_KEY");
+	return storedGeneric == storedTokens.end() ? std::string{} : storedGeneric->second;
 }
 
 std::string ofApp::configuredMediaTokenSource() const {
 	if (!environmentValue("OFXIC_MEDIA_API_KEY").empty()) return "OFXIC_MEDIA_API_KEY";
 	const char * providerEnvironment = mediaBackends[selectedMediaBackend].tokenEnvironment;
 	if (!environmentValue(providerEnvironment).empty()) return providerEnvironment;
-	return "OFXIC_API_KEY";
+	if (!environmentValue("OFXIC_API_KEY").empty()) return "OFXIC_API_KEY";
+	if (storedTokens.count(providerEnvironment)) {
+		return "Windows Credential Manager (" + std::string(providerEnvironment) + ")";
+	}
+	if (storedTokens.count("OFXIC_API_KEY")) {
+		return "Windows Credential Manager (OFXIC_API_KEY)";
+	}
+	return providerEnvironment;
 }
 
 void ofApp::inspectEndpoint() {
 	if (mediaBusy || busy.exchange(true)) return;
+	cancellationRequested = false;
+	requestCanCancel = true;
 	status = "Inspecting endpoint...";
+	{
+		std::lock_guard<std::mutex> lock(resultMutex);
+		pendingProgressStatus.clear();
+	}
 	const std::string currentOutput = output;
 	const std::string currentModel = chat.getOptions().model;
 	worker = std::thread([this, currentOutput, currentModel]() {
-		const auto inspection = endpoint.inspect();
+		const auto inspection = endpoint.inspect([this]() {
+			return cancellationRequested.load();
+		});
 		std::lock_guard<std::mutex> lock(resultMutex);
 		pendingModels = inspection.models;
 		pendingModelSelection.clear();
-		if (!inspection) {
+		if (inspection.cancelled) {
+			pendingStatus = "Inspection cancelled";
+		} else if (!inspection) {
 			pendingStatus = "Inspection failed: " + inspection.error;
 		} else if (!currentModel.empty()) {
-			pendingStatus = "Endpoint ready; configured model: " + currentModel;
+			pendingStatus = "Endpoint reachable; configured model: " + currentModel +
+				" (authentication not tested)";
 		} else if (inspection.models.empty()) {
-			pendingStatus = "Endpoint reachable; enter a model ID";
+			pendingStatus = "Endpoint reachable; enter a model ID (authentication not tested)";
 		} else {
 			pendingModelSelection = inspection.models.front();
-			pendingStatus = "Endpoint ready; model: " + pendingModelSelection;
+			pendingStatus = "Endpoint reachable; model: " + pendingModelSelection +
+				" (authentication not tested)";
 		}
 		pendingOutput = currentOutput;
 		finished = true;
@@ -781,18 +919,74 @@ void ofApp::sendMessage() {
 	input[0] = '\0';
 	lastMessage = message;
 	status = "Waiting for model...";
+	{
+		std::lock_guard<std::mutex> lock(resultMutex);
+		pendingProgressStatus = "Requesting model (request 1)...";
+	}
+	cancellationRequested = false;
+	requestCanCancel = true;
 	focusMessageInput = true;
 	const std::vector<std::string> currentModels = availableModels;
 	worker = std::thread([this, message, currentModels]() {
-		const auto result = toolLoop.run(message);
+		const auto result = toolLoop.run(
+			message,
+			4,
+			[this]() { return cancellationRequested.load(); },
+			[this](const ofxIC::ToolLoopProgress & progress) {
+				std::lock_guard<std::mutex> lock(resultMutex);
+				if (progress.stage == ofxIC::ToolLoopStage::ExecutingTool) {
+					pendingProgressStatus = "Executing allowlisted tool: " + progress.toolName;
+				} else {
+					pendingProgressStatus = "Requesting model (request " +
+						ofToString(progress.modelRequest) + ")...";
+				}
+			});
 		std::lock_guard<std::mutex> lock(resultMutex);
 		pendingOutput = result.text;
 		pendingStatus = result
-			? "Completed with " + ofToString(result.modelRequests) + " model request(s)"
-			: "Request failed: " + result.error;
+			? "Inference completed with " + ofToString(result.modelRequests) + " model request(s)"
+			: result.cancelled ? "Request cancelled" : "Request failed: " + result.error;
 		pendingModels = currentModels;
 		finished = true;
 	});
+}
+
+void ofApp::cancelRequest() {
+	if (!busy || !requestCanCancel) return;
+	cancellationRequested = true;
+	status = "Cancelling request...";
+}
+
+void ofApp::saveTokenCredential(
+	const std::string & variable,
+	std::array<char, 512> & input) {
+	const std::string token(input.data());
+	std::string error;
+	if (!ofxICExample::saveCredential(variable, token, error)) {
+		credentialStatus = "Could not save token: " + error;
+		return;
+	}
+	storedTokens[variable] = token;
+	input.fill('\0');
+	endpoint.setBearerToken(configuredToken());
+	mediaEndpoint.setBearerToken(configuredMediaToken());
+	credentialStatus = "Saved " + variable + " in Windows Credential Manager.";
+}
+
+void ofApp::forgetTokenCredential(const std::string & variable) {
+	std::string error;
+	if (!ofxICExample::deleteCredential(variable, error)) {
+		credentialStatus = "Could not forget token: " + error;
+		return;
+	}
+	const auto stored = storedTokens.find(variable);
+	if (stored != storedTokens.end()) {
+		std::fill(stored->second.begin(), stored->second.end(), '\0');
+		storedTokens.erase(stored);
+	}
+	endpoint.setBearerToken(configuredToken());
+	mediaEndpoint.setBearerToken(configuredMediaToken());
+	credentialStatus = "Removed saved " + variable + ". Environment overrides remain active.";
 }
 
 void ofApp::generateMedia() {

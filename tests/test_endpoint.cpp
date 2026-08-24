@@ -45,6 +45,24 @@ OFXIC_TEST(endpoint_inspects_models_endpoint) {
 	OFXIC_REQUIRE(status.models[0] == "local/qwen");
 }
 
+OFXIC_TEST(endpoint_inspection_can_be_cancelled) {
+	bool receivedCancellation = false;
+	ofxIC::Endpoint endpoint("http://example.test", [&](const ofxIC::HttpRequest & request) {
+		receivedCancellation = request.shouldCancel && request.shouldCancel();
+		ofxIC::HttpResponse response;
+		response.started = true;
+		response.cancelled = receivedCancellation;
+		response.error = "request cancelled";
+		return response;
+	});
+
+	const auto status = endpoint.inspect([]() { return true; });
+
+	OFXIC_REQUIRE(!status);
+	OFXIC_REQUIRE(status.cancelled);
+	OFXIC_REQUIRE(receivedCancellation);
+}
+
 OFXIC_TEST(endpoint_builds_chat_completions_body) {
 	ofxIC::HttpRequest captured;
 	ofxIC::Endpoint endpoint("http://localhost:8001", [&](const ofxIC::HttpRequest & httpRequest) {

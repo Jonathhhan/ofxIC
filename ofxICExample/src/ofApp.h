@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ExampleSettings.h"
+#include "ExampleCredentialStore.h"
 #include "ofMain.h"
 #include "ofxIC.h"
 #include "ofxImGui.h"
@@ -8,6 +9,7 @@
 #include <array>
 #include <atomic>
 #include <mutex>
+#include <map>
 #include <string>
 #include <thread>
 #include <vector>
@@ -35,6 +37,9 @@ private:
 	void selectMediaBackend(int backendIndex);
 	void inspectEndpoint();
 	void sendMessage();
+	void cancelRequest();
+	void saveTokenCredential(const std::string & variable, std::array<char, 512> & input);
+	void forgetTokenCredential(const std::string & variable);
 	bool loadDocument(const std::string & path);
 	void generateMedia();
 	void pollMediaJob();
@@ -60,6 +65,8 @@ private:
 	std::array<char, 256> mediaVideoModel{};
 	std::array<char, 2048> input{};
 	std::array<char, 2048> mediaInput{};
+	std::array<char, 512> tokenInput{};
+	std::array<char, 512> mediaTokenInput{};
 	int selectedProfile = 0;
 	int selectedMediaBackend = 0;
 	int selectedMediaKind = 0;
@@ -72,6 +79,8 @@ private:
 	bool focusMessageInput = true;
 	std::string settingsPath;
 	std::string settingsStatus;
+	std::string credentialStatus;
+	std::map<std::string, std::string> storedTokens;
 	std::string lastMessage;
 	std::string output;
 	std::string status;
@@ -82,10 +91,13 @@ private:
 	std::mutex resultMutex;
 	std::string pendingOutput;
 	std::string pendingStatus;
+	std::string pendingProgressStatus;
 	std::string pendingModelSelection;
 	std::vector<std::string> pendingModels;
 	std::atomic<bool> busy{ false };
 	std::atomic<bool> finished{ false };
+	std::atomic<bool> cancellationRequested{ false };
+	std::atomic<bool> requestCanCancel{ false };
 	std::thread mediaWorker;
 	std::mutex mediaResultMutex;
 	std::string mediaStatus;

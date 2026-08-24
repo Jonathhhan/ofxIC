@@ -11,6 +11,7 @@ add_executable(ofxIC_tests
 	test_chat_session.cpp
 	test_document_index.cpp
 	test_example_settings.cpp
+	test_example_credentials.cpp
 	test_tool_loop.cpp
 	test_public_headers.cpp
 	../src/endpoint/ofxICEndpoint.cpp
@@ -19,12 +20,21 @@ add_executable(ofxIC_tests
 	../src/chat/ofxICChatSession.cpp
 	../src/documents/ofxICDocumentIndex.cpp
 	../ofxICExample/src/ExampleSettings.cpp
+	../ofxICExample/src/ExampleCredentialStore.cpp
 	../src/tools/ofxICToolRegistry.cpp
 	../src/tools/ofxICToolLoop.cpp)
 
 target_include_directories(ofxIC_tests PRIVATE
 	${CMAKE_CURRENT_SOURCE_DIR}
 	${CMAKE_CURRENT_SOURCE_DIR}/../src)
+
+if(WIN32)
+	target_link_libraries(ofxIC_tests PRIVATE Advapi32 Winhttp)
+endif()
+
+if(MSVC)
+	target_compile_options(ofxIC_tests PRIVATE /EHsc)
+endif()
 
 enable_testing()
 add_test(NAME ofxIC_tests COMMAND ofxIC_tests)

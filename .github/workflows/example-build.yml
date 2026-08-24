@@ -512,7 +512,7 @@ jobs:
                 cat "$log" >&2
                 exit 1
               fi
-              if ! grep -Fq "Completed with 2 model request(s)" "$result"; then
+              if ! grep -Fq "Inference completed with 2 model request(s)" "$result"; then
                 echo "GUI request did not complete the expected tool round" >&2
                 cat "$result" >&2
                 exit 1

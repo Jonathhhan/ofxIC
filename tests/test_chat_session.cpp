@@ -54,3 +54,23 @@ OFXIC_TEST(chat_session_rejects_empty_messages_without_transport) {
 	OFXIC_REQUIRE(result.error == "message is empty");
 	OFXIC_REQUIRE(calls == 0);
 }
+
+OFXIC_TEST(chat_session_forwards_cancellation_and_rolls_back_history) {
+	bool receivedCancellation = false;
+	ofxIC::Endpoint endpoint("http://example.test", [&](const ofxIC::HttpRequest & request) {
+		receivedCancellation = request.shouldCancel && request.shouldCancel();
+		ofxIC::HttpResponse response;
+		response.started = true;
+		response.cancelled = receivedCancellation;
+		response.error = "request cancelled";
+		return response;
+	});
+	ofxIC::ChatSession chat(endpoint);
+
+	const auto result = chat.send("Stop this", nullptr, []() { return true; });
+
+	OFXIC_REQUIRE(!result);
+	OFXIC_REQUIRE(result.cancelled);
+	OFXIC_REQUIRE(receivedCancellation);
+	OFXIC_REQUIRE(chat.getMessages().empty());
+}

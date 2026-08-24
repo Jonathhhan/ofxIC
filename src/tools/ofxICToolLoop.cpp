@@ -9,7 +9,11 @@ ToolLoop::ToolLoop(ChatSession & chat, const ToolRegistry & tools)
 	, tools(tools) {
 }
 
-ToolLoopResult ToolLoop::run(const std::string & userMessage, std::size_t maxToolRounds) {
+ToolLoopResult ToolLoop::run(
+	const std::string & userMessage,
+	std::size_t maxToolRounds,
+	std::function<bool()> shouldCancel,
+	ToolLoopProgressCallback onProgress) {
 	ToolLoopResult loopResult;
 	if (userMessage.empty()) {
 		loopResult.error = "message is empty";
@@ -26,13 +30,30 @@ ToolLoopResult ToolLoop::run(const std::string & userMessage, std::size_t maxToo
 		return loopResult;
 	}
 	const std::size_t checkpoint = session.messages.size();
+	const auto cancelled = [&shouldCancel]() {
+		return shouldCancel && shouldCancel();
+	};
+	if (cancelled()) {
+		loopResult.cancelled = true;
+		loopResult.error = "request cancelled";
+		return loopResult;
+	}
 	ChatMessage user;
 	user.role = ChatRole::User;
 	user.content = userMessage;
-	ChatResult completion = session.complete({ user }, definitions);
+	if (onProgress) {
+		onProgress({ ToolLoopStage::RequestingModel, 1, {} });
+	}
+	ChatResult completion = session.complete({ user }, definitions, nullptr, shouldCancel);
 	++loopResult.modelRequests;
 
 	for (std::size_t round = 0; completion && !completion.toolCalls.empty(); ++round) {
+		if (cancelled()) {
+			loopResult.cancelled = true;
+			loopResult.error = "request cancelled";
+			session.messages.resize(checkpoint);
+			return loopResult;
+		}
 		if (round >= maxToolRounds || completion.toolCalls.size() > 8) {
 			loopResult.error = "tool call limit reached";
 			session.messages.resize(checkpoint);
@@ -40,6 +61,9 @@ ToolLoopResult ToolLoop::run(const std::string & userMessage, std::size_t maxToo
 		}
 		std::vector<ChatMessage> toolMessages;
 		for (const ToolCall & call : completion.toolCalls) {
+			if (onProgress) {
+				onProgress({ ToolLoopStage::ExecutingTool, loopResult.modelRequests, call.name });
+			}
 			ToolExecutionResult execution = tools.get().execute(call);
 			loopResult.steps.push_back({ call, execution });
 			if (!execution) {
@@ -53,11 +77,16 @@ ToolLoopResult ToolLoop::run(const std::string & userMessage, std::size_t maxToo
 			toolMessage.toolCallId = call.id;
 			toolMessages.push_back(std::move(toolMessage));
 		}
-		completion = session.complete(std::move(toolMessages), definitions);
+		if (onProgress) {
+			onProgress({ ToolLoopStage::RequestingModel, loopResult.modelRequests + 1, {} });
+		}
+		completion = session.complete(
+			std::move(toolMessages), definitions, nullptr, shouldCancel);
 		++loopResult.modelRequests;
 	}
 
 	if (!completion) {
+		loopResult.cancelled = completion.cancelled;
 		loopResult.error = completion.error;
 		session.messages.resize(checkpoint);
 		return loopResult;

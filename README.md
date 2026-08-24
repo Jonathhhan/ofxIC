@@ -42,6 +42,20 @@ if (result) {
 }
 ```
 
+Long-running chat and tool-loop requests accept an optional cancellation
+predicate. Run the blocking call on a worker thread and set the flag from the
+openFrameworks thread; the example exposes this as **Cancel request**:
+
+```cpp
+std::atomic<bool> cancelRequested{ false };
+const auto result = loop.run("Summarize the loaded sources", 4, [&]() {
+	return cancelRequested.load();
+});
+```
+
+Cancellation is forwarded to the HTTP transport, rolls the incomplete turn
+back out of chat history, and is reported separately from an endpoint failure.
+
 The complete document workflow remains small:
 
 ```cpp
@@ -54,6 +68,10 @@ tools.addDocumentSearch(documents);
 ofxIC::ToolLoop loop(chat, tools);
 const auto answer = loop.run("Why is llama-server a separate process?");
 ```
+
+`ToolLoop::run` can also report typed progress when it requests the model or
+executes an allowlisted tool. The example uses this to expose multi-request
+grounding work without leaking worker-thread state into the GUI thread.
 
 These objects deliberately use non-owning references: keep `Endpoint` alive while
 its `ChatSession` is used, keep both `ChatSession` and `ToolRegistry` alive while
@@ -73,6 +91,12 @@ if (status && !status.models.empty()) {
 	chat.setOptions(options);
 }
 ```
+
+Inspection proves endpoint reachability and parses the advertised model list.
+It does not by itself prove that a token is valid, that provider credit is
+available, or that a selected model can complete the intended request.
+The example reports `Inference completed` only after a chat request has
+actually returned successfully.
 
 Image generation uses the same endpoint and token configuration:
 
@@ -191,10 +215,20 @@ cannot be used as an `ofxIC` endpoint.
   source identifiers, not their full local paths.
 - Use `OFXIC_API_KEY` as the universal token override. The Hugging Face and
   OpenAI presets also recognize `HF_TOKEN` and `OPENAI_API_KEY` respectively.
-- Tokens are read from the environment; the GUI displays only whether one was
-  loaded and never displays or stores its value.
+- If the bundled libcurl cannot validate your Windows certificate chain, set
+  `OFXIC_CA_BUNDLE` to a maintained PEM CA bundle. `CURL_CA_BUNDLE` and
+  `SSL_CERT_FILE` are also recognized. Certificate verification remains enabled.
+- Environment tokens remain the highest-priority override. On Windows, the GUI
+  can optionally save a masked token in Windows Credential Manager and remove
+  it again with **Forget saved token**. Tokens are never written to the example
+  settings file, displayed after entry, or committed with the project.
 - `OFXIC_ENDPOINT_URL`, `OFXIC_MODEL`, and `OFXIC_API_KEY` configure
   the initial state for scripts and CI.
+- `OFXIC_INSPECT_AUTORUN=1` starts endpoint inspection after setup; it is
+  intended for launch and cancellation checks.
+- `scripts\smoke-huggingface-inspection.ps1` exercises the Windows GUI,
+  Schannel, HF model listing, and inspection evidence wording with an explicit
+  fake token. It does not validate credentials or consume inference credit.
 - `OFXIC_DOCUMENT_PATH` deliberately loads one document at startup;
   `OFXIC_DOCUMENT_RESULT_PATH` records its GUI automation status.
 - `OFXIC_MEDIA_BACKEND`, `OFXIC_MEDIA_ENDPOINT_URL`,
@@ -272,6 +306,13 @@ cannot be confused with unit-test failures.
 The default GUI workflow additionally exercises video download and playback
 against a local fixture server. It therefore validates the complete client and
 rendering path without a GPU, provider account, token, or payment method.
+
+On Windows, a built Release example can exercise cancellation through the real
+libcurl and GUI shutdown path against a deliberately slow local endpoint:
+
+```powershell
+scripts\smoke-cancellation.ps1
+```
 
 GitHub Actions also builds `ofxICExample` against the current official
 openFrameworks Linux nightly. The workflow records the resolved archive name,

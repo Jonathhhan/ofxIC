@@ -27,9 +27,23 @@ addon.
 - `DocumentIndex` chunks explicitly loaded text and performs deterministic
   lexical search. It does not watch directories or accept model-selected paths.
 - `ToolRegistry` is the execution allowlist; `ToolLoop` bounds repeated calls.
+- `ToolLoopProgress` exposes only its two observable phases—model request and
+  allowlisted tool execution—without introducing a general agent event model.
+- Endpoint inspection, chat, and tool-loop cancellation is cooperative: the
+  application owns the cancellation flag, while `ofxIC` forwards it through
+  each HTTP request and rolls an incomplete conversational turn back.
+- On Windows, non-streaming HTTPS uses WinHTTP/Schannel so certificate and
+  proxy handling follow native Windows trust. Streaming and local HTTP remain
+  on the cancellable libcurl transport.
+- Optional credential persistence belongs to the application layer. The
+  Windows example uses Credential Manager; the addon core receives only the
+  resulting bearer token and has no credential-vault dependency.
 - `ChatRequest`, `ChatOptions`, and `ChatResult` are explicit value types.
 - `HttpTransport` is injectable so protocol behavior can be tested without a
   model or network service.
+- Endpoint inspection establishes reachability and advertised model identity;
+  token validity, provider credit, and inference capability remain properties
+  of an exercised inference request.
 
 ## Deliberately absent
 

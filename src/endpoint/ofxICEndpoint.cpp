@@ -3,8 +3,18 @@
 #include <algorithm>
 #include <chrono>
 #include <cctype>
+#include <cstdlib>
 #include <sstream>
 #include <utility>
+
+#if defined(_WIN32)
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#include <winhttp.h>
+#pragma comment(lib, "Winhttp.lib")
+#endif
 
 #if __has_include("ofMain.h")
 #include "ofMain.h"
@@ -21,6 +31,89 @@
 
 namespace ofxIC {
 namespace {
+
+#if defined(_WIN32)
+std::wstring widen(const std::string & value) {
+	if (value.empty()) return {};
+	const int size = MultiByteToWideChar(CP_UTF8, 0, value.data(), static_cast<int>(value.size()), nullptr, 0);
+	std::wstring result(size, L'\0');
+	MultiByteToWideChar(CP_UTF8, 0, value.data(), static_cast<int>(value.size()), result.data(), size);
+	return result;
+}
+
+std::string winHttpError(const char * operation) {
+	return std::string(operation) + " failed with Windows error " + std::to_string(GetLastError());
+}
+
+struct WinHttpHandle {
+	HINTERNET value = nullptr;
+	~WinHttpHandle() { if (value) WinHttpCloseHandle(value); }
+};
+
+HttpResponse runWinHttpRequest(const HttpRequest & request) {
+	HttpResponse result;
+	auto cancelled = [&]() {
+		if (!request.shouldCancel || !request.shouldCancel()) return false;
+		result.cancelled = true;
+		result.error = "request cancelled";
+		return true;
+	};
+	if (cancelled()) return result;
+	const std::wstring url = widen(request.url);
+	URL_COMPONENTS parts{};
+	parts.dwStructSize = sizeof(parts);
+	parts.dwSchemeLength = parts.dwHostNameLength = parts.dwUrlPathLength = parts.dwExtraInfoLength = static_cast<DWORD>(-1);
+	if (!WinHttpCrackUrl(url.c_str(), 0, 0, &parts)) {
+		result.error = winHttpError("WinHttpCrackUrl");
+		return result;
+	}
+	const std::wstring host(parts.lpszHostName, parts.dwHostNameLength);
+	std::wstring path(parts.lpszUrlPath, parts.dwUrlPathLength);
+	path.append(parts.lpszExtraInfo, parts.dwExtraInfoLength);
+	WinHttpHandle session{ WinHttpOpen(L"ofxIC/0.1", WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY,
+		WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0) };
+	if (!session.value) { result.error = winHttpError("WinHttpOpen"); return result; }
+	const int timeout = std::max(1, request.timeoutSeconds) * 1000;
+	WinHttpSetTimeouts(session.value, timeout, timeout, timeout, timeout);
+	WinHttpHandle connection{ WinHttpConnect(session.value, host.c_str(), parts.nPort, 0) };
+	if (!connection.value) { result.error = winHttpError("WinHttpConnect"); return result; }
+	const wchar_t * method = request.method == HttpMethod::Post ? L"POST" : L"GET";
+	WinHttpHandle operation{ WinHttpOpenRequest(connection.value, method, path.c_str(), nullptr,
+		WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES,
+		parts.nScheme == INTERNET_SCHEME_HTTPS ? WINHTTP_FLAG_SECURE : 0) };
+	if (!operation.value) { result.error = winHttpError("WinHttpOpenRequest"); return result; }
+	std::wstring headers = L"Accept: " + widen(request.accept) + L"\r\nContent-Type: " + widen(request.contentType) + L"\r\n";
+	for (const auto & header : request.headers) headers += widen(header.first + ": " + header.second) + L"\r\n";
+	if (cancelled()) return result;
+	void * body = request.body.empty() ? WINHTTP_NO_REQUEST_DATA : const_cast<char *>(request.body.data());
+	const DWORD bodySize = static_cast<DWORD>(request.body.size());
+	result.started = true;
+	if (!WinHttpSendRequest(operation.value, headers.c_str(), static_cast<DWORD>(-1), body, bodySize, bodySize, 0)) {
+		result.error = winHttpError("WinHttpSendRequest"); return result;
+	}
+	if (cancelled()) return result;
+	if (!WinHttpReceiveResponse(operation.value, nullptr)) {
+		result.error = winHttpError("WinHttpReceiveResponse"); return result;
+	}
+	DWORD status = 0, statusSize = sizeof(status);
+	WinHttpQueryHeaders(operation.value, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
+		WINHTTP_HEADER_NAME_BY_INDEX, &status, &statusSize, WINHTTP_NO_HEADER_INDEX);
+	result.status = static_cast<int>(status);
+	while (!cancelled()) {
+		DWORD available = 0;
+		if (!WinHttpQueryDataAvailable(operation.value, &available)) { result.error = winHttpError("WinHttpQueryDataAvailable"); break; }
+		if (available == 0) break;
+		const std::size_t offset = result.body.size();
+		result.body.resize(offset + available);
+		DWORD received = 0;
+		if (!WinHttpReadData(operation.value, result.body.data() + offset, available, &received)) {
+			result.error = winHttpError("WinHttpReadData"); result.body.resize(offset); break;
+		}
+		result.body.resize(offset + received);
+	}
+	return result;
+}
+#endif
 
 std::string trimCopy(const std::string & value) {
 	std::size_t first = 0;
@@ -46,6 +139,23 @@ std::string stripTrailingSlash(std::string value) {
 		value.pop_back();
 	}
 	return value;
+}
+
+std::string configuredCaBundle() {
+	for (const char * variable : { "OFXIC_CA_BUNDLE", "CURL_CA_BUNDLE", "SSL_CERT_FILE" }) {
+#if defined(_WIN32)
+		char * value = nullptr;
+		std::size_t size = 0;
+		_dupenv_s(&value, &size, variable);
+		const std::string configured = value ? trimCopy(value) : std::string{};
+		std::free(value);
+		if (!configured.empty()) return configured;
+#else
+		const char * value = std::getenv(variable);
+		if (value && *value) return trimCopy(value);
+#endif
+	}
+	return {};
 }
 
 const char * roleLabel(ChatRole role) {
@@ -283,6 +393,7 @@ struct CurlState {
 	HttpResponse * response = nullptr;
 	ChatChunkCallback onChunk;
 	std::function<bool()> shouldCancel;
+	bool streaming = false;
 	std::string pending;
 };
 
@@ -311,6 +422,10 @@ std::size_t curlWrite(
 		return 0;
 	}
 	state->response->started = true;
+	if (!state->streaming) {
+		state->response->body.append(data, bytes);
+		return bytes;
+	}
 	state->pending.append(data, bytes);
 	while (true) {
 		const std::size_t newline = state->pending.find('\n');
@@ -329,7 +444,7 @@ std::size_t curlWrite(
 	return bytes;
 }
 
-HttpResponse runStreamingRequest(const HttpRequest & request) {
+HttpResponse runCurlRequest(const HttpRequest & request) {
 	HttpResponse result;
 	CURL * curl = curl_easy_init();
 	if (!curl) {
@@ -338,7 +453,9 @@ HttpResponse runStreamingRequest(const HttpRequest & request) {
 	}
 
 	struct curl_slist * headers = nullptr;
-	headers = curl_slist_append(headers, "Accept: text/event-stream");
+	const std::string accept = "Accept: " +
+		(request.stream ? std::string("text/event-stream") : request.accept);
+	headers = curl_slist_append(headers, accept.c_str());
 	const std::string contentType = "Content-Type: " + request.contentType;
 	headers = curl_slist_append(headers, contentType.c_str());
 	for (const auto & header : request.headers) {
@@ -347,20 +464,34 @@ HttpResponse runStreamingRequest(const HttpRequest & request) {
 	}
 
 	CurlState state;
+	char errorBuffer[CURL_ERROR_SIZE] = {};
 	state.response = &result;
 	state.onChunk = request.onChunk;
 	state.shouldCancel = request.shouldCancel;
+	state.streaming = request.stream;
 
 	curl_easy_setopt(curl, CURLOPT_URL, request.url.c_str());
-	curl_easy_setopt(curl, CURLOPT_POST, 1L);
+	curl_easy_setopt(curl, CURLOPT_ERRORBUFFER, errorBuffer);
+	if (request.method == HttpMethod::Post) {
+		curl_easy_setopt(curl, CURLOPT_POST, 1L);
+		curl_easy_setopt(curl, CURLOPT_POSTFIELDS, request.body.c_str());
+		curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE, static_cast<long>(request.body.size()));
+	}
 	curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
-	curl_easy_setopt(curl, CURLOPT_POSTFIELDS, request.body.c_str());
-	curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE, static_cast<long>(request.body.size()));
 	curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, curlWrite);
 	curl_easy_setopt(curl, CURLOPT_WRITEDATA, &state);
 	curl_easy_setopt(curl, CURLOPT_TIMEOUT, static_cast<long>(request.timeoutSeconds));
 	curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
 	curl_easy_setopt(curl, CURLOPT_USERAGENT, "ofxIC/0.1");
+	const std::string caBundle = configuredCaBundle();
+	if (!caBundle.empty()) {
+		curl_easy_setopt(curl, CURLOPT_CAINFO, caBundle.c_str());
+	}
+#if defined(_WIN32)
+	else {
+		curl_easy_setopt(curl, CURLOPT_SSL_OPTIONS, CURLSSLOPT_NATIVE_CA);
+	}
+#endif
 	curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 0L);
 	curl_easy_setopt(curl, CURLOPT_XFERINFOFUNCTION, curlProgress);
 	curl_easy_setopt(curl, CURLOPT_XFERINFODATA, &state);
@@ -371,9 +502,9 @@ HttpResponse runStreamingRequest(const HttpRequest & request) {
 	result.status = static_cast<int>(status);
 	result.started = true;
 	if (code != CURLE_OK && !result.cancelled) {
-		result.error = curl_easy_strerror(code);
+		result.error = errorBuffer[0] ? errorBuffer : curl_easy_strerror(code);
 	}
-	if (!state.pending.empty() && !result.cancelled) {
+	if (request.stream && !state.pending.empty() && !result.cancelled) {
 		processServerSentEventLine(state.pending, result, request.onChunk);
 	}
 
@@ -428,14 +559,20 @@ HttpResponse Endpoint::perform(HttpRequest request) const {
 	return transport(request);
 }
 
-EndpointStatus Endpoint::inspect() const {
+EndpointStatus Endpoint::inspect(std::function<bool()> shouldCancel) const {
 	EndpointStatus status;
 	HttpRequest request;
 	request.method = HttpMethod::Get;
 	request.url = "/v1/models";
 	request.timeoutSeconds = 10;
+	request.shouldCancel = std::move(shouldCancel);
 	const HttpResponse response = perform(request);
 	status.httpStatus = response.status;
+	status.cancelled = response.cancelled;
+	if (response.cancelled) {
+		status.error = response.error.empty() ? "request cancelled" : response.error;
+		return status;
+	}
 	if (!response.started) {
 		status.error = response.error.empty() ? "request did not start" : response.error;
 		return status;
@@ -454,7 +591,8 @@ EndpointStatus Endpoint::inspect() const {
 
 ChatResult Endpoint::chat(
 	const ChatRequest & request,
-	ChatChunkCallback onChunk) const {
+	ChatChunkCallback onChunk,
+	std::function<bool()> shouldCancel) const {
 	ChatResult result;
 	if (request.messages.empty()) {
 		result.error = "chat request has no messages";
@@ -471,6 +609,7 @@ ChatResult Endpoint::chat(
 	httpRequest.body = buildChatBody(request);
 	httpRequest.stream = request.options.stream;
 	httpRequest.onChunk = onChunk;
+	httpRequest.shouldCancel = std::move(shouldCancel);
 
 	const auto startedAt = std::chrono::steady_clock::now();
 	const HttpResponse response = perform(httpRequest);
@@ -691,9 +830,14 @@ HttpResponse Endpoint::runHttpRequest(const HttpRequest & request) {
 		return result;
 	}
 #if defined(OFXIC_HAS_OF_HTTP_RUNTIME)
+#if defined(_WIN32)
+	if (!request.stream && request.url.compare(0, 8, "https://") == 0) {
+		return runWinHttpRequest(request);
+	}
+#endif
 #if defined(OFXIC_HAS_CURL_HTTP_RUNTIME)
-	if (request.stream) {
-		return runStreamingRequest(request);
+	if (request.stream || request.shouldCancel) {
+		return runCurlRequest(request);
 	}
 #else
 	if (request.stream) {

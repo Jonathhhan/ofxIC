@@ -43,6 +43,7 @@ using HttpTransport = std::function<HttpResponse(const HttpRequest &)>;
 
 struct EndpointStatus {
 	bool reachable = false;
+	bool cancelled = false;
 	int httpStatus = 0;
 	std::vector<std::string> models;
 	std::string error;
@@ -64,10 +65,11 @@ public:
 	void setBearerToken(std::string token);
 	bool hasBearerToken() const;
 
-	EndpointStatus inspect() const;
+	EndpointStatus inspect(std::function<bool()> shouldCancel = nullptr) const;
 	ChatResult chat(
 		const ChatRequest & request,
-		ChatChunkCallback onChunk = nullptr) const;
+		ChatChunkCallback onChunk = nullptr,
+		std::function<bool()> shouldCancel = nullptr) const;
 
 private:
 	HttpResponse perform(HttpRequest request) const;

@@ -16,8 +16,22 @@ struct ToolLoopStep {
 	ToolExecutionResult result;
 };
 
+enum class ToolLoopStage {
+	RequestingModel,
+	ExecutingTool
+};
+
+struct ToolLoopProgress {
+	ToolLoopStage stage = ToolLoopStage::RequestingModel;
+	std::size_t modelRequest = 0;
+	std::string toolName;
+};
+
+using ToolLoopProgressCallback = std::function<void(const ToolLoopProgress &)>;
+
 struct ToolLoopResult {
 	bool success = false;
+	bool cancelled = false;
 	std::string text;
 	std::string error;
 	std::size_t modelRequests = 0;
@@ -29,7 +43,11 @@ struct ToolLoopResult {
 class ToolLoop {
 public:
 	ToolLoop(ChatSession & chat, const ToolRegistry & tools);
-	ToolLoopResult run(const std::string & userMessage, std::size_t maxToolRounds = 4);
+	ToolLoopResult run(
+		const std::string & userMessage,
+		std::size_t maxToolRounds = 4,
+		std::function<bool()> shouldCancel = nullptr,
+		ToolLoopProgressCallback onProgress = nullptr);
 
 private:
 	std::reference_wrapper<ChatSession> chat;

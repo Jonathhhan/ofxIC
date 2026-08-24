@@ -36,7 +36,8 @@ void ChatSession::clear() {
 
 ChatResult ChatSession::send(
 	const std::string & message,
-	ChatChunkCallback onChunk) {
+	ChatChunkCallback onChunk,
+	std::function<bool()> shouldCancel) {
 	if (message.empty()) {
 		ChatResult result;
 		result.error = "message is empty";
@@ -46,13 +47,14 @@ ChatResult ChatSession::send(
 	ChatMessage userMessage;
 	userMessage.role = ChatRole::User;
 	userMessage.content = message;
-	return complete({ userMessage }, {}, std::move(onChunk));
+	return complete({ userMessage }, {}, std::move(onChunk), std::move(shouldCancel));
 }
 
 ChatResult ChatSession::complete(
 	std::vector<ChatMessage> newMessages,
 	const std::vector<ToolDefinition> & tools,
-	ChatChunkCallback onChunk) {
+	ChatChunkCallback onChunk,
+	std::function<bool()> shouldCancel) {
 	const std::size_t checkpoint = messages.size();
 	messages.insert(messages.end(), newMessages.begin(), newMessages.end());
 	ChatRequest request;
@@ -61,7 +63,8 @@ ChatResult ChatSession::complete(
 	request.tools = tools;
 	request.options = options;
 
-	ChatResult result = endpoint.get().chat(request, std::move(onChunk));
+	ChatResult result = endpoint.get().chat(
+		request, std::move(onChunk), std::move(shouldCancel));
 	if (result) {
 		ChatMessage assistantMessage;
 		assistantMessage.role = ChatRole::Assistant;

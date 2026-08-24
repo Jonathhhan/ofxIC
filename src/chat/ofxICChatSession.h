@@ -26,7 +26,8 @@ public:
 
 	ChatResult send(
 		const std::string & message,
-		ChatChunkCallback onChunk = nullptr);
+		ChatChunkCallback onChunk = nullptr,
+		std::function<bool()> shouldCancel = nullptr);
 
 private:
 	friend class ToolLoop;
@@ -34,7 +35,8 @@ private:
 	ChatResult complete(
 		std::vector<ChatMessage> newMessages,
 		const std::vector<ToolDefinition> & tools,
-		ChatChunkCallback onChunk = nullptr);
+		ChatChunkCallback onChunk = nullptr,
+		std::function<bool()> shouldCancel = nullptr);
 
 	std::reference_wrapper<Endpoint> endpoint;
 	std::string systemPrompt;
