@@ -1,5 +1,6 @@
 #pragma once
 
+#include "ExampleSettings.h"
 #include "ofMain.h"
 #include "ofxIC.h"
 #include "ofxImGui.h"
@@ -26,6 +27,10 @@ public:
 private:
 	void applyConfiguration();
 	void applyMediaConfiguration();
+	void applySettingsToUi(const ofxICExample::ExampleSettings & settings);
+	ofxICExample::ExampleSettings settingsFromUi() const;
+	void saveExampleSettings();
+	void resetExampleSettings();
 	void selectEndpointProfile(int profileIndex);
 	void selectMediaBackend(int backendIndex);
 	void inspectEndpoint();
@@ -65,6 +70,8 @@ private:
 	bool configurationDirty = false;
 	bool mediaConfigurationDirty = false;
 	bool focusMessageInput = true;
+	std::string settingsPath;
+	std::string settingsStatus;
 	std::string lastMessage;
 	std::string output;
 	std::string status;
