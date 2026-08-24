@@ -1,8 +1,8 @@
 # Release Notes
 
-## 0.1.0 — candidate
+## 0.1.0 — 2026-08-24
 
-This is the first release candidate in the independent `ofxIC` repository. It
+This is the first release in the independent `ofxIC` repository. It
 starts with the reduced endpoint-first implementation tested on the historical
 `ofxGgml` V2 branch, without carrying that repository's history or claiming API
 compatibility with its earlier, broader runtime design.
@@ -36,11 +36,11 @@ The tensor, graph, embedded-runtime, generic model, embedding, segmentation,
 SAM, and multi-addon APIs from `v2.0.0-rewrite.0` are intentionally absent.
 Local `llama-server` and hosted providers use the same endpoint-facing API.
 
-### Candidate validation
+### Release validation
 
 Pushes to `main` and `v*` tags run deterministic tests and the openFrameworks nightly
 GUI smoke. Live provider inference remains separately gated so publishing a
-candidate cannot consume Hugging Face credit accidentally.
+release cannot consume Hugging Face credit accidentally.
 
 ### Deferred
 
