@@ -52,6 +52,7 @@ OFXIC_TEST(example_settings_round_trip_non_secret_values) {
 		std::istreambuf_iterator<char>());
 	OFXIC_REQUIRE(serialized.find("token") == std::string::npos);
 	OFXIC_REQUIRE(serialized.find("api_key") == std::string::npos);
+	input.close();
 	OFXIC_REQUIRE(ofxICExample::removeSettings(settingsPath));
 }
 
@@ -115,5 +116,6 @@ OFXIC_TEST(example_environment_overrides_saved_settings_predictably) {
 		(std::istreambuf_iterator<char>(input)),
 		std::istreambuf_iterator<char>());
 	OFXIC_REQUIRE(serialized.find("must-never-be-persisted") == std::string::npos);
+	input.close();
 	OFXIC_REQUIRE(ofxICExample::removeSettings(settingsPath));
 }
