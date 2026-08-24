@@ -217,6 +217,62 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
+      - name: Reject unsupported OpenAI video through GUI
+        timeout-minutes: 2
+        shell: bash
+        env:
+          LIBGL_ALWAYS_SOFTWARE: "1"
+          OFXIC_MEDIA_BACKEND: openai
+          OFXIC_MEDIA_ENDPOINT_URL: http://127.0.0.1:1
+          OFXIC_MEDIA_AUTORUN: video
+        run: |
+          set -euo pipefail
+          app="$OF_ROOT/apps/myApps/ofxICExample"
+          artifact_dir="$RUNNER_TEMP/openai-video-rejection"
+          result="$artifact_dir/result.txt"
+          log="$artifact_dir/ofxICExample.log"
+          mkdir -p "$artifact_dir"
+          export OFXIC_MEDIA_RESULT_PATH="$result"
+
+          xvfb-run \
+            --auto-servernum \
+            --server-args="-screen 0 1280x720x24 -nolisten tcp" \
+            bash -euo pipefail -c '
+              binary="$1"
+              log="$2"
+              result="$3"
+
+              "$binary" >"$log" 2>&1 &
+              app_pid=$!
+              cleanup() {
+                kill "$app_pid" 2>/dev/null || true
+                wait "$app_pid" 2>/dev/null || true
+              }
+              trap cleanup EXIT
+
+              for _ in $(seq 1 40); do
+                [[ -s "$result" ]] && break
+                kill -0 "$app_pid" 2>/dev/null || { cat "$log" >&2; exit 1; }
+                sleep 0.25
+              done
+              [[ -s "$result" ]] || { echo "Timed out waiting for media rejection" >&2; cat "$log" >&2; exit 1; }
+              grep -Fxq "OpenAI images does not support video in ofxIC" "$result"
+            ' bash \
+            "$app/bin/ofxICExample" \
+            "$log" \
+            "$result"
+
+          cat "$result"
+
+      - name: Upload OpenAI video rejection artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ofxICExample-openai-video-rejection
+          path: ${{ runner.temp }}/openai-video-rejection
+          if-no-files-found: error
+          retention-days: 14
+
       - name: Exercise deterministic native video through GUI
         timeout-minutes: 5
         shell: bash
