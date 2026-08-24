@@ -24,6 +24,8 @@ variables use the `OFXIC_` prefix.
 - explicitly loaded local documents and one allowlisted search tool;
 - a bounded tool loop that returns source identifiers;
 - one `ofxImGui` openFrameworks example with selectable endpoint profiles;
+- explicit media capability display that prevents unsupported backend/kind
+  combinations, including automation requests;
 - injectable-transport tests on Linux and Windows;
 - compilation and GUI launch against the current openFrameworks Linux nightly;
 - an explicitly triggered Hugging Face tool-path smoke test.
@@ -45,5 +47,6 @@ candidate cannot consume Hugging Face credit accidentally.
 - an embedded native runtime;
 - embedded Whisper, SAM, Stable Diffusion, music, and video runtimes;
 - Hugging Face media providers beyond the initial fal-ai adapter;
+- OpenAI video, whose current paid Sora API is deprecated;
 - generic agents or unrestricted tool execution;
 - automatic model downloads or provider selection.
