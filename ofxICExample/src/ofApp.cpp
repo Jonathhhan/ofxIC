@@ -8,6 +8,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
+#include <map>
 #include <utility>
 
 namespace {
@@ -64,34 +65,32 @@ std::string environmentValue(const char * name) {
 	return value && *value ? value : "";
 }
 
-std::string configuredEndpointUrl() {
-	const std::string value = environmentValue("OFXIC_ENDPOINT_URL");
-	return value.empty() ? "http://127.0.0.1:8080" : value;
-}
-
-int configuredMediaBackend() {
-	const std::string configured = environmentValue("OFXIC_MEDIA_BACKEND");
-	if (configured == "openai") return 0;
-	if (configured == "huggingface" || configured == "hf" || configured == "fal-ai") return 1;
-	if (configured == "stable-diffusion.cpp" || configured == "sdcpp") return 2;
-	const std::string chatUrl = configuredEndpointUrl();
-	if (chatUrl.find("huggingface.co") != std::string::npos) return 1;
-	if (chatUrl.find("api.openai.com") != std::string::npos) return 0;
-	return 2;
-}
-
-std::string configuredMediaEndpointUrl(int backend) {
-	const std::string configured = environmentValue("OFXIC_MEDIA_ENDPOINT_URL");
-	if (!configured.empty()) return configured;
-	if (backend >= 0 && backend < static_cast<int>(mediaBackends.size())) {
-		return mediaBackends[backend].url;
+std::map<std::string, std::string> settingsEnvironment() {
+	std::map<std::string, std::string> values;
+	constexpr std::array<const char *, 11> names{{
+		"OFXIC_ENDPOINT_URL",
+		"OFXIC_MODEL",
+		"OFXIC_MEDIA_BACKEND",
+		"OFXIC_MEDIA_ENDPOINT_URL",
+		"OFXIC_MEDIA_IMAGE_MODEL",
+		"OFXIC_MEDIA_VIDEO_MODEL",
+		"OFXIC_MEDIA_KIND",
+		"OFXIC_MEDIA_WIDTH",
+		"OFXIC_MEDIA_HEIGHT",
+		"OFXIC_MEDIA_FRAMES",
+		"OFXIC_MEDIA_FPS",
+	}};
+	for (const char * name : names) {
+		const std::string value = environmentValue(name);
+		if (!value.empty()) values.emplace(name, value);
 	}
-	return mediaBackends[2].url;
+	return values;
 }
 
-std::string configuredMediaModel(const char * environment, const char * fallback) {
-	const std::string configured = environmentValue(environment);
-	return configured.empty() ? fallback : configured;
+std::string configuredSettingsPath() {
+	const std::string configured = environmentValue("OFXIC_SETTINGS_PATH");
+	if (!configured.empty()) return configured;
+	return ofFilePath::join(ofFilePath::getUserHomeDir(), ".ofxICExample.settings");
 }
 
 std::string documentSourceName(const std::string & path) {
@@ -152,24 +151,6 @@ void setTextBuffer(std::array<char, Size> & destination, const std::string & val
 	destination[length] = '\0';
 }
 
-std::string normalizedProfileUrl(std::string url) {
-	while (!url.empty() && url.back() == '/') url.pop_back();
-	if (url.size() >= 3 && url.compare(url.size() - 3, 3, "/v1") == 0) {
-		url.erase(url.size() - 3);
-	}
-	return url;
-}
-
-int profileForUrl(const std::string & url) {
-	const std::string normalized = normalizedProfileUrl(url);
-	for (std::size_t index = 0; index + 1 < endpointProfiles.size(); ++index) {
-		if (normalizedProfileUrl(endpointProfiles[index].url) == normalized) {
-			return static_cast<int>(index);
-		}
-	}
-	return static_cast<int>(endpointProfiles.size() - 1);
-}
-
 void writeAutomationResult(const std::string & status, const std::string & output) {
 	const std::string path = environmentValue("OFXIC_GUI_RESULT_PATH");
 	if (path.empty()) return;
@@ -209,21 +190,25 @@ void writeDocumentAutomationResult(
 } // namespace
 
 ofApp::ofApp()
-	: endpoint(configuredEndpointUrl())
-	, mediaEndpoint(configuredMediaEndpointUrl(configuredMediaBackend()))
+	: endpoint("http://127.0.0.1:8080")
+	, mediaEndpoint("http://127.0.0.1:8080")
 	, chat(endpoint)
 	, media(mediaEndpoint)
 	, toolLoop(chat, tools) {
-	selectedProfile = profileForUrl(configuredEndpointUrl());
-	selectedMediaBackend = configuredMediaBackend();
-	setTextBuffer(endpointUrl, configuredEndpointUrl());
-	setTextBuffer(mediaEndpointUrl, configuredMediaEndpointUrl(selectedMediaBackend));
-	setTextBuffer(modelId, environmentValue("OFXIC_MODEL"));
-	setTextBuffer(mediaImageModel, configuredMediaModel(
-		"OFXIC_MEDIA_IMAGE_MODEL",
-		selectedMediaBackend == 0 ? "gpt-image-2" : "black-forest-labs/FLUX.1-dev"));
-	setTextBuffer(mediaVideoModel, configuredMediaModel(
-		"OFXIC_MEDIA_VIDEO_MODEL", "Wan-AI/Wan2.2-TI2V-5B"));
+	settingsPath = configuredSettingsPath();
+	ofxICExample::ExampleSettings settings;
+	const auto loadStatus = ofxICExample::loadSettings(settingsPath, settings);
+	if (loadStatus == ofxICExample::SettingsLoadStatus::Loaded) {
+		settingsStatus = "Loaded saved non-secret settings.";
+	} else if (loadStatus == ofxICExample::SettingsLoadStatus::Invalid) {
+		settingsStatus = "Ignored corrupt settings; using safe defaults.";
+	} else {
+		settingsStatus = "Using built-in defaults; no saved settings yet.";
+	}
+	ofxICExample::applyEnvironmentOverrides(settings, settingsEnvironment());
+	applySettingsToUi(settings);
+	endpoint.setBaseUrl(endpointUrl.data());
+	mediaEndpoint.setBaseUrl(mediaEndpointUrl.data());
 	endpoint.setBearerToken(configuredToken());
 	mediaEndpoint.setBearerToken(configuredMediaToken());
 }
@@ -338,10 +323,12 @@ void ofApp::draw() {
 	bool loadDocumentRequested = false;
 	bool generateMediaRequested = false;
 	bool pollMediaRequested = false;
+	bool saveSettingsRequested = false;
+	bool resetSettingsRequested = false;
 
 	gui.begin();
 	ImGui::SetNextWindowPos(ImVec2(16, 16), ImGuiCond_FirstUseEver);
-	ImGui::SetNextWindowSize(ImVec2(1168, 190), ImGuiCond_FirstUseEver);
+	ImGui::SetNextWindowSize(ImVec2(1168, 220), ImGuiCond_FirstUseEver);
 	ImGui::Begin("Connection");
 	ImGui::BeginDisabled(busy || mediaBusy);
 	if (ImGui::BeginCombo("Endpoint", endpointProfiles[selectedProfile].name)) {
@@ -377,6 +364,10 @@ void ofApp::draw() {
 	applyRequested = ImGui::Button(configurationDirty ? "Apply *" : "Apply");
 	ImGui::SameLine();
 	inspectRequested = ImGui::Button("Inspect / models");
+	ImGui::SameLine();
+	saveSettingsRequested = ImGui::Button("Save settings");
+	ImGui::SameLine();
+	resetSettingsRequested = ImGui::Button("Reset saved settings");
 	ImGui::EndDisabled();
 	ImGui::SameLine();
 	const std::string token = configuredToken();
@@ -387,9 +378,10 @@ void ofApp::draw() {
 		ImGui::Text("Token: loaded from %s", tokenSource.c_str());
 	}
 	ImGui::TextWrapped("%s", status.c_str());
+	ImGui::TextDisabled("%s Tokens are never stored.", settingsStatus.c_str());
 	ImGui::End();
 
-	ImGui::SetNextWindowPos(ImVec2(16, 218), ImGuiCond_FirstUseEver);
+	ImGui::SetNextWindowPos(ImVec2(16, 248), ImGuiCond_FirstUseEver);
 	ImGui::SetNextWindowSize(ImVec2(568, 426), ImGuiCond_FirstUseEver);
 	ImGui::Begin("Document tool chat");
 	loadDocumentRequested = ImGui::Button("Load .md / .txt");
@@ -432,7 +424,7 @@ void ofApp::draw() {
 	ImGui::EndChild();
 	ImGui::End();
 
-	ImGui::SetNextWindowPos(ImVec2(600, 218), ImGuiCond_FirstUseEver);
+	ImGui::SetNextWindowPos(ImVec2(600, 248), ImGuiCond_FirstUseEver);
 	ImGui::SetNextWindowSize(ImVec2(584, 426), ImGuiCond_FirstUseEver);
 	ImGui::Begin("Image and video");
 	const char * backendNames[] = { "OpenAI images", "Hugging Face / fal-ai", "stable-diffusion.cpp" };
@@ -521,6 +513,8 @@ void ofApp::draw() {
 		if (selection.bSuccess) loadDocument(selection.getPath());
 	}
 	if (applyRequested) applyConfiguration();
+	if (saveSettingsRequested) saveExampleSettings();
+	if (resetSettingsRequested) resetExampleSettings();
 	if (inspectRequested) {
 		if (configurationDirty) applyConfiguration();
 		inspectEndpoint();
@@ -609,6 +603,67 @@ bool ofApp::loadDocument(const std::string & path) {
 	documentStatus = "Loaded " + source;
 	writeDocumentAutomationResult(documentStatus, loadedDocumentSources);
 	return true;
+}
+
+void ofApp::applySettingsToUi(const ofxICExample::ExampleSettings & settings) {
+	selectedProfile = settings.endpointProfile;
+	selectedMediaBackend = settings.mediaBackend;
+	selectedMediaKind = supportsMediaKind(settings.mediaBackend, settings.mediaKind)
+		? settings.mediaKind
+		: 0;
+	setTextBuffer(endpointUrl, settings.endpointUrl);
+	setTextBuffer(modelId, settings.modelId);
+	setTextBuffer(mediaEndpointUrl, settings.mediaEndpointUrl);
+	setTextBuffer(mediaImageModel, settings.mediaImageModel);
+	setTextBuffer(mediaVideoModel, settings.mediaVideoModel);
+	mediaWidth = settings.mediaWidth;
+	mediaHeight = settings.mediaHeight;
+	mediaFrames = settings.mediaFrames;
+	mediaFps = settings.mediaFps;
+	configurationDirty = false;
+	mediaConfigurationDirty = false;
+}
+
+ofxICExample::ExampleSettings ofApp::settingsFromUi() const {
+	ofxICExample::ExampleSettings settings;
+	settings.endpointProfile = selectedProfile;
+	settings.endpointUrl = endpointUrl.data();
+	settings.modelId = modelId.data();
+	settings.mediaBackend = selectedMediaBackend;
+	settings.mediaKind = selectedMediaKind;
+	settings.mediaEndpointUrl = mediaEndpointUrl.data();
+	settings.mediaImageModel = mediaImageModel.data();
+	settings.mediaVideoModel = mediaVideoModel.data();
+	settings.mediaWidth = mediaWidth;
+	settings.mediaHeight = mediaHeight;
+	settings.mediaFrames = mediaFrames;
+	settings.mediaFps = mediaFps;
+	return settings;
+}
+
+void ofApp::saveExampleSettings() {
+	if (ofxICExample::saveSettings(settingsPath, settingsFromUi())) {
+		settingsStatus = "Saved non-secret settings in the user profile.";
+	} else {
+		settingsStatus = "Could not save settings; check values and file access.";
+	}
+}
+
+void ofApp::resetExampleSettings() {
+	const bool removed = ofxICExample::removeSettings(settingsPath);
+	if (!removed) {
+		settingsStatus = "Could not remove the saved settings file.";
+		return;
+	}
+	ofxICExample::ExampleSettings settings;
+	const auto environment = settingsEnvironment();
+	ofxICExample::applyEnvironmentOverrides(settings, environment);
+	applySettingsToUi(settings);
+	applyConfiguration();
+	applyMediaConfiguration();
+	settingsStatus = environment.empty()
+		? "Restored built-in defaults and removed saved settings."
+		: "Removed saved settings; environment overrides remain active.";
 }
 
 void ofApp::applyConfiguration() {

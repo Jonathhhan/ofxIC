@@ -10,6 +10,7 @@ add_executable(ofxIC_tests
 	test_media_client.cpp
 	test_chat_session.cpp
 	test_document_index.cpp
+	test_example_settings.cpp
 	test_tool_loop.cpp
 	test_public_headers.cpp
 	../src/endpoint/ofxICEndpoint.cpp
@@ -17,6 +18,7 @@ add_executable(ofxIC_tests
 	../src/media/ofxICMediaClientHuggingFaceFal.cpp
 	../src/chat/ofxICChatSession.cpp
 	../src/documents/ofxICDocumentIndex.cpp
+	../ofxICExample/src/ExampleSettings.cpp
 	../src/tools/ofxICToolRegistry.cpp
 	../src/tools/ofxICToolLoop.cpp)
 

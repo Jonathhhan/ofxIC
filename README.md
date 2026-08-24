@@ -182,6 +182,10 @@ cannot be used as an `ofxIC` endpoint.
 
 - Choose an endpoint preset or enter a custom base URL.
 - Inspect `/v1/models` and select or enter the model ID.
+- Use **Save settings** to remember non-secret chat and media choices in
+  `.ofxICExample.settings` in the user profile. **Reset saved settings** removes
+  that file and restores built-in defaults; active environment overrides remain
+  authoritative.
 - Load deliberately selected `.md` or `.txt` files with the GUI button or by
   dropping them on the window. The example sends only their file names as
   source identifiers, not their full local paths.
@@ -196,6 +200,9 @@ cannot be used as an `ofxIC` endpoint.
 - `OFXIC_MEDIA_BACKEND`, `OFXIC_MEDIA_ENDPOINT_URL`,
   `OFXIC_MEDIA_IMAGE_MODEL`, `OFXIC_MEDIA_VIDEO_MODEL`, and
   `OFXIC_MEDIA_API_KEY` configure media independently from chat.
+- `OFXIC_MEDIA_KIND`, `OFXIC_MEDIA_WIDTH`, `OFXIC_MEDIA_HEIGHT`,
+  `OFXIC_MEDIA_FRAMES`, and `OFXIC_MEDIA_FPS` override saved media values for
+  scripts and CI. `OFXIC_SETTINGS_PATH` selects a different settings file.
 - `F1` and `F2` remain shortcuts for inspect and clear.
 
 ### Testing without a local GPU
