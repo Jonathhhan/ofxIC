@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+No changes yet.
+
+## 0.2.0-rc.2 — 2026-08-25
+
 ### Fixed
 
 - the regular example now selects the OpenAI audio endpoint on first startup
