@@ -103,6 +103,7 @@ private:
 	std::string segmentationStatus = "No segmentation image loaded.";
 	float segmentationPointX = 0.5f;
 	float segmentationPointY = 0.5f;
+	std::vector<ofxIC::SegmentationPoint> segmentationPoints;
 	std::thread worker;
 	std::mutex resultMutex;
 	std::string pendingOutput;

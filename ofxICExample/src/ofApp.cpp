@@ -654,15 +654,31 @@ void ofApp::draw() {
 			fitMediaPreview(generatedVideo.getWidth(), generatedVideo.getHeight()));
 	}
 	ImGui::SeparatorText("SAM bridge v1");
-	ImGui::TextDisabled("External endpoint: PPM + normalized point -> PGM mask");
+	ImGui::TextDisabled("External endpoint: PPM + normalized points -> PGM mask");
 	ImGui::BeginDisabled(busy || mediaBusy);
 	loadSegmentationImageRequested = ImGui::Button("Load segmentation image");
 	ImGui::SameLine();
 	ImGui::BeginDisabled(segmentationImageBytes.empty());
-	segmentImageRequested = ImGui::Button("Segment point");
+	segmentImageRequested = ImGui::Button("Segment prompts");
 	ImGui::EndDisabled();
 	ImGui::SliderFloat("Point X", &segmentationPointX, 0.0f, 1.0f);
 	ImGui::SliderFloat("Point Y", &segmentationPointY, 0.0f, 1.0f);
+	if (ImGui::Button("Add positive")) {
+		segmentationPoints.push_back({ segmentationPointX, segmentationPointY, true });
+	}
+	ImGui::SameLine();
+	if (ImGui::Button("Add negative")) {
+		segmentationPoints.push_back({ segmentationPointX, segmentationPointY, false });
+	}
+	ImGui::SameLine();
+	ImGui::BeginDisabled(segmentationPoints.empty());
+	if (ImGui::Button("Clear prompts")) segmentationPoints.clear();
+	ImGui::EndDisabled();
+	ImGui::Text("Queued prompts: %d", static_cast<int>(segmentationPoints.size()));
+	for (size_t i = 0; i < segmentationPoints.size(); ++i) {
+		const auto & point = segmentationPoints[i];
+		ImGui::BulletText("%s  x %.3f  y %.3f", point.positive ? "+" : "-", point.x, point.y);
+	}
 	ImGui::EndDisabled();
 	ImGui::TextWrapped("%s", segmentationStatus.c_str());
 	if (segmentationMaskImage.isAllocated()) {
@@ -1011,6 +1027,7 @@ bool ofApp::loadSegmentationImage(const std::string & path) {
 	}
 	segmentationImage = std::move(loaded);
 	segmentationMaskImage.clear();
+	segmentationPoints.clear();
 	segmentationImageBytes = std::move(ppm);
 	segmentationFilename = ofFilePath::getBaseName(path) + ".ppm";
 	segmentationStatus = "Loaded " + ofFilePath::getFileName(path) + ".";
@@ -1026,7 +1043,10 @@ void ofApp::segmentImage() {
 	ofxIC::SegmentationRequest request;
 	request.imageBytes = segmentationImageBytes;
 	request.filename = segmentationFilename;
-	request.points.push_back({ segmentationPointX, segmentationPointY, true });
+	request.points = segmentationPoints;
+	if (request.points.empty()) {
+		request.points.push_back({ segmentationPointX, segmentationPointY, true });
+	}
 	const auto currentModels = availableModels;
 	worker = std::thread([this, request = std::move(request), currentModels]() {
 		const auto result = segmentation.segmentSamBridge(
