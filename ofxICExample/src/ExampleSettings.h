@@ -22,6 +22,10 @@ struct ExampleSettings {
 	int mediaHeight = 512;
 	int mediaFrames = 33;
 	int mediaFps = 16;
+	int musicBackend = 0;
+	std::string musicEndpointUrl = "http://127.0.0.1:8085";
+	int musicDuration = 30;
+	int musicOutputFormat = 0;
 };
 
 enum class SettingsLoadStatus {
@@ -36,6 +40,8 @@ bool removeSettings(const std::string & path);
 
 const char * defaultTranscriptionEndpointUrl(int protocol);
 void alignTranscriptionEndpointDefault(ExampleSettings & settings);
+const char * defaultMusicEndpointUrl(int backend);
+void alignMusicEndpointDefault(ExampleSettings & settings);
 
 void applyEnvironmentOverrides(
 	ExampleSettings & settings,

@@ -6,8 +6,9 @@ one allowlisted document tool, explicit OpenAI and `whisper.cpp` transcription
 protocols, explicit SAM bridge point segmentation, OpenAI-compatible image
 generation, and native asynchronous image/video jobs exposed by
 `stable-diffusion.cpp`. A separate Hugging Face
-media path routes text-to-image and text-to-video through fal-ai. Inference
-always remains in a separate local or hosted process.
+media path routes text-to-image and text-to-video through fal-ai. Dedicated
+music clients connect either to a local ACE-Step server or to hosted Stability
+Audio 3 jobs. Inference always remains in a separate local or hosted process.
 
 The addon does **not** embed ggml, llama.cpp, CUDA, SAM, or another native model
 runtime. Run `llama-server` separately and update it independently.
@@ -82,6 +83,34 @@ search.
 
 `search_documents` receives only a query. It cannot choose a file path or run
 an arbitrary function; it searches only text the application loaded first.
+The index accepts at most 128 documents, 16,384 chunks, and 8 MiB per document;
+rejected additions do not partially change the index. Tool results label source
+text as untrusted evidence. This supports safer prompting but does not turn
+arbitrary web content into trusted instructions.
+
+### Controlled web snapshots
+
+Web ingestion stays outside the addon and outside the model tool loop. The
+bundled utility fetches one URL selected by the user and writes a provenance-
+bearing `.txt` or `.md` snapshot that can be loaded through the regular example:
+
+```powershell
+python scripts\web_snapshot.py https://example.com/ `
+  --output "$env:TEMP\ofxic-article.txt"
+```
+
+Then choose **Load .md / .txt** in `ofxICExample`, or set
+`OFXIC_DOCUMENT_PATH` to that output file before launch. The snapshot records
+the final URL, retrieval time, title when present, and a SHA-256 hash of the
+cleaned text.
+
+This utility is intentionally not a crawler: it does not follow page links,
+execute JavaScript, use authenticated browser state, or run as a model-selected
+tool. It revalidates redirect destinations, rejects hosts resolving to private
+or otherwise non-public addresses, accepts only HTML and plain text, limits the
+download to 4 MiB, and defaults to a 15-second timeout. Dynamic sites that need
+a browser renderer should be exported by a separate user-controlled process
+and loaded as a local `.txt` or `.md` file.
 
 Inspect the endpoint and advertised model identity before use:
 
@@ -149,6 +178,50 @@ The client resolves the HF model's current fal-ai mapping, keeps the HF token
 on router requests, and downloads the returned media bytes without forwarding
 that token to the output CDN.
 
+Music generation is intentionally provider-specific rather than another value
+in `MediaKind`. The local path targets the ACE-Step server contract already used
+by `ofxGgmlMusic`; the model runtime stays in that separate process:
+
+```cpp
+ofxIC::Endpoint aceStep("http://127.0.0.1:8085");
+ofxIC::AceStepMusicClient music(aceStep);
+
+ofxIC::AceStepMusicRequest request;
+request.caption = "Warm modular synthesizer, instrumental, no vocals";
+request.durationSeconds = 30;
+request.outputFormat = "wav";
+
+auto job = music.submit(request);
+// Direct servers may complete immediately; async servers use /job polling.
+if (!job.terminal()) job = music.poll(job);
+```
+
+The client drives `/lm`, `/synth`, and optional asynchronous `/job` responses,
+bounds JSON/audio responses, validates job IDs, and verifies the returned WAV
+or MP3 container. It never sends a configured bearer token to this local route.
+
+Stability Audio 3 has its own asynchronous API and credential:
+
+```cpp
+ofxIC::Endpoint stability("https://api.stability.ai");
+stability.setBearerToken(stabilityApiKey);
+ofxIC::StabilityAudioClient music(stability);
+
+ofxIC::StabilityAudioRequest request;
+request.prompt = "Warm modular synthesizer, instrumental, no vocals";
+request.durationSeconds = 30;
+request.outputFormat = "mp3";
+
+auto job = music.submit(request);
+// Poll later. A completed job carries validated MP3 or WAV bytes.
+job = music.poll(job);
+```
+
+The client accepts only `stable-audio-3`, validates the provider's documented
+duration and generation controls, bounds downloads, and checks the requested
+audio container before reporting completion. This is an external paid provider
+operation; deterministic tests do not spend credits.
+
 Audio transcription is also an external endpoint operation. Select the OpenAI
 protocol for `/v1/audio/transcriptions`, or point the custom endpoint at a
 separately running `whisper.cpp` server and select its `/inference` protocol:
@@ -203,10 +276,13 @@ Implemented:
 - explicit `/v1/segmentations` SAM bridge v1 point segmentation
 - native `stable-diffusion.cpp` image/video submission and job polling
 - Hugging Face text-to-image and queued text-to-video through fal-ai routing
+- local ACE-Step `/lm`, `/synth`, and `/job` text-to-music generation
+- Stability Audio 3 text-to-music submission, polling, and MP3/WAV download
 - conversational history
 - optional streaming transport when openFrameworks exposes curl
 - injected HTTP transport for deterministic tests
 - local document index
+- controlled one-URL web-to-text snapshot ingestion outside the addon
 - one allowlisted `search_documents` tool
 - bounded tool loop with source citations
 
@@ -219,6 +295,8 @@ Proven end to end:
   `ggml-tiny.en` and the `jfk.wav` speech sample
 - local SAM2.1 point segmentation through the regular Windows GUI, explicit
   localhost bridge, and independently built `ofxGgmlSam` runner
+- marker-gated local ACE-Step music generation through the ofxIC client,
+  including asynchronous jobs and multipart WAV extraction
 - a marker-gated Hugging Face run with two model requests, local
   `search_documents` execution, and a cited final answer
 
@@ -241,17 +319,25 @@ Not part of the supported surface yet:
 `ofxICExample` uses `ofxImGui` to switch between `llama-server`,
 LM Studio, Hugging Face, OpenAI, and a custom endpoint. The same GUI also
 selects an independent media backend, generates images, submits native or
-Hugging Face video jobs, polls them, displays returned media, and sends an
+  Hugging Face video jobs, polls them, displays returned media, submits local
+  ACE-Step or hosted Stability Audio 3 music jobs, saves and plays completed
+  MP3/WAV output with date-and-time filenames, and sends an
 explicitly selected audio file to either supported transcription protocol.
-Chat, transcription, SAM, and media have separate endpoint URL fields so their
-external processes can remain available at the same time; **Use chat URL** is a
-deliberate convenience action rather than an implicit protocol assumption.
+Chat, transcription, SAM, image/video media, and music have separate endpoint
+URL fields so their external processes can remain available at the same time;
+**Use chat URL** is a deliberate convenience action rather than an implicit
+protocol assumption.
 
 | Media backend | Image | Video | Behavior |
 | --- | --- | --- | --- |
 | OpenAI | Yes | No | `/v1/images/generations`; video is intentionally not offered |
 | Hugging Face / fal-ai | Yes | Yes | Hosted task routes; provider credit may be required |
 | `stable-diffusion.cpp` | Yes | Yes | External asynchronous image/video jobs |
+
+| Music backend | Local | Behavior |
+| --- | --- | --- |
+| ACE-Step | Yes | External server on `http://127.0.0.1:8085`; `/lm`, `/synth`, optional `/job` |
+| Stability Audio 3 | No | Hosted asynchronous provider API; token and credit required |
 
 The GUI shows these capabilities and does not allow unsupported combinations.
 An OpenAI video adapter is deliberately absent: it would require paid API
@@ -261,10 +347,20 @@ cannot be used as an `ofxIC` endpoint.
 
 - Choose an endpoint preset or enter a custom base URL.
 - Inspect `/v1/models` and select or enter the model ID.
-- Use **Save settings** to remember non-secret chat and media choices in
+- Use **Save settings** to remember non-secret chat, media, and music choices in
   `.ofxICExample.settings` in the user profile. **Reset saved settings** removes
   that file and restores built-in defaults; active environment overrides remain
   authoritative.
+- Start the separate ACE-Step server (the `ofxGgmlMusic` default is
+  `http://127.0.0.1:8085`), then select **ACE-Step local**. For a headless,
+  explicitly opt-in model-backed check, set `OFXIC_RUN_LIVE_ACESTEP=1` and run
+  `scripts/smoke-acestep-live.ps1`; generated audio remains under the ignored
+  `tests/build/live` directory.
+- `scripts/smoke-music.ps1` drives the regular GUI through an asynchronous
+  deterministic ACE-Step fixture and verifies the generated
+  `ofxIC-music-YYYYMMDD-HHMMSS-mmm.wav` name. Add `-Live` with the same
+  `OFXIC_RUN_LIVE_ACESTEP=1` marker to exercise the regular GUI against the
+  real local server. The script removes its generated audio after validation.
 - Load deliberately selected `.md` or `.txt` files with the GUI button or by
   dropping them on the window. The example sends only their file names as
   source identifiers, not their full local paths.
@@ -316,6 +412,10 @@ cannot be used as an `ofxIC` endpoint.
 - `OFXIC_MEDIA_KIND`, `OFXIC_MEDIA_WIDTH`, `OFXIC_MEDIA_HEIGHT`,
   `OFXIC_MEDIA_FRAMES`, and `OFXIC_MEDIA_FPS` override saved media values for
   scripts and CI. `OFXIC_SETTINGS_PATH` selects a different settings file.
+- `OFXIC_MUSIC_ENDPOINT_URL`, `OFXIC_MUSIC_DURATION`, and
+  `OFXIC_MUSIC_OUTPUT_FORMAT=mp3|wav` override saved Stability Audio choices.
+  `OFXIC_MUSIC_API_KEY` overrides `STABILITY_API_KEY`; both remain outside the
+  settings file and the Windows example can store `STABILITY_API_KEY` securely.
 - `F1` and `F2` remain shortcuts for inspect and clear.
 
 ### Testing without a local GPU

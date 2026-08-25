@@ -853,6 +853,27 @@ std::string Endpoint::extractChatText(const std::string & responseBody) {
 	return extractChatTextValue(responseBody);
 }
 
+std::string Endpoint::extractErrorText(const std::string & responseBody) {
+	const auto bounded = [](std::string value) {
+		for (char & character : value) {
+			const unsigned char byte = static_cast<unsigned char>(character);
+			if (byte < 0x20U || byte == 0x7fU) character = ' ';
+		}
+		value = trimCopy(value);
+		return value.size() <= 512 ? value : value.substr(0, 512) + "...";
+	};
+	for (const char * key : { "message", "error", "detail" }) {
+		const std::string value = bounded(extractJsonStringField(responseBody, key));
+		if (!value.empty()) return value;
+	}
+
+	std::string value = trimCopy(responseBody);
+	if (value.empty() || value.front() == '{' || value.front() == '[' || value.front() == '<') {
+		return {};
+	}
+	return bounded(std::move(value));
+}
+
 std::vector<ToolCall> Endpoint::extractToolCalls(const std::string & responseBody) {
 	std::vector<ToolCall> calls;
 	const std::size_t keyPosition = responseBody.find("\"tool_calls\"");
@@ -915,6 +936,11 @@ HttpResponse Endpoint::runHttpRequest(const HttpRequest & request) {
 		result.error = "request URL is empty";
 		return result;
 	}
+#if defined(_WIN32) && !defined(OFXIC_HAS_OF_HTTP_RUNTIME)
+	if (!request.stream) return runWinHttpRequest(request);
+	result.error = "streaming requests require the openFrameworks curl runtime";
+	return result;
+#endif
 #if defined(OFXIC_HAS_OF_HTTP_RUNTIME)
 #if defined(_WIN32)
 	if (!request.stream && request.url.compare(0, 8, "https://") == 0) {

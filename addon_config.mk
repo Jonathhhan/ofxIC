@@ -13,6 +13,8 @@ common:
 	ADDON_SOURCES += src/chat/ofxICChatSession.cpp
 	ADDON_SOURCES += src/media/ofxICMediaClient.cpp
 	ADDON_SOURCES += src/media/ofxICMediaClientHuggingFaceFal.cpp
+	ADDON_SOURCES += src/music/ofxICAceStepMusicClient.cpp
+	ADDON_SOURCES += src/music/ofxICStabilityAudioClient.cpp
 	ADDON_SOURCES += src/documents/ofxICDocumentIndex.cpp
 	ADDON_SOURCES += src/tools/ofxICToolRegistry.cpp
 	ADDON_SOURCES += src/tools/ofxICToolLoop.cpp

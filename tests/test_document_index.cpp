@@ -49,3 +49,36 @@ OFXIC_TEST(document_index_loads_a_file_with_an_explicit_source_identifier) {
 	OFXIC_REQUIRE(hits[0].citation == "[fixture.txt#chunk-1]");
 	std::remove(path.c_str());
 }
+
+OFXIC_TEST(document_index_rejects_oversized_inputs_without_partial_changes) {
+	ofxIC::DocumentIndex index;
+	OFXIC_REQUIRE(index.addText("small.txt", "already indexed"));
+	const std::size_t documentsBefore = index.documentCount();
+	const std::size_t chunksBefore = index.chunkCount();
+
+	OFXIC_REQUIRE(!index.addText(
+		std::string(ofxIC::DocumentIndex::maximumSourceBytes + 1, 's'), "text"));
+	OFXIC_REQUIRE(!index.addText(
+		"oversized.txt",
+		std::string(ofxIC::DocumentIndex::maximumDocumentBytes + 1, 'x')));
+	OFXIC_REQUIRE(index.documentCount() == documentsBefore);
+	OFXIC_REQUIRE(index.chunkCount() == chunksBefore);
+}
+
+OFXIC_TEST(document_index_bounds_document_and_total_chunk_counts_atomically) {
+	ofxIC::DocumentIndex documents;
+	for (std::size_t i = 0; i < ofxIC::DocumentIndex::maximumDocuments; ++i) {
+		OFXIC_REQUIRE(documents.addText("source-" + std::to_string(i), "bounded text"));
+	}
+	OFXIC_REQUIRE(!documents.addText("one-too-many", "bounded text"));
+	OFXIC_REQUIRE(documents.documentCount() == ofxIC::DocumentIndex::maximumDocuments);
+	OFXIC_REQUIRE(documents.chunkCount() == ofxIC::DocumentIndex::maximumDocuments);
+
+	ofxIC::DocumentIndex chunks;
+	const std::string maximumText(ofxIC::DocumentIndex::maximumDocumentBytes, 'x');
+	OFXIC_REQUIRE(chunks.addText("first-large.txt", maximumText));
+	const std::size_t chunksBefore = chunks.chunkCount();
+	OFXIC_REQUIRE(!chunks.addText("second-large.txt", maximumText));
+	OFXIC_REQUIRE(chunks.documentCount() == 1);
+	OFXIC_REQUIRE(chunks.chunkCount() == chunksBefore);
+}

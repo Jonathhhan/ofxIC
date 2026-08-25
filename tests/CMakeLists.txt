@@ -8,6 +8,8 @@ add_executable(ofxIC_tests
 	test_main.cpp
 	test_endpoint.cpp
 	test_media_client.cpp
+	test_acestep_music_client.cpp
+	test_stability_audio_client.cpp
 	test_transcription_client.cpp
 	test_segmentation_client.cpp
 	test_chat_session.cpp
@@ -19,6 +21,8 @@ add_executable(ofxIC_tests
 	../src/endpoint/ofxICEndpoint.cpp
 	../src/media/ofxICMediaClient.cpp
 	../src/media/ofxICMediaClientHuggingFaceFal.cpp
+	../src/music/ofxICAceStepMusicClient.cpp
+	../src/music/ofxICStabilityAudioClient.cpp
 	../src/audio/ofxICTranscriptionClient.cpp
 	../src/segmentation/ofxICSegmentationClient.cpp
 	../src/chat/ofxICChatSession.cpp
@@ -28,17 +32,34 @@ add_executable(ofxIC_tests
 	../src/tools/ofxICToolRegistry.cpp
 	../src/tools/ofxICToolLoop.cpp)
 
+add_executable(ofxIC_acestep_live_smoke
+	live_acestep_smoke.cpp
+	../src/endpoint/ofxICEndpoint.cpp
+	../src/music/ofxICAceStepMusicClient.cpp)
+
 target_include_directories(ofxIC_tests PRIVATE
 	${CMAKE_CURRENT_SOURCE_DIR}
 	${CMAKE_CURRENT_SOURCE_DIR}/../src)
 
+target_include_directories(ofxIC_acestep_live_smoke PRIVATE
+	${CMAKE_CURRENT_SOURCE_DIR}/../src)
+
 if(WIN32)
 	target_link_libraries(ofxIC_tests PRIVATE Advapi32 Winhttp)
+	target_link_libraries(ofxIC_acestep_live_smoke PRIVATE Winhttp)
 endif()
 
 if(MSVC)
 	target_compile_options(ofxIC_tests PRIVATE /EHsc)
+	target_compile_options(ofxIC_acestep_live_smoke PRIVATE /EHsc)
 endif()
 
 enable_testing()
 add_test(NAME ofxIC_tests COMMAND ofxIC_tests)
+
+find_package(Python3 COMPONENTS Interpreter QUIET)
+if(Python3_Interpreter_FOUND)
+	add_test(
+		NAME ofxIC_web_snapshot_tests
+		COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_web_snapshot.py)
+endif()

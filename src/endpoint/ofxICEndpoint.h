@@ -13,6 +13,8 @@ namespace ofxIC {
 class MediaClient;
 class TranscriptionClient;
 class SegmentationClient;
+class StabilityAudioClient;
+class AceStepMusicClient;
 
 enum class HttpMethod {
 	Get,
@@ -80,6 +82,7 @@ private:
 	static std::string normalizeBaseUrl(const std::string & baseUrl);
 	static std::string buildChatBody(const ChatRequest & request);
 	static std::string extractChatText(const std::string & responseBody);
+	static std::string extractErrorText(const std::string & responseBody);
 	static std::vector<ToolCall> extractToolCalls(const std::string & responseBody);
 	static std::vector<std::string> extractModelIds(const std::string & responseBody);
 	static HttpResponse runHttpRequest(const HttpRequest & request);
@@ -91,6 +94,8 @@ private:
 	friend class MediaClient;
 	friend class TranscriptionClient;
 	friend class SegmentationClient;
+	friend class StabilityAudioClient;
+	friend class AceStepMusicClient;
 };
 
 } // namespace ofxIC

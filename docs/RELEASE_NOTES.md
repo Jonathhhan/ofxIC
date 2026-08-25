@@ -2,7 +2,49 @@
 
 ## Unreleased
 
-No changes yet.
+### Added
+
+- a user-invoked, one-URL web snapshot utility that produces `.txt` or `.md`
+  documents with final-URL, retrieval-time, title, and SHA-256 provenance;
+- deterministic tests for public-address validation, bounded reads, HTML text
+  extraction, provenance formatting, and safe output replacement behavior;
+- a provider-specific Stability Audio 3 client for asynchronous text-to-music
+  submission, polling, and bounded MP3/WAV retrieval;
+- a separate local ACE-Step music client for `/lm`, `/synth`, and optional
+  asynchronous `/job` responses, with bounded payloads and MP3/WAV validation;
+- regular-example music controls with a separate endpoint, non-secret saved
+  backend selection, ACE-Step localhost defaults, migration of older Stability
+  settings, optional Windows Credential Manager storage for `STABILITY_API_KEY`,
+  and saving/playback of completed audio with date-and-time filenames;
+- marker-driven regular-example music automation with automatic asynchronous
+  job polling, machine-readable completion evidence, and a deterministic GUI
+  fixture that verifies the timestamped output path;
+- injected-transport tests for the Stability multipart contract, validation,
+  job lifecycle, provider errors, and binary audio signatures.
+
+### Hardened
+
+- `DocumentIndex` now atomically enforces an 8 MiB per-document limit, 2,048-byte
+  source identifiers, 128 documents, and 16,384 total chunks;
+- chunk-boundary lookup is limited to the active chunk window, avoiding
+  quadratic processing of large documents without whitespace;
+- document tool results explicitly label source content as untrusted evidence,
+  and the regular example instructs the model not to execute source text.
+
+### Fixed
+
+- transcription failures now preserve the HTTP status while showing a bounded,
+  single-line provider or decoder error detail instead of hiding the response
+  behind a generic status such as `transcription endpoint returned HTTP 500`.
+
+The snapshot utility remains outside the addon and model tool loop. It is not a
+crawler, JavaScript renderer, authenticated browser, or live web-search agent.
+Music tests prove both provider protocols with injected transports without
+contacting the paid provider. The marker-gated local ACE-Step smoke additionally
+generated and validated an 844,844-byte WAV through the actual ofxIC client.
+The regular GUI path also completed a real local ACE-Step run, automatically
+polled both phases, and verified its timestamped WAV path; that model-backed
+evidence remains distinct from the deterministic fixture suite.
 
 ## 0.2.0-rc.2 — 2026-08-25
 

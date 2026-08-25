@@ -16,6 +16,8 @@ obj/
 *.ilk
 *.lib
 *.pdb
+__pycache__/
+*.pyc
 
 *.gguf
 *.safetensors

@@ -60,6 +60,23 @@ OFXIC_TEST(transcription_client_rejects_empty_audio_before_transport) {
 	OFXIC_REQUIRE(calls == 0);
 }
 
+OFXIC_TEST(transcription_client_rejects_openai_audio_above_25_mb_before_transport) {
+	int calls = 0;
+	ofxIC::Endpoint endpoint("https://api.openai.com/v1", [&](const ofxIC::HttpRequest &) {
+		++calls;
+		return ofxIC::HttpResponse{};
+	});
+	ofxIC::TranscriptionClient client(endpoint);
+	ofxIC::TranscriptionRequest request;
+	request.audioBytes.resize(25U * 1024U * 1024U + 1U, 'a');
+
+	const auto result = client.transcribeOpenAI(request);
+	OFXIC_REQUIRE(!result);
+	OFXIC_REQUIRE(calls == 0);
+	OFXIC_REQUIRE(result.error.find("limited to 25 MB") != std::string::npos);
+	OFXIC_REQUIRE(result.error.find("26214401 bytes") != std::string::npos);
+}
+
 OFXIC_TEST(transcription_client_reports_cancellation_separately) {
 	ofxIC::Endpoint endpoint("http://127.0.0.1:8080", [](const ofxIC::HttpRequest & request) {
 		ofxIC::HttpResponse response;
@@ -76,4 +93,24 @@ OFXIC_TEST(transcription_client_reports_cancellation_separately) {
 	OFXIC_REQUIRE(!result);
 	OFXIC_REQUIRE(result.cancelled);
 	OFXIC_REQUIRE(result.error == "request cancelled");
+}
+
+OFXIC_TEST(transcription_client_reports_bounded_endpoint_error_details) {
+	ofxIC::Endpoint endpoint("https://api.openai.com/v1", [](const ofxIC::HttpRequest &) {
+		ofxIC::HttpResponse response;
+		response.started = true;
+		response.status = 500;
+		response.body = R"({"error":{"message":"The uploaded audio could not be decoded.\nTry another file.","type":"server_error"}})";
+		return response;
+	});
+	ofxIC::TranscriptionClient client(endpoint);
+	ofxIC::TranscriptionRequest request;
+	request.audioBytes = "invalid audio";
+
+	const auto result = client.transcribeOpenAI(request);
+	OFXIC_REQUIRE(!result);
+	OFXIC_REQUIRE(result.httpStatus == 500);
+	OFXIC_REQUIRE(result.rawResponse.find("server_error") != std::string::npos);
+	OFXIC_REQUIRE(result.error ==
+		"transcription endpoint returned HTTP 500: The uploaded audio could not be decoded. Try another file.");
 }

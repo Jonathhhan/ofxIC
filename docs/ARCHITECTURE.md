@@ -11,13 +11,15 @@ openFrameworks app
   -> audio: TranscriptionClient -> explicit OpenAI or whisper.cpp route
   -> segmentation: SegmentationClient -> explicit SAM bridge v1
   -> media: MediaClient -> image response or async media job
+  -> music: AceStepMusicClient -> local /lm, /synth, optional /job
+         or StabilityAudioClient -> hosted async Stability Audio 3 job
   -> ofxIC::Endpoint
   -> external llama-server, whisper.cpp, SAM runner, stable-diffusion.cpp,
-     or hosted provider
+     ACE-Step, Stability AI, or another hosted provider
 ```
 
 Each client may reference a separately configured `Endpoint`; the regular
-example does so for chat, transcription, segmentation, and media. The process
+example does so for chat, transcription, segmentation, media, and music. The process
 boundary is architectural. It prevents unrelated native runtimes
 from forcing one ggml version, one CUDA build, or one release cycle on the
 addon.
@@ -38,17 +40,30 @@ addon.
 - `MediaClient` owns no runtime; it maps typed OpenAI image requests, native
   `stable-diffusion.cpp` jobs, and explicit Hugging Face fal-ai media jobs onto
   configured endpoints.
+- `StabilityAudioClient` owns no synthesizer or generic audio abstraction. It
+  maps the documented Stable Audio 3 multipart submit/result protocol onto a
+  separately configured Stability AI endpoint, validates job IDs and controls,
+  bounds downloads, and accepts only matching MP3 or WAV containers.
+- `AceStepMusicClient` owns no ACE-Step runtime. It maps the existing local
+  server's `/lm`, `/synth`, and optional `/job` state transitions onto explicit
+  request/job values, never forwards bearer credentials to the local server,
+  bounds responses, and validates completed WAV or MP3 bytes.
 - `DocumentIndex` chunks explicitly loaded text and performs deterministic
   lexical search. It does not watch directories or accept model-selected paths.
+  Per-document, document-count, and total-chunk limits are checked before an
+  addition becomes visible, so a rejected document cannot leave a partial index.
 - `ToolRegistry` is the execution allowlist; `ToolLoop` bounds repeated calls.
+  Document-search output labels retrieved content as untrusted evidence; the
+  regular example also tells the model never to treat source text as instructions.
 - `ToolLoopProgress` exposes only its two observable phases—model request and
   allowlisted tool execution—without introducing a general agent event model.
 - Endpoint inspection, chat, and tool-loop cancellation is cooperative: the
   application owns the cancellation flag, while `ofxIC` forwards it through
   each HTTP request and rolls an incomplete conversational turn back.
-- On Windows, non-streaming HTTPS uses WinHTTP/Schannel so certificate and
-  proxy handling follow native Windows trust. Streaming and local HTTP remain
-  on the cancellable libcurl transport.
+- On headless Windows builds, non-streaming HTTP(S) uses WinHTTP. In an
+  openFrameworks build, non-streaming HTTPS uses WinHTTP/Schannel so certificate
+  and proxy handling follow native Windows trust, while streaming and
+  cancellable local HTTP remain on the curl/openFrameworks transport.
 - Optional credential persistence belongs to the application layer. The
   Windows example uses Credential Manager; the addon core receives only the
   resulting bearer token and has no credential-vault dependency.
@@ -68,7 +83,12 @@ addon.
 - No automatic runtime discovery; HF model metadata is queried only to resolve
   the requested model's current fal-ai route.
 - No general agent framework around the one bounded document tool loop.
-- No provider SDK or claim that chat, image, and video share one universal API.
+- No in-addon crawler, browser renderer, live web-search tool, or model-selected
+  URL fetch. `scripts/web_snapshot.py` is a separate, user-invoked ingestion
+  utility: one public URL becomes one bounded, provenance-bearing local text
+  file, which then enters the same explicit document-loading path.
+- No provider SDK or claim that chat, image, video, and music share one
+  universal API.
 - No ecosystem manifest or cross-repository control plane.
 
 ## Growth rule

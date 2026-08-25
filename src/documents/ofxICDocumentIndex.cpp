@@ -1,9 +1,9 @@
 #include "ofxICDocumentIndex.h"
 
 #include <algorithm>
+#include <array>
 #include <cctype>
 #include <fstream>
-#include <iterator>
 #include <unordered_set>
 #include <utility>
 
@@ -56,21 +56,34 @@ std::string trimmedChunk(const std::string & text, std::size_t begin, std::size_
 } // namespace
 
 bool DocumentIndex::addText(const std::string & source, const std::string & text) {
-	if (source.empty() || text.empty()) return false;
+	if (source.empty() || source.size() > maximumSourceBytes ||
+		text.empty() || text.size() > maximumDocumentBytes ||
+		sources.size() >= maximumDocuments || chunks.size() >= maximumChunks) return false;
 	if (std::find(sources.begin(), sources.end(), source) != sources.end()) return false;
 
 	std::vector<Chunk> newChunks;
+	const std::size_t remainingChunks = maximumChunks - chunks.size();
 	std::size_t begin = 0;
 	std::size_t index = 0;
 	while (begin < text.size()) {
 		std::size_t end = std::min(begin + chunkCharacters, text.size());
 		if (end < text.size()) {
 			const std::size_t minimumEnd = begin + chunkCharacters / 2;
-			const std::size_t boundary = text.find_last_of(" \t\r\n", end);
-			if (boundary != std::string::npos && boundary >= minimumEnd) end = boundary;
+			std::size_t boundary = end;
+			while (boundary > minimumEnd) {
+				--boundary;
+				const char character = text[boundary];
+				if (character == ' ' || character == '\t' || character == '\r' || character == '\n') {
+					end = boundary;
+					break;
+				}
+			}
 		}
 		std::string chunkText = trimmedChunk(text, begin, end);
-		if (!chunkText.empty()) newChunks.push_back({ source, std::move(chunkText), index++ });
+		if (!chunkText.empty()) {
+			if (newChunks.size() >= remainingChunks) return false;
+			newChunks.push_back({ source, std::move(chunkText), index++ });
+		}
 		if (end == text.size()) break;
 		const std::size_t next = end > chunkOverlap ? end - chunkOverlap : end;
 		begin = next > begin ? next : end;
@@ -86,11 +99,26 @@ bool DocumentIndex::addFile(const std::string & path) {
 }
 
 bool DocumentIndex::addFile(const std::string & path, const std::string & source) {
+	if (path.empty() || source.empty() || source.size() > maximumSourceBytes ||
+		sources.size() >= maximumDocuments || chunks.size() >= maximumChunks ||
+		std::find(sources.begin(), sources.end(), source) != sources.end()) return false;
 	std::ifstream input(path, std::ios::binary);
 	if (!input) return false;
-	const std::string text(
-		(std::istreambuf_iterator<char>(input)),
-		std::istreambuf_iterator<char>());
+	std::string text;
+	std::array<char, 8192> buffer{};
+	while (input) {
+		if (text.size() == maximumDocumentBytes) {
+			if (input.peek() != std::char_traits<char>::eof()) return false;
+			break;
+		}
+		const std::size_t remaining = maximumDocumentBytes - text.size();
+		const std::streamsize requested = static_cast<std::streamsize>(
+			std::min<std::size_t>(buffer.size(), remaining));
+		input.read(buffer.data(), requested);
+		const std::streamsize count = input.gcount();
+		if (count > 0) text.append(buffer.data(), static_cast<std::size_t>(count));
+	}
+	if (input.bad()) return false;
 	return addText(source, text);
 }
 

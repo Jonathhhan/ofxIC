@@ -52,7 +52,11 @@ bool validSettings(const ExampleSettings & settings) {
 		settings.mediaWidth >= 1 && settings.mediaWidth <= 8192 &&
 		settings.mediaHeight >= 1 && settings.mediaHeight <= 8192 &&
 		settings.mediaFrames >= 1 && settings.mediaFrames <= 10000 &&
-		settings.mediaFps >= 1 && settings.mediaFps <= 240;
+		settings.mediaFps >= 1 && settings.mediaFps <= 240 &&
+		settings.musicBackend >= 0 && settings.musicBackend <= 1 &&
+		validText(settings.musicEndpointUrl, 512) &&
+		settings.musicDuration >= 1 && settings.musicDuration <= 600 &&
+		settings.musicOutputFormat >= 0 && settings.musicOutputFormat <= 1;
 }
 
 std::string normalizedUrl(std::string url) {
@@ -111,12 +115,28 @@ void alignTranscriptionEndpointDefault(ExampleSettings & settings) {
 	}
 }
 
+const char * defaultMusicEndpointUrl(int backend) {
+	return backend == 1
+		? "https://api.stability.ai"
+		: "http://127.0.0.1:8085";
+}
+
+void alignMusicEndpointDefault(ExampleSettings & settings) {
+	const int otherBackend = settings.musicBackend == 1 ? 0 : 1;
+	const std::string current = normalizedUrl(settings.musicEndpointUrl);
+	const std::string otherDefault = normalizedUrl(defaultMusicEndpointUrl(otherBackend));
+	if (settings.musicEndpointUrl.empty() || current == otherDefault) {
+		settings.musicEndpointUrl = defaultMusicEndpointUrl(settings.musicBackend);
+	}
+}
+
 SettingsLoadStatus loadSettings(const std::string & path, ExampleSettings & settings) {
 	std::ifstream input(path, std::ios::binary);
 	if (!input) return SettingsLoadStatus::Missing;
 
 	ExampleSettings parsed;
 	bool hasVersion = false;
+	bool hasMusicBackend = false;
 	std::string line;
 	while (std::getline(input, line)) {
 		if (!line.empty() && line.back() == '\r') line.pop_back();
@@ -162,6 +182,15 @@ SettingsLoadStatus loadSettings(const std::string & path, ExampleSettings & sett
 			valid = parseInt(value, parsed.mediaFrames);
 		} else if (key == "media_fps") {
 			valid = parseInt(value, parsed.mediaFps);
+		} else if (key == "music_backend") {
+			valid = parseInt(value, parsed.musicBackend);
+			hasMusicBackend = valid;
+		} else if (key == "music_endpoint_url") {
+			valid = parseString(value, parsed.musicEndpointUrl);
+		} else if (key == "music_duration") {
+			valid = parseInt(value, parsed.musicDuration);
+		} else if (key == "music_output_format") {
+			valid = parseInt(value, parsed.musicOutputFormat);
 		}
 		if (!valid) return SettingsLoadStatus::Invalid;
 	}
@@ -169,6 +198,12 @@ SettingsLoadStatus loadSettings(const std::string & path, ExampleSettings & sett
 		return SettingsLoadStatus::Invalid;
 	}
 	alignTranscriptionEndpointDefault(parsed);
+	if (!hasMusicBackend) {
+		parsed.musicBackend = normalizedUrl(parsed.musicEndpointUrl) ==
+			normalizedUrl(defaultMusicEndpointUrl(1)) ? 1 : 0;
+	} else {
+		alignMusicEndpointDefault(parsed);
+	}
 	settings = std::move(parsed);
 	return SettingsLoadStatus::Loaded;
 }
@@ -193,7 +228,11 @@ bool saveSettings(const std::string & path, const ExampleSettings & settings) {
 		<< "media_width=" << settings.mediaWidth << '\n'
 		<< "media_height=" << settings.mediaHeight << '\n'
 		<< "media_frames=" << settings.mediaFrames << '\n'
-		<< "media_fps=" << settings.mediaFps << '\n';
+		<< "media_fps=" << settings.mediaFps << '\n'
+		<< "music_backend=" << settings.musicBackend << '\n'
+		<< "music_endpoint_url=" << std::quoted(settings.musicEndpointUrl) << '\n'
+		<< "music_duration=" << settings.musicDuration << '\n'
+		<< "music_output_format=" << settings.musicOutputFormat << '\n';
 	return static_cast<bool>(output);
 }
 
@@ -295,6 +334,27 @@ void applyEnvironmentOverrides(
 	readPositiveOverride(environment, "OFXIC_MEDIA_HEIGHT", 8192, settings.mediaHeight);
 	readPositiveOverride(environment, "OFXIC_MEDIA_FRAMES", 10000, settings.mediaFrames);
 	readPositiveOverride(environment, "OFXIC_MEDIA_FPS", 240, settings.mediaFps);
+	if (const std::string * musicUrl = environmentValue(
+		environment, "OFXIC_MUSIC_ENDPOINT_URL")) {
+		settings.musicEndpointUrl = *musicUrl;
+	}
+	if (const std::string * backend = environmentValue(
+		environment, "OFXIC_MUSIC_BACKEND")) {
+		const int previousBackend = settings.musicBackend;
+		if (*backend == "acestep" || *backend == "local") settings.musicBackend = 0;
+		if (*backend == "stability" || *backend == "stability-ai") settings.musicBackend = 1;
+		if (!environmentValue(environment, "OFXIC_MUSIC_ENDPOINT_URL") &&
+			normalizedUrl(settings.musicEndpointUrl) ==
+				normalizedUrl(defaultMusicEndpointUrl(previousBackend))) {
+			settings.musicEndpointUrl = defaultMusicEndpointUrl(settings.musicBackend);
+		}
+	}
+	readPositiveOverride(environment, "OFXIC_MUSIC_DURATION", 600, settings.musicDuration);
+	if (const std::string * format = environmentValue(
+		environment, "OFXIC_MUSIC_OUTPUT_FORMAT")) {
+		if (*format == "mp3") settings.musicOutputFormat = 0;
+		if (*format == "wav") settings.musicOutputFormat = 1;
+	}
 }
 
 } // namespace ofxICExample

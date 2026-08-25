@@ -31,6 +31,10 @@ OFXIC_TEST(example_settings_round_trip_non_secret_values) {
 	saved.mediaHeight = 432;
 	saved.mediaFrames = 49;
 	saved.mediaFps = 24;
+	saved.musicBackend = 1;
+	saved.musicEndpointUrl = "https://music.example.test";
+	saved.musicDuration = 45;
+	saved.musicOutputFormat = 1;
 
 	OFXIC_REQUIRE(ofxICExample::saveSettings(settingsPath, saved));
 	ofxICExample::ExampleSettings loaded;
@@ -53,6 +57,10 @@ OFXIC_TEST(example_settings_round_trip_non_secret_values) {
 	OFXIC_REQUIRE(loaded.mediaHeight == saved.mediaHeight);
 	OFXIC_REQUIRE(loaded.mediaFrames == saved.mediaFrames);
 	OFXIC_REQUIRE(loaded.mediaFps == saved.mediaFps);
+	OFXIC_REQUIRE(loaded.musicBackend == saved.musicBackend);
+	OFXIC_REQUIRE(loaded.musicEndpointUrl == saved.musicEndpointUrl);
+	OFXIC_REQUIRE(loaded.musicDuration == saved.musicDuration);
+	OFXIC_REQUIRE(loaded.musicOutputFormat == saved.musicOutputFormat);
 
 	std::ifstream input(settingsPath, std::ios::binary);
 	const std::string serialized(
@@ -97,6 +105,58 @@ OFXIC_TEST(example_settings_loads_version_one_without_audio_keys) {
 	OFXIC_REQUIRE(settings.transcriptionModel == "whisper-1");
 	OFXIC_REQUIRE(settings.transcriptionEndpointUrl == "https://api.openai.com/v1");
 	OFXIC_REQUIRE(settings.segmentationEndpointUrl == "http://127.0.0.1:18085");
+	OFXIC_REQUIRE(settings.musicBackend == 0);
+	OFXIC_REQUIRE(settings.musicEndpointUrl == "http://127.0.0.1:8085");
+	OFXIC_REQUIRE(settings.musicDuration == 30);
+	OFXIC_REQUIRE(settings.musicOutputFormat == 0);
+	OFXIC_REQUIRE(ofxICExample::removeSettings(settingsPath));
+}
+
+OFXIC_TEST(example_music_environment_overrides_are_provider_specific) {
+	ofxICExample::ExampleSettings settings;
+	ofxICExample::applyEnvironmentOverrides(settings, {
+		{ "OFXIC_MUSIC_BACKEND", "stability" },
+		{ "OFXIC_MUSIC_ENDPOINT_URL", "https://music.example.test" },
+		{ "OFXIC_MUSIC_DURATION", "75" },
+		{ "OFXIC_MUSIC_OUTPUT_FORMAT", "wav" },
+	});
+	OFXIC_REQUIRE(settings.musicBackend == 1);
+	OFXIC_REQUIRE(settings.musicEndpointUrl == "https://music.example.test");
+	OFXIC_REQUIRE(settings.musicDuration == 75);
+	OFXIC_REQUIRE(settings.musicOutputFormat == 1);
+}
+
+OFXIC_TEST(example_music_backend_selects_its_default_endpoint) {
+	ofxICExample::ExampleSettings settings;
+	OFXIC_REQUIRE(settings.musicBackend == 0);
+	OFXIC_REQUIRE(settings.musicEndpointUrl == "http://127.0.0.1:8085");
+
+	settings.musicBackend = 1;
+	ofxICExample::alignMusicEndpointDefault(settings);
+	OFXIC_REQUIRE(settings.musicEndpointUrl == "https://api.stability.ai");
+
+	settings.musicBackend = 0;
+	ofxICExample::alignMusicEndpointDefault(settings);
+	OFXIC_REQUIRE(settings.musicEndpointUrl == "http://127.0.0.1:8085");
+
+	settings.musicEndpointUrl = "http://music-gateway.example.test";
+	settings.musicBackend = 1;
+	ofxICExample::alignMusicEndpointDefault(settings);
+	OFXIC_REQUIRE(settings.musicEndpointUrl == "http://music-gateway.example.test");
+}
+
+OFXIC_TEST(example_settings_infers_stability_for_legacy_music_url) {
+	{
+		std::ofstream output(settingsPath, std::ios::binary | std::ios::trunc);
+		output << "version=1\n"
+			<< "music_endpoint_url=\"https://api.stability.ai\"\n";
+	}
+	ofxICExample::ExampleSettings settings;
+	OFXIC_REQUIRE(
+		ofxICExample::loadSettings(settingsPath, settings) ==
+		ofxICExample::SettingsLoadStatus::Loaded);
+	OFXIC_REQUIRE(settings.musicBackend == 1);
+	OFXIC_REQUIRE(settings.musicEndpointUrl == "https://api.stability.ai");
 	OFXIC_REQUIRE(ofxICExample::removeSettings(settingsPath));
 }
 

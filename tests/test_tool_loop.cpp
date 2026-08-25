@@ -11,6 +11,7 @@ OFXIC_TEST(tool_registry_is_an_explicit_allowlist) {
 	ofxIC::ToolCall search{ "call-1", "search_documents", "{\"query\":\"process boundary\"}" };
 	const auto found = tools.execute(search);
 	OFXIC_REQUIRE(found);
+	OFXIC_REQUIRE(found.content.find("\"content_trust\":\"untrusted\"") != std::string::npos);
 	OFXIC_REQUIRE(found.content.find("[guide.md#chunk-1]") != std::string::npos);
 
 	ofxIC::ToolCall unknown{ "call-2", "read_file", "{\"path\":\"secret\"}" };

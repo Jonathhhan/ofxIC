@@ -16,6 +16,11 @@ struct DocumentSearchHit {
 
 class DocumentIndex {
 public:
+	static constexpr std::size_t maximumDocumentBytes = 8U * 1024U * 1024U;
+	static constexpr std::size_t maximumSourceBytes = 2048U;
+	static constexpr std::size_t maximumDocuments = 128U;
+	static constexpr std::size_t maximumChunks = 16384U;
+
 	bool addText(const std::string & source, const std::string & text);
 	bool addFile(const std::string & path);
 	bool addFile(const std::string & path, const std::string & source);

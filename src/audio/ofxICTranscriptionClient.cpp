@@ -6,6 +6,8 @@
 namespace ofxIC {
 namespace {
 
+constexpr std::size_t kOpenAIMaxAudioBytes = 25U * 1024U * 1024U;
+
 std::string safeFilename(std::string value) {
 	value.erase(std::remove_if(value.begin(), value.end(), [](char c) {
 		return c == '\r' || c == '\n' || c == '"' || c == '\\';
@@ -47,6 +49,12 @@ TranscriptionClient::TranscriptionClient(Endpoint & endpoint) : endpoint(endpoin
 TranscriptionResult TranscriptionClient::transcribeOpenAI(
 	const TranscriptionRequest & request,
 	std::function<bool()> shouldCancel) const {
+	if (request.audioBytes.size() > kOpenAIMaxAudioBytes) {
+		TranscriptionResult result;
+		result.error = "OpenAI transcription files are limited to 25 MB; loaded file has " +
+			std::to_string(request.audioBytes.size()) + " bytes";
+		return result;
+	}
 	return transcribe(request, "/v1/audio/transcriptions", true, std::move(shouldCancel));
 }
 
@@ -83,10 +91,15 @@ TranscriptionResult TranscriptionClient::transcribe(
 		result.error = response.error.empty() ? "request cancelled" : response.error;
 		return result;
 	}
-	if (!response.started || response.status < 200 || response.status >= 300) {
-		result.error = response.error.empty()
-			? "transcription endpoint returned HTTP " + std::to_string(response.status)
-			: response.error;
+	if (!response.started) {
+		result.error = response.error.empty() ? "transcription request did not start" : response.error;
+		return result;
+	}
+	if (response.status < 200 || response.status >= 300) {
+		result.error = "transcription endpoint returned HTTP " + std::to_string(response.status);
+		const std::string detail = Endpoint::extractErrorText(response.body);
+		if (!detail.empty()) result.error += ": " + detail;
+		else if (!response.error.empty()) result.error += ": " + response.error;
 		return result;
 	}
 	result.text = Endpoint::extractChatText(response.body);
