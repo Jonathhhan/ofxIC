@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+No changes yet.
+
+## 0.2.0-rc.1 — 2026-08-25
+
 The endpoint-first boundary remains unchanged. Audio transcription and prompted
 image segmentation have been added as explicit protocol clients; neither adds
 an embedded model runtime or restores the former generic runtime APIs.
