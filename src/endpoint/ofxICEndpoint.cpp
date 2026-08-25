@@ -1,10 +1,12 @@
 #include "ofxICEndpoint.h"
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cctype>
 #include <cstdlib>
 #include <sstream>
+#include <thread>
 #include <utility>
 
 #if defined(_WIN32)
@@ -50,6 +52,52 @@ struct WinHttpHandle {
 	~WinHttpHandle() { if (value) WinHttpCloseHandle(value); }
 };
 
+struct WinHttpRequestHandle {
+	std::atomic<HINTERNET> value{ nullptr };
+	explicit WinHttpRequestHandle(HINTERNET handle) : value(handle) {}
+	~WinHttpRequestHandle() {
+		const HINTERNET handle = value.exchange(nullptr);
+		if (handle) WinHttpCloseHandle(handle);
+	}
+	HINTERNET get() const { return value.load(); }
+};
+
+class WinHttpCancellation {
+public:
+	WinHttpCancellation(
+		WinHttpRequestHandle & requestHandle,
+		std::function<bool()> shouldCancel)
+		: requestHandle(requestHandle)
+		, shouldCancel(std::move(shouldCancel)) {
+		if (!this->shouldCancel) return;
+		watcher = std::thread([this]() {
+			while (!finished.load()) {
+				if (this->shouldCancel()) {
+					cancelled = true;
+					const HINTERNET handle = this->requestHandle.value.exchange(nullptr);
+					if (handle) WinHttpCloseHandle(handle);
+					return;
+				}
+				std::this_thread::sleep_for(std::chrono::milliseconds(10));
+			}
+		});
+	}
+
+	~WinHttpCancellation() {
+		finished = true;
+		if (watcher.joinable()) watcher.join();
+	}
+
+	bool wasCancelled() const { return cancelled.load(); }
+
+private:
+	WinHttpRequestHandle & requestHandle;
+	std::function<bool()> shouldCancel;
+	std::atomic<bool> finished{ false };
+	std::atomic<bool> cancelled{ false };
+	std::thread watcher;
+};
+
 HttpResponse runWinHttpRequest(const HttpRequest & request) {
 	HttpResponse result;
 	auto cancelled = [&]() {
@@ -78,36 +126,53 @@ HttpResponse runWinHttpRequest(const HttpRequest & request) {
 	WinHttpHandle connection{ WinHttpConnect(session.value, host.c_str(), parts.nPort, 0) };
 	if (!connection.value) { result.error = winHttpError("WinHttpConnect"); return result; }
 	const wchar_t * method = request.method == HttpMethod::Post ? L"POST" : L"GET";
-	WinHttpHandle operation{ WinHttpOpenRequest(connection.value, method, path.c_str(), nullptr,
+	WinHttpRequestHandle operation{ WinHttpOpenRequest(connection.value, method, path.c_str(), nullptr,
 		WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES,
 		parts.nScheme == INTERNET_SCHEME_HTTPS ? WINHTTP_FLAG_SECURE : 0) };
-	if (!operation.value) { result.error = winHttpError("WinHttpOpenRequest"); return result; }
+	if (!operation.get()) { result.error = winHttpError("WinHttpOpenRequest"); return result; }
+	WinHttpCancellation cancellation(operation, request.shouldCancel);
+	auto operationFailed = [&](const char * name) {
+		if (cancellation.wasCancelled()) {
+			result.cancelled = true;
+			result.error = "request cancelled";
+		} else {
+			result.error = winHttpError(name);
+		}
+	};
 	std::wstring headers = L"Accept: " + widen(request.accept) + L"\r\nContent-Type: " + widen(request.contentType) + L"\r\n";
 	for (const auto & header : request.headers) headers += widen(header.first + ": " + header.second) + L"\r\n";
 	if (cancelled()) return result;
 	void * body = request.body.empty() ? WINHTTP_NO_REQUEST_DATA : const_cast<char *>(request.body.data());
 	const DWORD bodySize = static_cast<DWORD>(request.body.size());
 	result.started = true;
-	if (!WinHttpSendRequest(operation.value, headers.c_str(), static_cast<DWORD>(-1), body, bodySize, bodySize, 0)) {
-		result.error = winHttpError("WinHttpSendRequest"); return result;
+	if (!WinHttpSendRequest(operation.get(), headers.c_str(), static_cast<DWORD>(-1), body, bodySize, bodySize, 0)) {
+		operationFailed("WinHttpSendRequest"); return result;
 	}
 	if (cancelled()) return result;
-	if (!WinHttpReceiveResponse(operation.value, nullptr)) {
-		result.error = winHttpError("WinHttpReceiveResponse"); return result;
+	if (!WinHttpReceiveResponse(operation.get(), nullptr)) {
+		operationFailed("WinHttpReceiveResponse"); return result;
 	}
 	DWORD status = 0, statusSize = sizeof(status);
-	WinHttpQueryHeaders(operation.value, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
+	WinHttpQueryHeaders(operation.get(), WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
 		WINHTTP_HEADER_NAME_BY_INDEX, &status, &statusSize, WINHTTP_NO_HEADER_INDEX);
 	result.status = static_cast<int>(status);
 	while (!cancelled()) {
 		DWORD available = 0;
-		if (!WinHttpQueryDataAvailable(operation.value, &available)) { result.error = winHttpError("WinHttpQueryDataAvailable"); break; }
+		if (!WinHttpQueryDataAvailable(operation.get(), &available)) { operationFailed("WinHttpQueryDataAvailable"); break; }
 		if (available == 0) break;
 		const std::size_t offset = result.body.size();
+		if (available > request.maxResponseBytes ||
+			offset > request.maxResponseBytes - available) {
+			result.status = 0;
+			result.body.clear();
+			result.error = "response exceeded " +
+				std::to_string(request.maxResponseBytes) + " byte limit";
+			break;
+		}
 		result.body.resize(offset + available);
 		DWORD received = 0;
-		if (!WinHttpReadData(operation.value, result.body.data() + offset, available, &received)) {
-			result.error = winHttpError("WinHttpReadData"); result.body.resize(offset); break;
+		if (!WinHttpReadData(operation.get(), result.body.data() + offset, available, &received)) {
+			operationFailed("WinHttpReadData"); result.body.resize(offset); break;
 		}
 		result.body.resize(offset + received);
 	}
@@ -394,6 +459,7 @@ struct CurlState {
 	ChatChunkCallback onChunk;
 	std::function<bool()> shouldCancel;
 	bool streaming = false;
+	std::size_t maxResponseBytes = 0;
 	std::string pending;
 };
 
@@ -419,6 +485,15 @@ std::size_t curlWrite(
 	const std::size_t bytes = size * count;
 	auto * state = static_cast<CurlState *>(userData);
 	if (!state || !state->response || !data || shouldCancel(*state)) {
+		return 0;
+	}
+	const std::size_t buffered = state->response->body.size() +
+		(state->streaming ? state->pending.size() : 0U);
+	if (bytes > state->maxResponseBytes ||
+		buffered > state->maxResponseBytes - bytes) {
+		state->response->body.clear();
+		state->response->error = "response exceeded " +
+			std::to_string(state->maxResponseBytes) + " byte limit";
 		return 0;
 	}
 	state->response->started = true;
@@ -469,6 +544,7 @@ HttpResponse runCurlRequest(const HttpRequest & request) {
 	state.onChunk = request.onChunk;
 	state.shouldCancel = request.shouldCancel;
 	state.streaming = request.stream;
+	state.maxResponseBytes = request.maxResponseBytes;
 
 	curl_easy_setopt(curl, CURLOPT_URL, request.url.c_str());
 	curl_easy_setopt(curl, CURLOPT_ERRORBUFFER, errorBuffer);
@@ -501,9 +577,10 @@ HttpResponse runCurlRequest(const HttpRequest & request) {
 	curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &status);
 	result.status = static_cast<int>(status);
 	result.started = true;
-	if (code != CURLE_OK && !result.cancelled) {
+	if (code != CURLE_OK && !result.cancelled && result.error.empty()) {
 		result.error = errorBuffer[0] ? errorBuffer : curl_easy_strerror(code);
 	}
+	if (!result.error.empty() && !result.cancelled) result.status = 0;
 	if (request.stream && !state.pending.empty() && !result.cancelled) {
 		processServerSentEventLine(state.pending, result, request.onChunk);
 	}
@@ -556,7 +633,14 @@ HttpResponse Endpoint::perform(HttpRequest request) const {
 			request.headers.emplace_back("Authorization", "Bearer " + bearerToken);
 		}
 	}
-	return transport(request);
+	HttpResponse response = transport(request);
+	if (response.body.size() > request.maxResponseBytes) {
+		response.status = 0;
+		response.body.clear();
+		response.error = "response exceeded " +
+			std::to_string(request.maxResponseBytes) + " byte limit";
+	}
+	return response;
 }
 
 EndpointStatus Endpoint::inspect(std::function<bool()> shouldCancel) const {
@@ -565,6 +649,7 @@ EndpointStatus Endpoint::inspect(std::function<bool()> shouldCancel) const {
 	request.method = HttpMethod::Get;
 	request.url = "/v1/models";
 	request.timeoutSeconds = 10;
+	request.maxResponseBytes = 8U * 1024U * 1024U;
 	request.shouldCancel = std::move(shouldCancel);
 	const HttpResponse response = perform(request);
 	status.httpStatus = response.status;
@@ -605,6 +690,7 @@ ChatResult Endpoint::chat(
 
 	HttpRequest httpRequest;
 	httpRequest.method = HttpMethod::Post;
+	httpRequest.maxResponseBytes = 16U * 1024U * 1024U;
 	httpRequest.url = "/v1/chat/completions";
 	httpRequest.body = buildChatBody(request);
 	httpRequest.stream = request.options.stream;
@@ -864,6 +950,12 @@ HttpResponse Endpoint::runHttpRequest(const HttpRequest & request) {
 	result.status = response.status;
 	result.body = response.data.getText();
 	result.error = response.error;
+	if (result.body.size() > request.maxResponseBytes) {
+		result.status = 0;
+		result.body.clear();
+		result.error = "response exceeded " +
+			std::to_string(request.maxResponseBytes) + " byte limit";
+	}
 	return result;
 #else
 	result.error = "HTTP requests require the openFrameworks runtime";

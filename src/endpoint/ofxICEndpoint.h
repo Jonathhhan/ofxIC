@@ -2,6 +2,7 @@
 
 #include "../chat/ofxICChatTypes.h"
 
+#include <cstddef>
 #include <functional>
 #include <string>
 #include <utility>
@@ -10,6 +11,8 @@
 namespace ofxIC {
 
 class MediaClient;
+class TranscriptionClient;
+class SegmentationClient;
 
 enum class HttpMethod {
 	Get,
@@ -24,6 +27,7 @@ struct HttpRequest {
 	std::string accept = "application/json";
 	std::vector<std::pair<std::string, std::string>> headers;
 	int timeoutSeconds = 180;
+	std::size_t maxResponseBytes = 64U * 1024U * 1024U;
 	bool useBearerToken = true;
 	bool stream = false;
 	ChatChunkCallback onChunk;
@@ -85,6 +89,8 @@ private:
 	HttpTransport transport;
 
 	friend class MediaClient;
+	friend class TranscriptionClient;
+	friend class SegmentationClient;
 };
 
 } // namespace ofxIC

@@ -84,9 +84,11 @@ std::string tokenSetupHint(const std::string & variable) {
 
 std::map<std::string, std::string> settingsEnvironment() {
 	std::map<std::string, std::string> values;
-	constexpr std::array<const char *, 11> names{{
+	constexpr std::array<const char *, 13> names{{
 		"OFXIC_ENDPOINT_URL",
 		"OFXIC_MODEL",
+		"OFXIC_TRANSCRIPTION_AUTORUN",
+		"OFXIC_TRANSCRIPTION_MODEL",
 		"OFXIC_MEDIA_BACKEND",
 		"OFXIC_MEDIA_ENDPOINT_URL",
 		"OFXIC_MEDIA_IMAGE_MODEL",
@@ -211,6 +213,8 @@ ofApp::ofApp()
 	, mediaEndpoint("http://127.0.0.1:8080")
 	, chat(endpoint)
 	, media(mediaEndpoint)
+	, transcription(endpoint)
+	, segmentation(endpoint)
 	, toolLoop(chat, tools) {
 	settingsPath = configuredSettingsPath();
 	ofxICExample::ExampleSettings settings;
@@ -277,6 +281,27 @@ void ofApp::setup() {
 	if (!documentPath.empty()) loadDocument(documentPath);
 	status = "Ready. Inspect the endpoint, then send a message.";
 	if (environmentValue("OFXIC_INSPECT_AUTORUN") == "1") inspectEndpoint();
+	const std::string transcriptionAutorun = environmentValue("OFXIC_TRANSCRIPTION_AUTORUN");
+	if (transcriptionAutorun == "openai" || transcriptionAutorun == "whisper-cpp") {
+		transcriptionProtocol = transcriptionAutorun == "whisper-cpp" ? 1 : 0;
+		const std::string audioPath = environmentValue("OFXIC_AUDIO_PATH");
+		if (loadAudio(audioPath)) {
+			transcribeAudio();
+		} else {
+			writeAutomationResult(audioStatus, "");
+		}
+	}
+	if (environmentValue("OFXIC_SEGMENTATION_AUTORUN") == "1") {
+		if (loadSegmentationImage(environmentValue("OFXIC_SEGMENTATION_IMAGE"))) {
+			const std::string pointX = environmentValue("OFXIC_SEGMENTATION_POINT_X");
+			const std::string pointY = environmentValue("OFXIC_SEGMENTATION_POINT_Y");
+			if (!pointX.empty()) segmentationPointX = ofClamp(ofToFloat(pointX), 0.0f, 1.0f);
+			if (!pointY.empty()) segmentationPointY = ofClamp(ofToFloat(pointY), 0.0f, 1.0f);
+			segmentImage();
+		} else {
+			writeAutomationResult(segmentationStatus, "");
+		}
+	}
 	setTextBuffer(mediaInput, "A small paper sculpture on a clean studio background");
 	mediaStatus = "Choose OpenAI images, Hugging Face / fal-ai, or stable-diffusion.cpp jobs.";
 	const std::string mediaAutorun = environmentValue("OFXIC_MEDIA_AUTORUN");
@@ -305,6 +330,20 @@ void ofApp::update() {
 		std::lock_guard<std::mutex> lock(resultMutex);
 		output = std::move(pendingOutput);
 		status = std::move(pendingStatus);
+		if (status.rfind("Segmentation", 0) == 0) {
+			segmentationStatus = status;
+			if (!pendingSegmentationMask.empty()) {
+				ofPixels maskPixels;
+				const ofBuffer maskBuffer(
+					pendingSegmentationMask.data(), pendingSegmentationMask.size());
+				if (ofLoadImage(maskPixels, maskBuffer)) {
+					segmentationMaskImage.setFromPixels(maskPixels);
+				} else {
+					segmentationStatus = "Segmentation returned an unreadable PGM mask";
+				}
+				pendingSegmentationMask.clear();
+			}
+		}
 		availableModels = std::move(pendingModels);
 		if (!pendingModelSelection.empty()) {
 			setTextBuffer(modelId, pendingModelSelection);
@@ -367,6 +406,10 @@ void ofApp::draw() {
 	bool forgetMediaTokenRequested = false;
 	bool clearRequested = false;
 	bool loadDocumentRequested = false;
+	bool loadAudioRequested = false;
+	bool transcribeAudioRequested = false;
+	bool loadSegmentationImageRequested = false;
+	bool segmentImageRequested = false;
 	bool generateMediaRequested = false;
 	bool pollMediaRequested = false;
 	bool saveSettingsRequested = false;
@@ -452,6 +495,24 @@ void ofApp::draw() {
 	ImGui::TextDisabled("%zu document(s), %zu chunk(s)",
 		documents.documentCount(), documents.chunkCount());
 	ImGui::TextWrapped("%s", documentStatus.c_str());
+	ImGui::SeparatorText("Transcription");
+	const char * transcriptionProtocols[] = {
+		"OpenAI /v1/audio/transcriptions", "whisper.cpp /inference" };
+	ImGui::BeginDisabled(busy || mediaBusy);
+	ImGui::Combo("Protocol", &transcriptionProtocol, transcriptionProtocols, 2);
+	ImGui::InputText("Audio model", transcriptionModel.data(), transcriptionModel.size());
+	if (transcriptionProtocol == 1) {
+		ImGui::TextDisabled("whisper.cpp selects its model when the server starts.");
+	}
+	loadAudioRequested = ImGui::Button("Load audio");
+	ImGui::SameLine();
+	ImGui::BeginDisabled(audioBytes.empty());
+	transcribeAudioRequested = ImGui::Button("Transcribe");
+	ImGui::EndDisabled();
+	ImGui::EndDisabled();
+	ImGui::SameLine();
+	ImGui::TextDisabled("%s", audioFilename.empty() ? "no file" : audioFilename.c_str());
+	ImGui::TextWrapped("%s", audioStatus.c_str());
 	if (ImGui::CollapsingHeader("Loaded sources", ImGuiTreeNodeFlags_DefaultOpen)) {
 		for (const std::string & source : loadedDocumentSources) {
 			ImGui::BulletText("%s", source.c_str());
@@ -592,12 +653,37 @@ void ofApp::draw() {
 			(ImTextureID)(uintptr_t)generatedVideo.getTexture().getTextureData().textureID,
 			fitMediaPreview(generatedVideo.getWidth(), generatedVideo.getHeight()));
 	}
+	ImGui::SeparatorText("SAM bridge v1");
+	ImGui::TextDisabled("External endpoint: PPM + normalized point -> PGM mask");
+	ImGui::BeginDisabled(busy || mediaBusy);
+	loadSegmentationImageRequested = ImGui::Button("Load segmentation image");
+	ImGui::SameLine();
+	ImGui::BeginDisabled(segmentationImageBytes.empty());
+	segmentImageRequested = ImGui::Button("Segment point");
+	ImGui::EndDisabled();
+	ImGui::SliderFloat("Point X", &segmentationPointX, 0.0f, 1.0f);
+	ImGui::SliderFloat("Point Y", &segmentationPointY, 0.0f, 1.0f);
+	ImGui::EndDisabled();
+	ImGui::TextWrapped("%s", segmentationStatus.c_str());
+	if (segmentationMaskImage.isAllocated()) {
+		ImGui::Image(
+			(ImTextureID)(uintptr_t)segmentationMaskImage.getTexture().getTextureData().textureID,
+			fitMediaPreview(segmentationMaskImage.getWidth(), segmentationMaskImage.getHeight()));
+	}
 	ImGui::End();
 	gui.end();
 
 	if (loadDocumentRequested && !busy && !mediaBusy) {
 		ofFileDialogResult selection = ofSystemLoadDialog("Load a Markdown or text document");
 		if (selection.bSuccess) loadDocument(selection.getPath());
+	}
+	if (loadAudioRequested && !busy && !mediaBusy) {
+		ofFileDialogResult selection = ofSystemLoadDialog("Load an audio file");
+		if (selection.bSuccess) loadAudio(selection.getPath());
+	}
+	if (loadSegmentationImageRequested && !busy && !mediaBusy) {
+		ofFileDialogResult selection = ofSystemLoadDialog("Load an image for SAM segmentation");
+		if (selection.bSuccess) loadSegmentationImage(selection.getPath());
 	}
 	if (applyRequested) applyConfiguration();
 	if (saveSettingsRequested) saveExampleSettings();
@@ -616,6 +702,14 @@ void ofApp::draw() {
 	if (sendRequested) {
 		if (configurationDirty) applyConfiguration();
 		sendMessage();
+	}
+	if (transcribeAudioRequested) {
+		if (configurationDirty) applyConfiguration();
+		transcribeAudio();
+	}
+	if (segmentImageRequested) {
+		if (configurationDirty) applyConfiguration();
+		segmentImage();
 	}
 	if (cancelRequested) cancelRequest();
 	if (saveTokenRequested) {
@@ -714,6 +808,8 @@ void ofApp::applySettingsToUi(const ofxICExample::ExampleSettings & settings) {
 		: 0;
 	setTextBuffer(endpointUrl, settings.endpointUrl);
 	setTextBuffer(modelId, settings.modelId);
+	transcriptionProtocol = settings.transcriptionProtocol;
+	setTextBuffer(transcriptionModel, settings.transcriptionModel);
 	setTextBuffer(mediaEndpointUrl, settings.mediaEndpointUrl);
 	setTextBuffer(mediaImageModel, settings.mediaImageModel);
 	setTextBuffer(mediaVideoModel, settings.mediaVideoModel);
@@ -730,6 +826,8 @@ ofxICExample::ExampleSettings ofApp::settingsFromUi() const {
 	settings.endpointProfile = selectedProfile;
 	settings.endpointUrl = endpointUrl.data();
 	settings.modelId = modelId.data();
+	settings.transcriptionProtocol = transcriptionProtocol;
+	settings.transcriptionModel = transcriptionModel.data();
 	settings.mediaBackend = selectedMediaBackend;
 	settings.mediaKind = selectedMediaKind;
 	settings.mediaEndpointUrl = mediaEndpointUrl.data();
@@ -834,6 +932,115 @@ std::string ofApp::configuredToken() const {
 	if (stored != storedTokens.end()) return stored->second;
 	const auto storedGeneric = storedTokens.find("OFXIC_API_KEY");
 	return storedGeneric == storedTokens.end() ? std::string{} : storedGeneric->second;
+}
+
+bool ofApp::loadAudio(const std::string & path) {
+	const std::string extension = ofToLower(ofFilePath::getFileExt(path));
+	if (extension != "wav" && extension != "mp3" && extension != "m4a" &&
+		extension != "ogg" && extension != "flac" && extension != "webm" &&
+		extension != "mp4" && extension != "mpeg" && extension != "mpga") {
+		audioStatus = "Rejected audio: use wav, mp3, m4a, ogg, flac, webm, mp4, mpeg, or mpga.";
+		return false;
+	}
+	const ofBuffer buffer = ofBufferFromFile(path, true);
+	if (buffer.size() == 0 || buffer.size() > 256U * 1024U * 1024U) {
+		audioStatus = "Could not load audio, or file exceeds the 256 MiB input limit.";
+		return false;
+	}
+	audioBytes.assign(buffer.getData(), buffer.size());
+	audioFilename = ofFilePath::getFileName(path);
+	audioStatus = "Loaded " + audioFilename + " (" + ofToString(buffer.size()) + " bytes).";
+	return true;
+}
+
+void ofApp::transcribeAudio() {
+	if (audioBytes.empty() || mediaBusy || busy.exchange(true)) return;
+	cancellationRequested = false;
+	requestCanCancel = true;
+	status = "Transcribing audio...";
+	ofxIC::TranscriptionRequest request;
+	request.audioBytes = audioBytes;
+	request.filename = audioFilename;
+	request.model = transcriptionModel[0] ? transcriptionModel.data() : "whisper-1";
+	const std::string extension = ofToLower(ofFilePath::getFileExt(audioFilename));
+	request.contentType = extension == "mp3" ? "audio/mpeg"
+		: extension == "ogg" ? "audio/ogg"
+		: extension == "webm" ? "audio/webm"
+		: extension == "flac" ? "audio/flac"
+		: "audio/wav";
+	const int protocol = transcriptionProtocol;
+	const auto currentModels = availableModels;
+	worker = std::thread([this, request = std::move(request), protocol, currentModels]() {
+		const auto result = protocol == 0
+			? transcription.transcribeOpenAI(request,
+				[this]() { return cancellationRequested.load(); })
+			: transcription.transcribeWhisperCpp(request,
+				[this]() { return cancellationRequested.load(); });
+		std::lock_guard<std::mutex> lock(resultMutex);
+		pendingOutput = result.text;
+		pendingStatus = result
+			? "Transcription completed"
+			: result.cancelled ? "Transcription cancelled"
+			: "Transcription failed: " + result.error;
+		pendingModels = currentModels;
+		finished = true;
+	});
+}
+
+bool ofApp::loadSegmentationImage(const std::string & path) {
+	ofImage loaded;
+	if (!loaded.load(path) || !loaded.isAllocated()) {
+		segmentationStatus = "Could not load segmentation image.";
+		return false;
+	}
+	const auto & pixels = loaded.getPixels();
+	if (pixels.getWidth() == 0 || pixels.getHeight() == 0) {
+		segmentationStatus = "Segmentation image has no pixels.";
+		return false;
+	}
+	std::string ppm = "P6\n" + ofToString(pixels.getWidth()) + " " +
+		ofToString(pixels.getHeight()) + "\n255\n";
+	ppm.reserve(ppm.size() + pixels.getWidth() * pixels.getHeight() * 3U);
+	for (std::size_t y = 0; y < pixels.getHeight(); ++y) {
+		for (std::size_t x = 0; x < pixels.getWidth(); ++x) {
+			const ofColor color = pixels.getColor(x, y);
+			ppm.push_back(static_cast<char>(color.r));
+			ppm.push_back(static_cast<char>(color.g));
+			ppm.push_back(static_cast<char>(color.b));
+		}
+	}
+	segmentationImage = std::move(loaded);
+	segmentationMaskImage.clear();
+	segmentationImageBytes = std::move(ppm);
+	segmentationFilename = ofFilePath::getBaseName(path) + ".ppm";
+	segmentationStatus = "Loaded " + ofFilePath::getFileName(path) + ".";
+	return true;
+}
+
+void ofApp::segmentImage() {
+	if (segmentationImageBytes.empty() || mediaBusy || busy.exchange(true)) return;
+	cancellationRequested = false;
+	requestCanCancel = true;
+	status = "Segmenting image...";
+	segmentationStatus = status;
+	ofxIC::SegmentationRequest request;
+	request.imageBytes = segmentationImageBytes;
+	request.filename = segmentationFilename;
+	request.points.push_back({ segmentationPointX, segmentationPointY, true });
+	const auto currentModels = availableModels;
+	worker = std::thread([this, request = std::move(request), currentModels]() {
+		const auto result = segmentation.segmentSamBridge(
+			request, [this]() { return cancellationRequested.load(); });
+		std::lock_guard<std::mutex> lock(resultMutex);
+		pendingSegmentationMask = result.maskBytes;
+		pendingOutput = result ? "SAM bridge returned a PGM mask." : "";
+		pendingStatus = result
+			? "Segmentation completed"
+			: result.cancelled ? "Segmentation cancelled"
+			: "Segmentation failed: " + result.error;
+		pendingModels = currentModels;
+		finished = true;
+	});
 }
 
 std::string ofApp::configuredTokenSource() const {

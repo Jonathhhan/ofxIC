@@ -1,5 +1,9 @@
 #pragma once
 
+#include "audio/ofxICTranscriptionClient.h"
+#include "audio/ofxICTranscriptionTypes.h"
+#include "segmentation/ofxICSegmentationClient.h"
+#include "segmentation/ofxICSegmentationTypes.h"
 #include "chat/ofxICChatSession.h"
 #include "chat/ofxICChatTypes.h"
 #include "documents/ofxICDocumentIndex.h"

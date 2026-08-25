@@ -8,6 +8,8 @@ add_executable(ofxIC_tests
 	test_main.cpp
 	test_endpoint.cpp
 	test_media_client.cpp
+	test_transcription_client.cpp
+	test_segmentation_client.cpp
 	test_chat_session.cpp
 	test_document_index.cpp
 	test_example_settings.cpp
@@ -17,6 +19,8 @@ add_executable(ofxIC_tests
 	../src/endpoint/ofxICEndpoint.cpp
 	../src/media/ofxICMediaClient.cpp
 	../src/media/ofxICMediaClientHuggingFaceFal.cpp
+	../src/audio/ofxICTranscriptionClient.cpp
+	../src/segmentation/ofxICSegmentationClient.cpp
 	../src/chat/ofxICChatSession.cpp
 	../src/documents/ofxICDocumentIndex.cpp
 	../ofxICExample/src/ExampleSettings.cpp

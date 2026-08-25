@@ -9,6 +9,8 @@ struct ExampleSettings {
 	int endpointProfile = 0;
 	std::string endpointUrl = "http://127.0.0.1:8080";
 	std::string modelId;
+	int transcriptionProtocol = 0;
+	std::string transcriptionModel = "whisper-1";
 	int mediaBackend = 2;
 	int mediaKind = 0;
 	std::string mediaEndpointUrl = "http://127.0.0.1:8080";

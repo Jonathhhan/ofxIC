@@ -7,7 +7,9 @@ meta:
 
 common:
 	ADDON_INCLUDES = src
-	ADDON_SOURCES = src/endpoint/ofxICEndpoint.cpp
+	ADDON_SOURCES = src/audio/ofxICTranscriptionClient.cpp
+	ADDON_SOURCES += src/segmentation/ofxICSegmentationClient.cpp
+	ADDON_SOURCES += src/endpoint/ofxICEndpoint.cpp
 	ADDON_SOURCES += src/chat/ofxICChatSession.cpp
 	ADDON_SOURCES += src/media/ofxICMediaClient.cpp
 	ADDON_SOURCES += src/media/ofxICMediaClientHuggingFaceFal.cpp

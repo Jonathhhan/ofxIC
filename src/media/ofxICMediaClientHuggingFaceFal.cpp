@@ -375,6 +375,7 @@ bool MediaClient::downloadHuggingFaceFalOutput(const std::string & url, MediaJob
 	downloadRequest.accept = "*/*";
 	downloadRequest.useBearerToken = false;
 	downloadRequest.timeoutSeconds = 300;
+	downloadRequest.maxResponseBytes = 512U * 1024U * 1024U;
 	const HttpResponse response = endpoint.perform(std::move(downloadRequest));
 	job.httpStatus = response.status;
 	if (!response.started) {

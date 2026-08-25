@@ -8,6 +8,8 @@ workflow state; inference remains in a separate local or hosted process.
 ```text
 openFrameworks app
   -> chat: ToolLoop -> DocumentIndex -> ChatSession
+  -> audio: TranscriptionClient -> explicit OpenAI or whisper.cpp route
+  -> segmentation: SegmentationClient -> explicit SAM bridge v1
   -> media: MediaClient -> image response or async media job
   -> ofxIC::Endpoint
   -> external llama-server, stable-diffusion.cpp, or hosted provider
@@ -21,6 +23,13 @@ addon.
 
 - `Endpoint` owns endpoint configuration and HTTP transport.
 - `ChatSession` owns conversation history.
+- `TranscriptionClient` maps binary multipart requests onto either OpenAI
+  `/v1/audio/transcriptions` or `whisper.cpp` `/inference`; it owns no decoder
+  or model runtime and does not treat the two protocols as interchangeable.
+- `SegmentationClient` owns no SAM runtime. It maps PPM images and normalized
+  point prompts onto the explicit localhost SAM bridge v1 and accepts PGM masks.
+  The bridge may invoke an independently installed runner; fixture success is
+  never reported as model-backed segmentation evidence.
 - `MediaClient` owns no runtime; it maps typed OpenAI image requests, native
   `stable-diffusion.cpp` jobs, and explicit Hugging Face fal-ai media jobs onto
   configured endpoints.
@@ -44,6 +53,8 @@ addon.
 - Endpoint inspection establishes reachability and advertised model identity;
   token validity, provider credit, and inference capability remain properties
   of an exercised inference request.
+- HTTP responses are bounded before parsing: inspection and chat use tighter
+  JSON limits, while explicit binary media downloads opt into a larger bound.
 
 ## Deliberately absent
 

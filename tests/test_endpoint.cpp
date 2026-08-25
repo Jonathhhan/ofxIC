@@ -63,6 +63,21 @@ OFXIC_TEST(endpoint_inspection_can_be_cancelled) {
 	OFXIC_REQUIRE(receivedCancellation);
 }
 
+OFXIC_TEST(endpoint_rejects_oversized_model_response) {
+	ofxIC::Endpoint endpoint("http://example.test", [](const ofxIC::HttpRequest &) {
+		ofxIC::HttpResponse response;
+		response.started = true;
+		response.status = 200;
+		response.body.assign(8U * 1024U * 1024U + 1U, 'x');
+		return response;
+	});
+
+	const auto status = endpoint.inspect();
+	OFXIC_REQUIRE(!status);
+	OFXIC_REQUIRE(status.httpStatus == 0);
+	OFXIC_REQUIRE(status.error.find("byte limit") != std::string::npos);
+}
+
 OFXIC_TEST(endpoint_builds_chat_completions_body) {
 	ofxIC::HttpRequest captured;
 	ofxIC::Endpoint endpoint("http://localhost:8001", [&](const ofxIC::HttpRequest & httpRequest) {

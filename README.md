@@ -2,10 +2,11 @@
 
 **Inference Connector for openFrameworks.** `ofxIC` connects an openFrameworks
 application to external model endpoints. Its compact surface covers chat with
-one allowlisted document tool, OpenAI-compatible image generation, and native
-asynchronous image/video jobs exposed by `stable-diffusion.cpp`. A separate
-Hugging Face media path routes text-to-image and text-to-video through fal-ai.
-Inference always remains in a separate local or hosted process.
+one allowlisted document tool, explicit OpenAI and `whisper.cpp` transcription
+protocols, explicit SAM bridge point segmentation, OpenAI-compatible image generation, and native asynchronous
+image/video jobs exposed by `stable-diffusion.cpp`. A separate Hugging Face
+media path routes text-to-image and text-to-video through fal-ai. Inference
+always remains in a separate local or hosted process.
 
 The addon does **not** embed ggml, llama.cpp, CUDA, SAM, or another native model
 runtime. Run `llama-server` separately and update it independently.
@@ -147,6 +148,41 @@ The client resolves the HF model's current fal-ai mapping, keeps the HF token
 on router requests, and downloads the returned media bytes without forwarding
 that token to the output CDN.
 
+Audio transcription is also an external endpoint operation. Select the OpenAI
+protocol for `/v1/audio/transcriptions`, or point the custom endpoint at a
+separately running `whisper.cpp` server and select its `/inference` protocol:
+
+```cpp
+ofxIC::TranscriptionClient transcription(endpoint);
+ofxIC::TranscriptionRequest request;
+request.audioBytes = wavBytes;
+request.filename = "recording.wav";
+request.model = "whisper-1"; // OpenAI only; whisper.cpp selects at server start.
+
+const auto transcript = transcription.transcribeOpenAI(request);
+```
+
+The two methods are deliberately separate because these endpoints do not share
+one universal transcription contract.
+
+Prompted image segmentation uses the explicitly named `ofxIC SAM bridge v1`,
+not a claimed provider standard. The client uploads a PPM image plus normalized
+positive or negative points to `/v1/segmentations` and receives one PGM mask.
+The regular example exposes the first positive-point workflow:
+
+```cpp
+ofxIC::SegmentationClient segmentation(endpoint);
+ofxIC::SegmentationRequest request;
+request.imageBytes = ppmBytes;
+request.points.push_back({ 0.5f, 0.5f, true });
+const auto mask = segmentation.segmentSamBridge(request);
+```
+
+`scripts\sam-bridge-server.py` implements the localhost process boundary. Its
+real mode invokes an independently supplied `sam-runner` with the existing
+`--model`, `--image`, `--output`, and repeated point-flag contract. Its fixture
+mode exists only for deterministic GUI evidence and performs no inference.
+
 ## Scope
 
 Implemented:
@@ -154,6 +190,8 @@ Implemented:
 - `/v1/models` endpoint inspection
 - `/v1/chat/completions`
 - `/v1/images/generations`
+- OpenAI `/v1/audio/transcriptions` and `whisper.cpp` `/inference`
+- explicit `/v1/segmentations` SAM bridge v1 point segmentation
 - native `stable-diffusion.cpp` image/video submission and job polling
 - Hugging Face text-to-image and queued text-to-video through fal-ai routing
 - conversational history
@@ -168,6 +206,8 @@ Proven end to end:
 - deterministic protocol tests on Linux and Windows
 - compilation and GUI launch against the current openFrameworks Linux nightly
 - automated keyboard input through the real example GUI
+- local `whisper.cpp` transcription through the regular Windows GUI using
+  `ggml-tiny.en` and the `jfk.wav` speech sample
 - a marker-gated Hugging Face run with two model requests, local
   `search_documents` execution, and a cited final answer
 
@@ -190,7 +230,8 @@ Not part of the supported surface yet:
 `ofxICExample` uses `ofxImGui` to switch between `llama-server`,
 LM Studio, Hugging Face, OpenAI, and a custom endpoint. The same GUI also
 selects an independent media backend, generates images, submits native or
-Hugging Face video jobs, polls them, and displays returned media.
+Hugging Face video jobs, polls them, displays returned media, and sends an
+explicitly selected audio file to either supported transcription protocol.
 
 | Media backend | Image | Video | Behavior |
 | --- | --- | --- | --- |
@@ -229,8 +270,26 @@ cannot be used as an `ofxIC` endpoint.
 - `scripts\smoke-huggingface-inspection.ps1` exercises the Windows GUI,
   Schannel, HF model listing, and inspection evidence wording with an explicit
   fake token. It does not validate credentials or consume inference credit.
+- `scripts\smoke-https-cancellation.ps1` explicitly uses a delayed public HTTPS
+  route to verify that closing the Windows GUI interrupts a blocking WinHTTP
+  request. It uses a fake token and is separate from deterministic tests.
 - `OFXIC_DOCUMENT_PATH` deliberately loads one document at startup;
   `OFXIC_DOCUMENT_RESULT_PATH` records its GUI automation status.
+- `OFXIC_AUDIO_PATH` and `OFXIC_TRANSCRIPTION_AUTORUN=openai|whisper-cpp`
+  exercise a deliberately selected audio file through the real GUI lifecycle.
+  `OFXIC_TRANSCRIPTION_MODEL` overrides the OpenAI audio model. The deterministic
+  `scripts\smoke-transcription.ps1` fixture verifies this path without claiming
+  that a real speech model ran.
+- `scripts\smoke-whisper-cpp-live.ps1 -Server <whisper-server.exe> -Model
+  <ggml-model.bin> -Audio <speech.wav>` is the separate marker-gated live proof.
+  It starts the external runtime, exercises the regular GUI, requires a nonempty
+  model-produced transcript, and keeps binaries, models, audio, and output out
+  of Git.
+- `scripts\smoke-segmentation.ps1` is the deterministic SAM bridge fixture and
+  performs no inference. `scripts\smoke-sam-live.ps1 -Runner <sam-runner.exe>
+  -Model <model.ggml> -Image <input.ppm>` is the separate model-backed proof. It
+  exercises the external runner through the bridge and regular GUI, requires a
+  returned PGM mask, and keeps the runner, model, inputs, and output out of Git.
 - `OFXIC_MEDIA_BACKEND`, `OFXIC_MEDIA_ENDPOINT_URL`,
   `OFXIC_MEDIA_IMAGE_MODEL`, `OFXIC_MEDIA_VIDEO_MODEL`, and
   `OFXIC_MEDIA_API_KEY` configure media independently from chat.

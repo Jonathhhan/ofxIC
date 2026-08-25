@@ -9,10 +9,14 @@ OFXIC_TEST(public_umbrella_header_exposes_api) {
 	tools.addDocumentSearch(documents);
 	ofxIC::ToolLoop loop(chat, tools);
 	ofxIC::MediaClient media(endpoint);
+	ofxIC::TranscriptionClient transcription(endpoint);
+	ofxIC::SegmentationClient segmentation(endpoint);
 	OFXIC_REQUIRE(endpoint.getBaseUrl() == "http://localhost:8001");
 	OFXIC_REQUIRE(chat.getMessages().empty());
 	OFXIC_REQUIRE(tools.contains("search_documents"));
 	ofxIC::ImageRequest image;
 	image.prompt = "test";
 	OFXIC_REQUIRE(!media.generateImage(image));
+	OFXIC_REQUIRE(!transcription.transcribeOpenAI({}));
+	OFXIC_REQUIRE(!segmentation.segmentSamBridge({}));
 }
