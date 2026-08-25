@@ -18,8 +18,10 @@ OFXIC_TEST(example_settings_round_trip_non_secret_values) {
 	saved.endpointProfile = 4;
 	saved.endpointUrl = "https://example.test/v1?mode=custom";
 	saved.modelId = "org/model with spaces";
+	saved.transcriptionEndpointUrl = "https://audio.example.test";
 	saved.transcriptionProtocol = 1;
 	saved.transcriptionModel = "org/audio-model";
+	saved.segmentationEndpointUrl = "http://127.0.0.1:19001";
 	saved.mediaBackend = 1;
 	saved.mediaKind = 1;
 	saved.mediaEndpointUrl = "https://media.example.test";
@@ -38,8 +40,10 @@ OFXIC_TEST(example_settings_round_trip_non_secret_values) {
 	OFXIC_REQUIRE(loaded.endpointProfile == saved.endpointProfile);
 	OFXIC_REQUIRE(loaded.endpointUrl == saved.endpointUrl);
 	OFXIC_REQUIRE(loaded.modelId == saved.modelId);
+	OFXIC_REQUIRE(loaded.transcriptionEndpointUrl == saved.transcriptionEndpointUrl);
 	OFXIC_REQUIRE(loaded.transcriptionProtocol == saved.transcriptionProtocol);
 	OFXIC_REQUIRE(loaded.transcriptionModel == saved.transcriptionModel);
+	OFXIC_REQUIRE(loaded.segmentationEndpointUrl == saved.segmentationEndpointUrl);
 	OFXIC_REQUIRE(loaded.mediaBackend == saved.mediaBackend);
 	OFXIC_REQUIRE(loaded.mediaKind == saved.mediaKind);
 	OFXIC_REQUIRE(loaded.mediaEndpointUrl == saved.mediaEndpointUrl);
@@ -91,6 +95,8 @@ OFXIC_TEST(example_settings_loads_version_one_without_audio_keys) {
 	OFXIC_REQUIRE(settings.modelId == "legacy-model");
 	OFXIC_REQUIRE(settings.transcriptionProtocol == 0);
 	OFXIC_REQUIRE(settings.transcriptionModel == "whisper-1");
+	OFXIC_REQUIRE(settings.transcriptionEndpointUrl == "http://127.0.0.1:8080");
+	OFXIC_REQUIRE(settings.segmentationEndpointUrl == "http://127.0.0.1:18085");
 	OFXIC_REQUIRE(ofxICExample::removeSettings(settingsPath));
 }
 
@@ -110,7 +116,9 @@ OFXIC_TEST(example_environment_overrides_saved_settings_predictably) {
 		{ "OFXIC_ENDPOINT_URL", "https://api.openai.com/v1" },
 		{ "OFXIC_MODEL", "environment-model" },
 		{ "OFXIC_TRANSCRIPTION_AUTORUN", "whisper-cpp" },
+		{ "OFXIC_TRANSCRIPTION_ENDPOINT_URL", "http://127.0.0.1:19002" },
 		{ "OFXIC_TRANSCRIPTION_MODEL", "environment-audio-model" },
+		{ "OFXIC_SEGMENTATION_ENDPOINT_URL", "http://127.0.0.1:19003" },
 		{ "OFXIC_MEDIA_BACKEND", "hf" },
 		{ "OFXIC_MEDIA_ENDPOINT_URL", "https://media.environment.test" },
 		{ "OFXIC_MEDIA_VIDEO_MODEL", "environment-video" },
@@ -126,7 +134,9 @@ OFXIC_TEST(example_environment_overrides_saved_settings_predictably) {
 	OFXIC_REQUIRE(settings.endpointUrl == "https://api.openai.com/v1");
 	OFXIC_REQUIRE(settings.modelId == "environment-model");
 	OFXIC_REQUIRE(settings.transcriptionProtocol == 1);
+	OFXIC_REQUIRE(settings.transcriptionEndpointUrl == "http://127.0.0.1:19002");
 	OFXIC_REQUIRE(settings.transcriptionModel == "environment-audio-model");
+	OFXIC_REQUIRE(settings.segmentationEndpointUrl == "http://127.0.0.1:19003");
 	OFXIC_REQUIRE(settings.mediaBackend == 1);
 	OFXIC_REQUIRE(settings.mediaEndpointUrl == "https://media.environment.test");
 	OFXIC_REQUIRE(settings.mediaImageModel == "black-forest-labs/FLUX.1-dev");
@@ -144,4 +154,16 @@ OFXIC_TEST(example_environment_overrides_saved_settings_predictably) {
 	OFXIC_REQUIRE(serialized.find("must-never-be-persisted") == std::string::npos);
 	input.close();
 	OFXIC_REQUIRE(ofxICExample::removeSettings(settingsPath));
+}
+
+OFXIC_TEST(example_general_endpoint_override_remains_a_legacy_task_default) {
+	ofxICExample::ExampleSettings settings;
+	settings.transcriptionEndpointUrl = "http://saved-audio.test";
+	settings.segmentationEndpointUrl = "http://saved-sam.test";
+	const std::map<std::string, std::string> environment{
+		{ "OFXIC_ENDPOINT_URL", "http://legacy-automation.test" },
+	};
+	ofxICExample::applyEnvironmentOverrides(settings, environment);
+	OFXIC_REQUIRE(settings.transcriptionEndpointUrl == "http://legacy-automation.test");
+	OFXIC_REQUIRE(settings.segmentationEndpointUrl == "http://legacy-automation.test");
 }

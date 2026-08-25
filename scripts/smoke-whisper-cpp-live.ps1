@@ -27,6 +27,7 @@ $serverOut = Join-Path $temporary "server.stdout.txt"
 $serverErr = Join-Path $temporary "server.stderr.txt"
 $previous = @{
 	Endpoint = $env:OFXIC_ENDPOINT_URL
+	TranscriptionEndpoint = $env:OFXIC_TRANSCRIPTION_ENDPOINT_URL
 	Audio = $env:OFXIC_AUDIO_PATH
 	Autorun = $env:OFXIC_TRANSCRIPTION_AUTORUN
 	Result = $env:OFXIC_GUI_RESULT_PATH
@@ -59,7 +60,8 @@ try {
 	} while (-not $serverReady -and [DateTime]::UtcNow -lt $readyDeadline)
 	if (-not $serverReady) { throw "whisper-server did not become ready" }
 
-	$env:OFXIC_ENDPOINT_URL = "http://127.0.0.1:$Port"
+	$env:OFXIC_ENDPOINT_URL = "http://127.0.0.1:1"
+	$env:OFXIC_TRANSCRIPTION_ENDPOINT_URL = "http://127.0.0.1:$Port"
 	$env:OFXIC_AUDIO_PATH = $audioPath
 	$env:OFXIC_TRANSCRIPTION_AUTORUN = "whisper-cpp"
 	$env:OFXIC_GUI_RESULT_PATH = $resultPath
@@ -93,6 +95,7 @@ try {
 		Stop-Process -Id $serverProcess.Id -Force -ErrorAction SilentlyContinue
 	}
 	$env:OFXIC_ENDPOINT_URL = $previous.Endpoint
+	$env:OFXIC_TRANSCRIPTION_ENDPOINT_URL = $previous.TranscriptionEndpoint
 	$env:OFXIC_AUDIO_PATH = $previous.Audio
 	$env:OFXIC_TRANSCRIPTION_AUTORUN = $previous.Autorun
 	$env:OFXIC_GUI_RESULT_PATH = $previous.Result

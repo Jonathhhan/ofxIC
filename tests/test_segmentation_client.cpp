@@ -20,8 +20,45 @@ OFXIC_TEST(segmentation_client_builds_explicit_sam_bridge_request) {
 	OFXIC_REQUIRE(result);
 	OFXIC_REQUIRE(captured.url == "http://127.0.0.1:8090/v1/segmentations");
 	OFXIC_REQUIRE(captured.accept == "image/x-portable-graymap");
+	OFXIC_REQUIRE(captured.headers.size() == 1);
+	OFXIC_REQUIRE(captured.headers[0].first == "X-ofxIC-SAM-Bridge-Version");
+	OFXIC_REQUIRE(captured.headers[0].second == "1");
 	OFXIC_REQUIRE(captured.body.find("name=\"image\"") != std::string::npos);
 	OFXIC_REQUIRE(captured.body.find("0.25,0.75,positive") != std::string::npos);
+}
+
+OFXIC_TEST(segmentation_client_rejects_too_many_prompts_before_transport) {
+	int calls = 0;
+	ofxIC::Endpoint endpoint("http://example.test", [&](const ofxIC::HttpRequest &) {
+		++calls;
+		return ofxIC::HttpResponse{};
+	});
+	ofxIC::SegmentationClient client(endpoint);
+	ofxIC::SegmentationRequest request;
+	request.imageBytes = "ppm";
+	request.points.resize(65);
+	const auto result = client.segmentSamBridge(request);
+	OFXIC_REQUIRE(!result);
+	OFXIC_REQUIRE(result.error.find("64 points") != std::string::npos);
+	OFXIC_REQUIRE(calls == 0);
+}
+
+OFXIC_TEST(segmentation_client_preserves_bridge_problem_details) {
+	ofxIC::Endpoint endpoint("http://example.test", [](const ofxIC::HttpRequest &) {
+		ofxIC::HttpResponse response;
+		response.started = true;
+		response.status = 504;
+		response.body = "runner_timeout: SAM adapter exceeded its timeout";
+		return response;
+	});
+	ofxIC::SegmentationClient client(endpoint);
+	ofxIC::SegmentationRequest request;
+	request.imageBytes = "ppm";
+	request.points.push_back({});
+	const auto result = client.segmentSamBridge(request);
+	OFXIC_REQUIRE(!result);
+	OFXIC_REQUIRE(result.httpStatus == 504);
+	OFXIC_REQUIRE(result.error.find("runner_timeout") != std::string::npos);
 }
 
 OFXIC_TEST(segmentation_client_rejects_invalid_prompt_before_transport) {

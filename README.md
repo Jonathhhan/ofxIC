@@ -3,8 +3,9 @@
 **Inference Connector for openFrameworks.** `ofxIC` connects an openFrameworks
 application to external model endpoints. Its compact surface covers chat with
 one allowlisted document tool, explicit OpenAI and `whisper.cpp` transcription
-protocols, explicit SAM bridge point segmentation, OpenAI-compatible image generation, and native asynchronous
-image/video jobs exposed by `stable-diffusion.cpp`. A separate Hugging Face
+protocols, explicit SAM bridge point segmentation, OpenAI-compatible image
+generation, and native asynchronous image/video jobs exposed by
+`stable-diffusion.cpp`. A separate Hugging Face
 media path routes text-to-image and text-to-video through fal-ai. Inference
 always remains in a separate local or hosted process.
 
@@ -168,7 +169,10 @@ one universal transcription contract.
 Prompted image segmentation uses the explicitly named `ofxIC SAM bridge v1`,
 not a claimed provider standard. The client uploads a PPM image plus normalized
 positive or negative points to `/v1/segmentations` and receives one PGM mask.
-The regular example exposes the first positive-point workflow:
+The regular example can queue multiple positive and negative prompts; an empty
+queue preserves the single positive point workflow. Left-clicking its input
+preview adds a positive prompt, right-clicking adds a negative prompt, and the
+rendered markers can be undone or cleared:
 
 ```cpp
 ofxIC::SegmentationClient segmentation(endpoint);
@@ -181,7 +185,12 @@ const auto mask = segmentation.segmentSamBridge(request);
 `scripts\sam-bridge-server.py` implements the localhost process boundary. Its
 real mode invokes an independently supplied `sam-runner` with the existing
 `--model`, `--image`, `--output`, and repeated point-flag contract. Its fixture
-mode exists only for deterministic GUI evidence and performs no inference.
+mode exists only for deterministic GUI evidence and performs no inference. The
+client and bridge require `X-ofxIC-SAM-Bridge-Version: 1`, accept at most 64
+points, bound request and mask sizes, validate complete PPM/PGM payloads, and
+report stable text error codes. The bridge rejects concurrent model runs and
+supports `--runner-timeout <seconds>` rather than allowing an orphaned request
+to wait indefinitely.
 
 ## Scope
 
@@ -208,6 +217,8 @@ Proven end to end:
 - automated keyboard input through the real example GUI
 - local `whisper.cpp` transcription through the regular Windows GUI using
   `ggml-tiny.en` and the `jfk.wav` speech sample
+- local SAM2.1 point segmentation through the regular Windows GUI, explicit
+  localhost bridge, and independently built `ofxGgmlSam` runner
 - a marker-gated Hugging Face run with two model requests, local
   `search_documents` execution, and a cited final answer
 
@@ -232,6 +243,9 @@ LM Studio, Hugging Face, OpenAI, and a custom endpoint. The same GUI also
 selects an independent media backend, generates images, submits native or
 Hugging Face video jobs, polls them, displays returned media, and sends an
 explicitly selected audio file to either supported transcription protocol.
+Chat, transcription, SAM, and media have separate endpoint URL fields so their
+external processes can remain available at the same time; **Use chat URL** is a
+deliberate convenience action rather than an implicit protocol assumption.
 
 | Media backend | Image | Video | Behavior |
 | --- | --- | --- | --- |
@@ -277,6 +291,7 @@ cannot be used as an `ofxIC` endpoint.
   `OFXIC_DOCUMENT_RESULT_PATH` records its GUI automation status.
 - `OFXIC_AUDIO_PATH` and `OFXIC_TRANSCRIPTION_AUTORUN=openai|whisper-cpp`
   exercise a deliberately selected audio file through the real GUI lifecycle.
+  `OFXIC_TRANSCRIPTION_ENDPOINT_URL` selects its endpoint independently;
   `OFXIC_TRANSCRIPTION_MODEL` overrides the OpenAI audio model. The deterministic
   `scripts\smoke-transcription.ps1` fixture verifies this path without claiming
   that a real speech model ran.
@@ -290,6 +305,11 @@ cannot be used as an `ofxIC` endpoint.
   -Model <model.ggml> -Image <input.ppm>` is the separate model-backed proof. It
   exercises the external runner through the bridge and regular GUI, requires a
   returned PGM mask, and keeps the runner, model, inputs, and output out of Git.
+- `OFXIC_SEGMENTATION_ENDPOINT_URL` selects the SAM bridge independently.
+  `OFXIC_SEGMENTATION_NEGATIVE_POINT_X` and
+  `OFXIC_SEGMENTATION_NEGATIVE_POINT_Y` add a negative prompt to GUI automation.
+  `OFXIC_ENDPOINT_URL` remains a backward-compatible default for audio and SAM
+  automation when their task-specific variables are absent.
 - `OFXIC_MEDIA_BACKEND`, `OFXIC_MEDIA_ENDPOINT_URL`,
   `OFXIC_MEDIA_IMAGE_MODEL`, `OFXIC_MEDIA_VIDEO_MODEL`, and
   `OFXIC_MEDIA_API_KEY` configure media independently from chat.

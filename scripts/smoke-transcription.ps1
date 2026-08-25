@@ -19,6 +19,7 @@ if (-not (Test-Path -LiteralPath $executablePath)) {
 
 $previous = @{
 	Endpoint = $env:OFXIC_ENDPOINT_URL
+	TranscriptionEndpoint = $env:OFXIC_TRANSCRIPTION_ENDPOINT_URL
 	Audio = $env:OFXIC_AUDIO_PATH
 	Autorun = $env:OFXIC_TRANSCRIPTION_AUTORUN
 	Model = $env:OFXIC_TRANSCRIPTION_MODEL
@@ -49,7 +50,8 @@ try {
 		}
 	} while (-not $serverReady -and [DateTime]::UtcNow -lt $readyDeadline)
 	if (-not $serverReady) { throw "Transcription fixture server did not become ready" }
-	$env:OFXIC_ENDPOINT_URL = "http://127.0.0.1:$Port"
+	$env:OFXIC_ENDPOINT_URL = "http://127.0.0.1:1"
+	$env:OFXIC_TRANSCRIPTION_ENDPOINT_URL = "http://127.0.0.1:$Port"
 	$env:OFXIC_AUDIO_PATH = $audioPath
 	$env:OFXIC_TRANSCRIPTION_AUTORUN = $Protocol
 	$env:OFXIC_TRANSCRIPTION_MODEL = "whisper-1"
@@ -83,6 +85,7 @@ try {
 		Stop-Process -Id $server.Id -Force -ErrorAction SilentlyContinue
 	}
 	$env:OFXIC_ENDPOINT_URL = $previous.Endpoint
+	$env:OFXIC_TRANSCRIPTION_ENDPOINT_URL = $previous.TranscriptionEndpoint
 	$env:OFXIC_AUDIO_PATH = $previous.Audio
 	$env:OFXIC_TRANSCRIPTION_AUTORUN = $previous.Autorun
 	$env:OFXIC_TRANSCRIPTION_MODEL = $previous.Model

@@ -11,9 +11,11 @@ $temporary = Join-Path ([System.IO.Path]::GetTempPath()) ("ofxIC-sam-" + [guid]:
 $imagePath = Join-Path $temporary "fixture.ppm"
 $resultPath = Join-Path $temporary "result.txt"
 $previous = @{
-	Endpoint = $env:OFXIC_ENDPOINT_URL; Autorun = $env:OFXIC_SEGMENTATION_AUTORUN
+	Endpoint = $env:OFXIC_ENDPOINT_URL; SegmentationEndpoint = $env:OFXIC_SEGMENTATION_ENDPOINT_URL
+	Autorun = $env:OFXIC_SEGMENTATION_AUTORUN
 	Image = $env:OFXIC_SEGMENTATION_IMAGE; X = $env:OFXIC_SEGMENTATION_POINT_X
-	Y = $env:OFXIC_SEGMENTATION_POINT_Y; Result = $env:OFXIC_GUI_RESULT_PATH
+	Y = $env:OFXIC_SEGMENTATION_POINT_Y; NegativeX = $env:OFXIC_SEGMENTATION_NEGATIVE_POINT_X
+	NegativeY = $env:OFXIC_SEGMENTATION_NEGATIVE_POINT_Y; Result = $env:OFXIC_GUI_RESULT_PATH
 	Settings = $env:OFXIC_SETTINGS_PATH
 }
 $server = $null
@@ -33,11 +35,24 @@ try {
 		finally { $probe.Dispose() }
 	} while (-not $ready -and [DateTime]::UtcNow -lt $deadline)
 	if (-not $ready) { throw "SAM bridge did not become ready" }
-	$env:OFXIC_ENDPOINT_URL = "http://127.0.0.1:$Port"
+	$bridgeUrl = "http://127.0.0.1:$Port/v1/segmentations"
+	$versionProbe = Invoke-WebRequest -Uri $bridgeUrl -Method Post -Body 'x' -SkipHttpErrorCheck
+	if ($versionProbe.StatusCode -ne 426 -or $versionProbe.Content -notmatch 'bridge_version_mismatch') {
+		throw "SAM bridge did not enforce bridge v1 compatibility"
+	}
+	$invalidProbe = Invoke-WebRequest -Uri $bridgeUrl -Method Post -Body 'x' `
+		-Headers @{ 'X-ofxIC-SAM-Bridge-Version' = '1' } -SkipHttpErrorCheck
+	if ($invalidProbe.StatusCode -ne 400 -or $invalidProbe.Content -notmatch 'invalid_request') {
+		throw "SAM bridge did not return its structured invalid-request error"
+	}
+	$env:OFXIC_ENDPOINT_URL = "http://127.0.0.1:1"
+	$env:OFXIC_SEGMENTATION_ENDPOINT_URL = "http://127.0.0.1:$Port"
 	$env:OFXIC_SEGMENTATION_AUTORUN = '1'
 	$env:OFXIC_SEGMENTATION_IMAGE = $imagePath
 	$env:OFXIC_SEGMENTATION_POINT_X = '0.5'
 	$env:OFXIC_SEGMENTATION_POINT_Y = '0.5'
+	$env:OFXIC_SEGMENTATION_NEGATIVE_POINT_X = '0.0'
+	$env:OFXIC_SEGMENTATION_NEGATIVE_POINT_Y = '0.0'
 	$env:OFXIC_GUI_RESULT_PATH = $resultPath
 	$env:OFXIC_SETTINGS_PATH = (Join-Path $temporary 'settings')
 	$example = Start-Process $executablePath -WorkingDirectory (Split-Path $executablePath) `
@@ -54,9 +69,11 @@ try {
 } finally {
 	if ($example -and -not $example.HasExited) { Stop-Process $example.Id -Force -ErrorAction SilentlyContinue }
 	if ($server -and -not $server.HasExited) { Stop-Process $server.Id -Force -ErrorAction SilentlyContinue }
-	$env:OFXIC_ENDPOINT_URL=$previous.Endpoint; $env:OFXIC_SEGMENTATION_AUTORUN=$previous.Autorun
+	$env:OFXIC_ENDPOINT_URL=$previous.Endpoint; $env:OFXIC_SEGMENTATION_ENDPOINT_URL=$previous.SegmentationEndpoint
+	$env:OFXIC_SEGMENTATION_AUTORUN=$previous.Autorun
 	$env:OFXIC_SEGMENTATION_IMAGE=$previous.Image; $env:OFXIC_SEGMENTATION_POINT_X=$previous.X
-	$env:OFXIC_SEGMENTATION_POINT_Y=$previous.Y; $env:OFXIC_GUI_RESULT_PATH=$previous.Result
+	$env:OFXIC_SEGMENTATION_POINT_Y=$previous.Y; $env:OFXIC_SEGMENTATION_NEGATIVE_POINT_X=$previous.NegativeX
+	$env:OFXIC_SEGMENTATION_NEGATIVE_POINT_Y=$previous.NegativeY; $env:OFXIC_GUI_RESULT_PATH=$previous.Result
 	$env:OFXIC_SETTINGS_PATH=$previous.Settings
 	if (Test-Path $temporary) { Remove-Item -LiteralPath $temporary -Recurse -Force }
 }

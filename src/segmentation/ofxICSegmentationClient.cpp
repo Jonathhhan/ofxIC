@@ -7,6 +7,9 @@
 namespace ofxIC {
 namespace {
 
+constexpr std::size_t maximumImageBytes = 60U * 1024U * 1024U;
+constexpr std::size_t maximumPoints = 64U;
+
 std::string safeFilename(std::string value) {
 	value.erase(std::remove_if(value.begin(), value.end(), [](char c) {
 		return c == '\r' || c == '\n' || c == '"' || c == '\\';
@@ -32,8 +35,16 @@ SegmentationResult SegmentationClient::segmentSamBridge(
 		result.error = "segmentation image is empty";
 		return result;
 	}
+	if (request.imageBytes.size() > maximumImageBytes) {
+		result.error = "segmentation image exceeds the 60 MiB client limit";
+		return result;
+	}
 	if (request.points.empty()) {
 		result.error = "segmentation requires at least one point";
+		return result;
+	}
+	if (request.points.size() > maximumPoints) {
+		result.error = "segmentation accepts at most 64 points";
 		return result;
 	}
 	for (const auto & point : request.points) {
@@ -64,6 +75,7 @@ SegmentationResult SegmentationClient::segmentSamBridge(
 	httpRequest.body = std::move(body);
 	httpRequest.contentType = "multipart/form-data; boundary=" + boundary;
 	httpRequest.accept = "image/x-portable-graymap";
+	httpRequest.headers.emplace_back("X-ofxIC-SAM-Bridge-Version", "1");
 	httpRequest.timeoutSeconds = 300;
 	httpRequest.maxResponseBytes = 64U * 1024U * 1024U;
 	httpRequest.shouldCancel = std::move(shouldCancel);
@@ -75,9 +87,13 @@ SegmentationResult SegmentationClient::segmentSamBridge(
 		return result;
 	}
 	if (!response.started || response.status < 200 || response.status >= 300) {
-		result.error = response.error.empty()
-			? "SAM bridge returned HTTP " + std::to_string(response.status)
-			: response.error;
+		if (!response.body.empty() && response.body.size() <= 4096U) {
+			result.error = response.body;
+		} else {
+			result.error = response.error.empty()
+				? "SAM bridge returned HTTP " + std::to_string(response.status)
+				: response.error;
+		}
 		return result;
 	}
 	if (response.body.size() < 3 || response.body[0] != 'P' ||

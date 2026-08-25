@@ -51,11 +51,15 @@ private:
 	void finishMediaWorker();
 	std::string configuredToken() const;
 	std::string configuredTokenSource() const;
+	std::string configuredTranscriptionToken() const;
+	std::string configuredSegmentationToken() const;
 	std::string configuredMediaToken() const;
 	std::string configuredMediaTokenSource() const;
 
 	ofxImGui::Gui gui;
 	ofxIC::Endpoint endpoint;
+	ofxIC::Endpoint transcriptionEndpoint;
+	ofxIC::Endpoint segmentationEndpoint;
 	ofxIC::Endpoint mediaEndpoint;
 	ofxIC::ChatSession chat;
 	ofxIC::MediaClient media;
@@ -65,6 +69,8 @@ private:
 	ofxIC::ToolRegistry tools;
 	ofxIC::ToolLoop toolLoop;
 	std::array<char, 512> endpointUrl{};
+	std::array<char, 512> transcriptionEndpointUrl{};
+	std::array<char, 512> segmentationEndpointUrl{};
 	std::array<char, 512> mediaEndpointUrl{};
 	std::array<char, 256> modelId{};
 	std::array<char, 256> transcriptionModel{};

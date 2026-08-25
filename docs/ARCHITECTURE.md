@@ -12,10 +12,13 @@ openFrameworks app
   -> segmentation: SegmentationClient -> explicit SAM bridge v1
   -> media: MediaClient -> image response or async media job
   -> ofxIC::Endpoint
-  -> external llama-server, stable-diffusion.cpp, or hosted provider
+  -> external llama-server, whisper.cpp, SAM runner, stable-diffusion.cpp,
+     or hosted provider
 ```
 
-The process boundary is architectural. It prevents unrelated native runtimes
+Each client may reference a separately configured `Endpoint`; the regular
+example does so for chat, transcription, segmentation, and media. The process
+boundary is architectural. It prevents unrelated native runtimes
 from forcing one ggml version, one CUDA build, or one release cycle on the
 addon.
 
@@ -29,7 +32,9 @@ addon.
 - `SegmentationClient` owns no SAM runtime. It maps PPM images and normalized
   point prompts onto the explicit localhost SAM bridge v1 and accepts PGM masks.
   The bridge may invoke an independently installed runner; fixture success is
-  never reported as model-backed segmentation evidence.
+  never reported as model-backed segmentation evidence. Version negotiation,
+  bounded images/prompts/masks, strict portable-map validation, single-runner
+  admission, and a configurable runner timeout protect that process boundary.
 - `MediaClient` owns no runtime; it maps typed OpenAI image requests, native
   `stable-diffusion.cpp` jobs, and explicit Hugging Face fal-ai media jobs onto
   configured endpoints.

@@ -84,11 +84,13 @@ std::string tokenSetupHint(const std::string & variable) {
 
 std::map<std::string, std::string> settingsEnvironment() {
 	std::map<std::string, std::string> values;
-	constexpr std::array<const char *, 13> names{{
+	constexpr std::array<const char *, 15> names{{
 		"OFXIC_ENDPOINT_URL",
 		"OFXIC_MODEL",
 		"OFXIC_TRANSCRIPTION_AUTORUN",
+		"OFXIC_TRANSCRIPTION_ENDPOINT_URL",
 		"OFXIC_TRANSCRIPTION_MODEL",
+		"OFXIC_SEGMENTATION_ENDPOINT_URL",
 		"OFXIC_MEDIA_BACKEND",
 		"OFXIC_MEDIA_ENDPOINT_URL",
 		"OFXIC_MEDIA_IMAGE_MODEL",
@@ -210,11 +212,13 @@ void writeDocumentAutomationResult(
 
 ofApp::ofApp()
 	: endpoint("http://127.0.0.1:8080")
+	, transcriptionEndpoint("http://127.0.0.1:8080")
+	, segmentationEndpoint("http://127.0.0.1:18085")
 	, mediaEndpoint("http://127.0.0.1:8080")
 	, chat(endpoint)
 	, media(mediaEndpoint)
-	, transcription(endpoint)
-	, segmentation(endpoint)
+	, transcription(transcriptionEndpoint)
+	, segmentation(segmentationEndpoint)
 	, toolLoop(chat, tools) {
 	settingsPath = configuredSettingsPath();
 	ofxICExample::ExampleSettings settings;
@@ -240,8 +244,12 @@ ofApp::ofApp()
 		}
 	}
 	endpoint.setBaseUrl(endpointUrl.data());
+	transcriptionEndpoint.setBaseUrl(transcriptionEndpointUrl.data());
+	segmentationEndpoint.setBaseUrl(segmentationEndpointUrl.data());
 	mediaEndpoint.setBaseUrl(mediaEndpointUrl.data());
 	endpoint.setBearerToken(configuredToken());
+	transcriptionEndpoint.setBearerToken(configuredTranscriptionToken());
+	segmentationEndpoint.setBearerToken(configuredSegmentationToken());
 	mediaEndpoint.setBearerToken(configuredMediaToken());
 }
 
@@ -297,6 +305,14 @@ void ofApp::setup() {
 			const std::string pointY = environmentValue("OFXIC_SEGMENTATION_POINT_Y");
 			if (!pointX.empty()) segmentationPointX = ofClamp(ofToFloat(pointX), 0.0f, 1.0f);
 			if (!pointY.empty()) segmentationPointY = ofClamp(ofToFloat(pointY), 0.0f, 1.0f);
+			const std::string negativeX = environmentValue("OFXIC_SEGMENTATION_NEGATIVE_POINT_X");
+			const std::string negativeY = environmentValue("OFXIC_SEGMENTATION_NEGATIVE_POINT_Y");
+			if (!negativeX.empty() && !negativeY.empty()) {
+				segmentationPoints.push_back({ segmentationPointX, segmentationPointY, true });
+				segmentationPoints.push_back({
+					ofClamp(ofToFloat(negativeX), 0.0f, 1.0f),
+					ofClamp(ofToFloat(negativeY), 0.0f, 1.0f), false });
+			}
 			segmentImage();
 		} else {
 			writeAutomationResult(segmentationStatus, "");
@@ -499,7 +515,17 @@ void ofApp::draw() {
 	const char * transcriptionProtocols[] = {
 		"OpenAI /v1/audio/transcriptions", "whisper.cpp /inference" };
 	ImGui::BeginDisabled(busy || mediaBusy);
-	ImGui::Combo("Protocol", &transcriptionProtocol, transcriptionProtocols, 2);
+	if (ImGui::Combo("Protocol", &transcriptionProtocol, transcriptionProtocols, 2)) {
+		setTextBuffer(transcriptionEndpointUrl, transcriptionProtocol == 0
+			? "https://api.openai.com/v1"
+			: "http://127.0.0.1:8080");
+	}
+	ImGui::InputText("Audio base URL", transcriptionEndpointUrl.data(),
+		transcriptionEndpointUrl.size());
+	ImGui::SameLine();
+	if (ImGui::Button("Use chat URL##audio")) {
+		setTextBuffer(transcriptionEndpointUrl, endpointUrl.data());
+	}
 	ImGui::InputText("Audio model", transcriptionModel.data(), transcriptionModel.size());
 	if (transcriptionProtocol == 1) {
 		ImGui::TextDisabled("whisper.cpp selects its model when the server starts.");
@@ -656,6 +682,12 @@ void ofApp::draw() {
 	ImGui::SeparatorText("SAM bridge v1");
 	ImGui::TextDisabled("External endpoint: PPM + normalized points -> PGM mask");
 	ImGui::BeginDisabled(busy || mediaBusy);
+	ImGui::InputText("SAM base URL", segmentationEndpointUrl.data(),
+		segmentationEndpointUrl.size());
+	ImGui::SameLine();
+	if (ImGui::Button("Use chat URL##sam")) {
+		setTextBuffer(segmentationEndpointUrl, endpointUrl.data());
+	}
 	loadSegmentationImageRequested = ImGui::Button("Load segmentation image");
 	ImGui::SameLine();
 	ImGui::BeginDisabled(segmentationImageBytes.empty());
@@ -672,12 +704,43 @@ void ofApp::draw() {
 	}
 	ImGui::SameLine();
 	ImGui::BeginDisabled(segmentationPoints.empty());
+	if (ImGui::Button("Undo prompt")) segmentationPoints.pop_back();
+	ImGui::SameLine();
 	if (ImGui::Button("Clear prompts")) segmentationPoints.clear();
 	ImGui::EndDisabled();
 	ImGui::Text("Queued prompts: %d", static_cast<int>(segmentationPoints.size()));
 	for (size_t i = 0; i < segmentationPoints.size(); ++i) {
 		const auto & point = segmentationPoints[i];
 		ImGui::BulletText("%s  x %.3f  y %.3f", point.positive ? "+" : "-", point.x, point.y);
+	}
+	if (segmentationImage.isAllocated()) {
+		ImGui::TextDisabled("Input: left click positive, right click negative");
+		const ImVec2 previewSize = fitMediaPreview(
+			segmentationImage.getWidth(), segmentationImage.getHeight());
+		ImGui::Image(
+			(ImTextureID)(uintptr_t)segmentationImage.getTexture().getTextureData().textureID,
+			previewSize);
+		const ImVec2 imageMin = ImGui::GetItemRectMin();
+		const bool hovered = ImGui::IsItemHovered();
+		if (hovered && (ImGui::IsMouseClicked(ImGuiMouseButton_Left) ||
+			ImGui::IsMouseClicked(ImGuiMouseButton_Right))) {
+			const ImVec2 mouse = ImGui::GetMousePos();
+			segmentationPointX = ofClamp((mouse.x - imageMin.x) / previewSize.x, 0.0f, 1.0f);
+			segmentationPointY = ofClamp((mouse.y - imageMin.y) / previewSize.y, 0.0f, 1.0f);
+			segmentationPoints.push_back({ segmentationPointX, segmentationPointY,
+				ImGui::IsMouseClicked(ImGuiMouseButton_Left) });
+		}
+		ImDrawList * drawList = ImGui::GetWindowDrawList();
+		for (const auto & point : segmentationPoints) {
+			const ImVec2 position(
+				imageMin.x + point.x * previewSize.x,
+				imageMin.y + point.y * previewSize.y);
+			const ImU32 color = point.positive
+				? IM_COL32(40, 220, 90, 255)
+				: IM_COL32(240, 70, 70, 255);
+			drawList->AddCircleFilled(position, 5.0f, color);
+			drawList->AddCircle(position, 7.0f, IM_COL32(255, 255, 255, 230), 16, 2.0f);
+		}
 	}
 	ImGui::EndDisabled();
 	ImGui::TextWrapped("%s", segmentationStatus.c_str());
@@ -824,8 +887,10 @@ void ofApp::applySettingsToUi(const ofxICExample::ExampleSettings & settings) {
 		: 0;
 	setTextBuffer(endpointUrl, settings.endpointUrl);
 	setTextBuffer(modelId, settings.modelId);
+	setTextBuffer(transcriptionEndpointUrl, settings.transcriptionEndpointUrl);
 	transcriptionProtocol = settings.transcriptionProtocol;
 	setTextBuffer(transcriptionModel, settings.transcriptionModel);
+	setTextBuffer(segmentationEndpointUrl, settings.segmentationEndpointUrl);
 	setTextBuffer(mediaEndpointUrl, settings.mediaEndpointUrl);
 	setTextBuffer(mediaImageModel, settings.mediaImageModel);
 	setTextBuffer(mediaVideoModel, settings.mediaVideoModel);
@@ -842,8 +907,10 @@ ofxICExample::ExampleSettings ofApp::settingsFromUi() const {
 	settings.endpointProfile = selectedProfile;
 	settings.endpointUrl = endpointUrl.data();
 	settings.modelId = modelId.data();
+	settings.transcriptionEndpointUrl = transcriptionEndpointUrl.data();
 	settings.transcriptionProtocol = transcriptionProtocol;
 	settings.transcriptionModel = transcriptionModel.data();
+	settings.segmentationEndpointUrl = segmentationEndpointUrl.data();
 	settings.mediaBackend = selectedMediaBackend;
 	settings.mediaKind = selectedMediaKind;
 	settings.mediaEndpointUrl = mediaEndpointUrl.data();
@@ -971,6 +1038,8 @@ bool ofApp::loadAudio(const std::string & path) {
 
 void ofApp::transcribeAudio() {
 	if (audioBytes.empty() || mediaBusy || busy.exchange(true)) return;
+	transcriptionEndpoint.setBaseUrl(transcriptionEndpointUrl.data());
+	transcriptionEndpoint.setBearerToken(configuredTranscriptionToken());
 	cancellationRequested = false;
 	requestCanCancel = true;
 	status = "Transcribing audio...";
@@ -1036,6 +1105,8 @@ bool ofApp::loadSegmentationImage(const std::string & path) {
 
 void ofApp::segmentImage() {
 	if (segmentationImageBytes.empty() || mediaBusy || busy.exchange(true)) return;
+	segmentationEndpoint.setBaseUrl(segmentationEndpointUrl.data());
+	segmentationEndpoint.setBearerToken(configuredSegmentationToken());
 	cancellationRequested = false;
 	requestCanCancel = true;
 	status = "Segmenting image...";
@@ -1072,6 +1143,32 @@ std::string ofApp::configuredTokenSource() const {
 		return "Windows Credential Manager (OFXIC_API_KEY)";
 	}
 	return variable;
+}
+
+std::string ofApp::configuredTranscriptionToken() const {
+	const std::string specific = environmentValue("OFXIC_TRANSCRIPTION_API_KEY");
+	if (!specific.empty()) return specific;
+	if (transcriptionProtocol == 0) {
+		const std::string openAi = environmentValue("OPENAI_API_KEY");
+		if (!openAi.empty()) return openAi;
+	}
+	const std::string generic = environmentValue("OFXIC_API_KEY");
+	if (!generic.empty()) return generic;
+	if (transcriptionProtocol == 0) {
+		const auto storedOpenAi = storedTokens.find("OPENAI_API_KEY");
+		if (storedOpenAi != storedTokens.end()) return storedOpenAi->second;
+	}
+	const auto storedGeneric = storedTokens.find("OFXIC_API_KEY");
+	return storedGeneric == storedTokens.end() ? std::string{} : storedGeneric->second;
+}
+
+std::string ofApp::configuredSegmentationToken() const {
+	const std::string specific = environmentValue("OFXIC_SEGMENTATION_API_KEY");
+	if (!specific.empty()) return specific;
+	const std::string generic = environmentValue("OFXIC_API_KEY");
+	if (!generic.empty()) return generic;
+	const auto storedGeneric = storedTokens.find("OFXIC_API_KEY");
+	return storedGeneric == storedTokens.end() ? std::string{} : storedGeneric->second;
 }
 
 std::string ofApp::configuredMediaToken() const {
@@ -1196,6 +1293,8 @@ void ofApp::saveTokenCredential(
 	storedTokens[variable] = token;
 	input.fill('\0');
 	endpoint.setBearerToken(configuredToken());
+	transcriptionEndpoint.setBearerToken(configuredTranscriptionToken());
+	segmentationEndpoint.setBearerToken(configuredSegmentationToken());
 	mediaEndpoint.setBearerToken(configuredMediaToken());
 	credentialStatus = "Saved " + variable + " in Windows Credential Manager.";
 }
@@ -1212,6 +1311,8 @@ void ofApp::forgetTokenCredential(const std::string & variable) {
 		storedTokens.erase(stored);
 	}
 	endpoint.setBearerToken(configuredToken());
+	transcriptionEndpoint.setBearerToken(configuredTranscriptionToken());
+	segmentationEndpoint.setBearerToken(configuredSegmentationToken());
 	mediaEndpoint.setBearerToken(configuredMediaToken());
 	credentialStatus = "Removed saved " + variable + ". Environment overrides remain active.";
 }

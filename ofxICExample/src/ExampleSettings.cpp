@@ -40,8 +40,10 @@ bool validText(const std::string & value, std::size_t maximumSize) {
 bool validSettings(const ExampleSettings & settings) {
 	return settings.endpointProfile >= 0 && settings.endpointProfile <= 4 &&
 		validText(settings.endpointUrl, 512) && validText(settings.modelId, 256) &&
+		validText(settings.transcriptionEndpointUrl, 512) &&
 		settings.transcriptionProtocol >= 0 && settings.transcriptionProtocol <= 1 &&
 		validText(settings.transcriptionModel, 256) &&
+		validText(settings.segmentationEndpointUrl, 512) &&
 		settings.mediaBackend >= 0 && settings.mediaBackend <= 2 &&
 		settings.mediaKind >= 0 && settings.mediaKind <= 1 &&
 		validText(settings.mediaEndpointUrl, 512) &&
@@ -117,10 +119,14 @@ SettingsLoadStatus loadSettings(const std::string & path, ExampleSettings & sett
 			valid = parseString(value, parsed.endpointUrl);
 		} else if (key == "model_id") {
 			valid = parseString(value, parsed.modelId);
+		} else if (key == "transcription_endpoint_url") {
+			valid = parseString(value, parsed.transcriptionEndpointUrl);
 		} else if (key == "transcription_protocol") {
 			valid = parseInt(value, parsed.transcriptionProtocol);
 		} else if (key == "transcription_model") {
 			valid = parseString(value, parsed.transcriptionModel);
+		} else if (key == "segmentation_endpoint_url") {
+			valid = parseString(value, parsed.segmentationEndpointUrl);
 		} else if (key == "media_backend") {
 			valid = parseInt(value, parsed.mediaBackend);
 		} else if (key == "media_kind") {
@@ -157,8 +163,10 @@ bool saveSettings(const std::string & path, const ExampleSettings & settings) {
 		<< "endpoint_profile=" << settings.endpointProfile << '\n'
 		<< "endpoint_url=" << std::quoted(settings.endpointUrl) << '\n'
 		<< "model_id=" << std::quoted(settings.modelId) << '\n'
+		<< "transcription_endpoint_url=" << std::quoted(settings.transcriptionEndpointUrl) << '\n'
 		<< "transcription_protocol=" << settings.transcriptionProtocol << '\n'
 		<< "transcription_model=" << std::quoted(settings.transcriptionModel) << '\n'
+		<< "segmentation_endpoint_url=" << std::quoted(settings.segmentationEndpointUrl) << '\n'
 		<< "media_backend=" << settings.mediaBackend << '\n'
 		<< "media_kind=" << settings.mediaKind << '\n'
 		<< "media_endpoint_url=" << std::quoted(settings.mediaEndpointUrl) << '\n'
@@ -190,6 +198,12 @@ void applyEnvironmentOverrides(
 	if (const std::string * model = environmentValue(environment, "OFXIC_MODEL")) {
 		settings.modelId = *model;
 	}
+	if (const std::string * audioUrl = environmentValue(
+		environment, "OFXIC_TRANSCRIPTION_ENDPOINT_URL")) {
+		settings.transcriptionEndpointUrl = *audioUrl;
+	} else if (endpointUrl) {
+		settings.transcriptionEndpointUrl = *endpointUrl;
+	}
 	if (const std::string * protocol = environmentValue(
 		environment, "OFXIC_TRANSCRIPTION_AUTORUN")) {
 		if (*protocol == "openai") settings.transcriptionProtocol = 0;
@@ -198,6 +212,12 @@ void applyEnvironmentOverrides(
 	if (const std::string * model = environmentValue(
 		environment, "OFXIC_TRANSCRIPTION_MODEL")) {
 		settings.transcriptionModel = *model;
+	}
+	if (const std::string * segmentationUrl = environmentValue(
+		environment, "OFXIC_SEGMENTATION_ENDPOINT_URL")) {
+		settings.segmentationEndpointUrl = *segmentationUrl;
+	} else if (endpointUrl) {
+		settings.segmentationEndpointUrl = *endpointUrl;
 	}
 
 	bool mediaBackendOverridden = false;
