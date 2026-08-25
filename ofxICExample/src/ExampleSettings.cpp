@@ -94,6 +94,23 @@ const std::string * environmentValue(
 
 } // namespace
 
+const char * defaultTranscriptionEndpointUrl(int protocol) {
+	return protocol == 1
+		? "http://127.0.0.1:8080"
+		: "https://api.openai.com/v1";
+}
+
+void alignTranscriptionEndpointDefault(ExampleSettings & settings) {
+	const int otherProtocol = settings.transcriptionProtocol == 1 ? 0 : 1;
+	const std::string current = normalizedUrl(settings.transcriptionEndpointUrl);
+	const std::string otherDefault = normalizedUrl(
+		defaultTranscriptionEndpointUrl(otherProtocol));
+	if (settings.transcriptionEndpointUrl.empty() || current == otherDefault) {
+		settings.transcriptionEndpointUrl = defaultTranscriptionEndpointUrl(
+			settings.transcriptionProtocol);
+	}
+}
+
 SettingsLoadStatus loadSettings(const std::string & path, ExampleSettings & settings) {
 	std::ifstream input(path, std::ios::binary);
 	if (!input) return SettingsLoadStatus::Missing;
@@ -151,6 +168,7 @@ SettingsLoadStatus loadSettings(const std::string & path, ExampleSettings & sett
 	if (!input.eof() || !hasVersion || !validSettings(parsed)) {
 		return SettingsLoadStatus::Invalid;
 	}
+	alignTranscriptionEndpointDefault(parsed);
 	settings = std::move(parsed);
 	return SettingsLoadStatus::Loaded;
 }
@@ -198,16 +216,27 @@ void applyEnvironmentOverrides(
 	if (const std::string * model = environmentValue(environment, "OFXIC_MODEL")) {
 		settings.modelId = *model;
 	}
-	if (const std::string * audioUrl = environmentValue(
-		environment, "OFXIC_TRANSCRIPTION_ENDPOINT_URL")) {
+	const std::string * audioUrl = environmentValue(
+		environment, "OFXIC_TRANSCRIPTION_ENDPOINT_URL");
+	if (audioUrl) {
 		settings.transcriptionEndpointUrl = *audioUrl;
 	} else if (endpointUrl) {
 		settings.transcriptionEndpointUrl = *endpointUrl;
 	}
+	bool transcriptionProtocolOverridden = false;
 	if (const std::string * protocol = environmentValue(
 		environment, "OFXIC_TRANSCRIPTION_AUTORUN")) {
-		if (*protocol == "openai") settings.transcriptionProtocol = 0;
-		if (*protocol == "whisper-cpp") settings.transcriptionProtocol = 1;
+		if (*protocol == "openai") {
+			settings.transcriptionProtocol = 0;
+			transcriptionProtocolOverridden = true;
+		}
+		if (*protocol == "whisper-cpp") {
+			settings.transcriptionProtocol = 1;
+			transcriptionProtocolOverridden = true;
+		}
+	}
+	if (transcriptionProtocolOverridden && !audioUrl && !endpointUrl) {
+		alignTranscriptionEndpointDefault(settings);
 	}
 	if (const std::string * model = environmentValue(
 		environment, "OFXIC_TRANSCRIPTION_MODEL")) {

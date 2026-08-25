@@ -95,9 +95,63 @@ OFXIC_TEST(example_settings_loads_version_one_without_audio_keys) {
 	OFXIC_REQUIRE(settings.modelId == "legacy-model");
 	OFXIC_REQUIRE(settings.transcriptionProtocol == 0);
 	OFXIC_REQUIRE(settings.transcriptionModel == "whisper-1");
-	OFXIC_REQUIRE(settings.transcriptionEndpointUrl == "http://127.0.0.1:8080");
+	OFXIC_REQUIRE(settings.transcriptionEndpointUrl == "https://api.openai.com/v1");
 	OFXIC_REQUIRE(settings.segmentationEndpointUrl == "http://127.0.0.1:18085");
 	OFXIC_REQUIRE(ofxICExample::removeSettings(settingsPath));
+}
+
+OFXIC_TEST(example_transcription_protocol_defaults_remain_aligned) {
+	ofxICExample::ExampleSettings settings;
+	OFXIC_REQUIRE(settings.transcriptionProtocol == 0);
+	OFXIC_REQUIRE(settings.transcriptionEndpointUrl == "https://api.openai.com/v1");
+
+	settings.transcriptionEndpointUrl = "http://127.0.0.1:8080";
+	ofxICExample::alignTranscriptionEndpointDefault(settings);
+	OFXIC_REQUIRE(settings.transcriptionEndpointUrl == "https://api.openai.com/v1");
+
+	settings.transcriptionProtocol = 1;
+	ofxICExample::alignTranscriptionEndpointDefault(settings);
+	OFXIC_REQUIRE(settings.transcriptionEndpointUrl == "http://127.0.0.1:8080");
+
+	settings.transcriptionProtocol = 0;
+	settings.transcriptionEndpointUrl = "https://audio-gateway.example.test/v1";
+	ofxICExample::alignTranscriptionEndpointDefault(settings);
+	OFXIC_REQUIRE(
+		settings.transcriptionEndpointUrl == "https://audio-gateway.example.test/v1");
+}
+
+OFXIC_TEST(example_settings_migrates_the_stale_openai_audio_default) {
+	{
+		std::ofstream output(settingsPath, std::ios::binary | std::ios::trunc);
+		output << "version=1\n"
+			<< "transcription_endpoint_url=\"http://127.0.0.1:8080\"\n"
+			<< "transcription_protocol=0\n";
+	}
+	ofxICExample::ExampleSettings settings;
+	OFXIC_REQUIRE(
+		ofxICExample::loadSettings(settingsPath, settings) ==
+		ofxICExample::SettingsLoadStatus::Loaded);
+	OFXIC_REQUIRE(settings.transcriptionProtocol == 0);
+	OFXIC_REQUIRE(settings.transcriptionEndpointUrl == "https://api.openai.com/v1");
+	OFXIC_REQUIRE(ofxICExample::removeSettings(settingsPath));
+}
+
+OFXIC_TEST(example_transcription_protocol_environment_selects_its_default) {
+	ofxICExample::ExampleSettings settings;
+	settings.transcriptionProtocol = 1;
+	settings.transcriptionEndpointUrl = "http://127.0.0.1:8080";
+	ofxICExample::applyEnvironmentOverrides(settings, {
+		{ "OFXIC_TRANSCRIPTION_AUTORUN", "openai" },
+	});
+	OFXIC_REQUIRE(settings.transcriptionProtocol == 0);
+	OFXIC_REQUIRE(settings.transcriptionEndpointUrl == "https://api.openai.com/v1");
+
+	settings.transcriptionEndpointUrl = "http://127.0.0.1:8080";
+	ofxICExample::applyEnvironmentOverrides(settings, {
+		{ "OFXIC_TRANSCRIPTION_AUTORUN", "openai" },
+		{ "OFXIC_TRANSCRIPTION_ENDPOINT_URL", "http://127.0.0.1:8080" },
+	});
+	OFXIC_REQUIRE(settings.transcriptionEndpointUrl == "http://127.0.0.1:8080");
 }
 
 OFXIC_TEST(example_environment_overrides_saved_settings_predictably) {

@@ -2,7 +2,11 @@
 
 ## Unreleased
 
-No changes yet.
+### Fixed
+
+- the regular example now selects the OpenAI audio endpoint on first startup
+  and when loading settings that predate the audio fields, while preserving
+  explicit custom and environment endpoint URLs.
 
 ## 0.2.0-rc.1 — 2026-08-25
 

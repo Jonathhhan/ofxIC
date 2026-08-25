@@ -516,9 +516,8 @@ void ofApp::draw() {
 		"OpenAI /v1/audio/transcriptions", "whisper.cpp /inference" };
 	ImGui::BeginDisabled(busy || mediaBusy);
 	if (ImGui::Combo("Protocol", &transcriptionProtocol, transcriptionProtocols, 2)) {
-		setTextBuffer(transcriptionEndpointUrl, transcriptionProtocol == 0
-			? "https://api.openai.com/v1"
-			: "http://127.0.0.1:8080");
+		setTextBuffer(transcriptionEndpointUrl,
+			ofxICExample::defaultTranscriptionEndpointUrl(transcriptionProtocol));
 	}
 	ImGui::InputText("Audio base URL", transcriptionEndpointUrl.data(),
 		transcriptionEndpointUrl.size());

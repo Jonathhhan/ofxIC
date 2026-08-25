@@ -9,7 +9,7 @@ struct ExampleSettings {
 	int endpointProfile = 0;
 	std::string endpointUrl = "http://127.0.0.1:8080";
 	std::string modelId;
-	std::string transcriptionEndpointUrl = "http://127.0.0.1:8080";
+	std::string transcriptionEndpointUrl = "https://api.openai.com/v1";
 	int transcriptionProtocol = 0;
 	std::string transcriptionModel = "whisper-1";
 	std::string segmentationEndpointUrl = "http://127.0.0.1:18085";
@@ -33,6 +33,9 @@ enum class SettingsLoadStatus {
 SettingsLoadStatus loadSettings(const std::string & path, ExampleSettings & settings);
 bool saveSettings(const std::string & path, const ExampleSettings & settings);
 bool removeSettings(const std::string & path);
+
+const char * defaultTranscriptionEndpointUrl(int protocol);
+void alignTranscriptionEndpointDefault(ExampleSettings & settings);
 
 void applyEnvironmentOverrides(
 	ExampleSettings & settings,
