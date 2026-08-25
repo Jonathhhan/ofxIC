@@ -382,9 +382,12 @@ The deterministic tests use an injected transport; live inference remains a
 separate, explicitly triggered check so protocol failures and provider costs
 cannot be confused with unit-test failures.
 
-The default GUI workflow additionally exercises video download and playback
-against a local fixture server. It therefore validates the complete client and
-rendering path without a GPU, provider account, token, or payment method.
+The default GUI workflow additionally exercises both transcription protocols,
+SAM segmentation with positive and negative points, and video download and
+playback against local fixture servers. Each task uses its own endpoint while
+the chat endpoint is deliberately unavailable. This validates the complete
+client and rendering paths without a GPU, provider account, token, or payment
+method.
 
 On Windows, a built Release example can exercise cancellation through the real
 libcurl and GUI shutdown path against a deliberately slow local endpoint:

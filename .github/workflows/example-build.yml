@@ -25,6 +25,8 @@ on:
       - "src/**"
       - "addon_config.mk"
       - "ofxICExample/**"
+      - "scripts/sam-bridge-server.py"
+      - "tests/transcription_endpoint_fixture.py"
       - ".github/workflows/example-build.yml"
   push:
     branches:
@@ -35,6 +37,8 @@ on:
       - "src/**"
       - "addon_config.mk"
       - "ofxICExample/**"
+      - "scripts/sam-bridge-server.py"
+      - "tests/transcription_endpoint_fixture.py"
       - ".github/workflows/example-build.yml"
 
 permissions:
@@ -224,6 +228,99 @@ jobs:
         with:
           name: ofxICExample-gui-linux-nightly
           path: ${{ runner.temp }}/gui-smoke
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Exercise deterministic audio and SAM through GUI
+        timeout-minutes: 5
+        shell: bash
+        env:
+          LIBGL_ALWAYS_SOFTWARE: "1"
+        run: |
+          set -euo pipefail
+          app="$OF_ROOT/apps/myApps/ofxICExample"
+          artifact_dir="$RUNNER_TEMP/task-gui-smoke"
+          mkdir -p "$artifact_dir"
+          printf 'OFXIC_AUDIO_FIXTURE' >"$artifact_dir/fixture.wav"
+          python3 - "$artifact_dir/fixture.ppm" <<'PY'
+          import sys
+          open(sys.argv[1], "wb").write(b"P6\n2 2\n255\nabcdefghijkl")
+          PY
+
+          python3 -u "$GITHUB_WORKSPACE/tests/transcription_endpoint_fixture.py" \
+            --port 18082 >"$artifact_dir/audio-server.log" 2>&1 &
+          audio_pid=$!
+          python3 -u "$GITHUB_WORKSPACE/scripts/sam-bridge-server.py" \
+            --port 18085 --fixture-mask >"$artifact_dir/sam-server.log" 2>&1 &
+          sam_pid=$!
+          cleanup_servers() {
+            kill "$audio_pid" "$sam_pid" 2>/dev/null || true
+            wait "$audio_pid" "$sam_pid" 2>/dev/null || true
+          }
+          trap cleanup_servers EXIT
+          for port in 18082 18085; do
+            for _ in $(seq 1 40); do
+              curl --silent --output /dev/null "http://127.0.0.1:$port/" && break
+              sleep 0.1
+            done
+            curl --silent --output /dev/null "http://127.0.0.1:$port/"
+          done
+
+          run_gui() {
+            local result="$1"
+            local log="$2"
+            shift 2
+            xvfb-run --auto-servernum \
+              --server-args="-screen 0 1280x720x24 -nolisten tcp" \
+              bash -euo pipefail -c '
+                binary="$1"; log="$2"; result="$3"; shift 3
+                env "$@" "$binary" >"$log" 2>&1 &
+                app_pid=$!
+                cleanup() { kill "$app_pid" 2>/dev/null || true; wait "$app_pid" 2>/dev/null || true; }
+                trap cleanup EXIT
+                for _ in $(seq 1 120); do
+                  [[ -s "$result" ]] && break
+                  kill -0 "$app_pid" 2>/dev/null || { cat "$log" >&2; exit 1; }
+                  sleep 0.1
+                done
+                [[ -s "$result" ]] || { echo "Timed out waiting for GUI task result" >&2; cat "$log" >&2; exit 1; }
+              ' bash "$app/bin/ofxICExample" "$log" "$result" "$@"
+          }
+
+          for protocol in openai whisper-cpp; do
+            result="$artifact_dir/transcription-$protocol.txt"
+            run_gui "$result" "$artifact_dir/transcription-$protocol.log" \
+              OFXIC_ENDPOINT_URL=http://127.0.0.1:1 \
+              OFXIC_TRANSCRIPTION_ENDPOINT_URL=http://127.0.0.1:18082 \
+              OFXIC_TRANSCRIPTION_AUTORUN="$protocol" \
+              OFXIC_AUDIO_PATH="$artifact_dir/fixture.wav" \
+              OFXIC_GUI_RESULT_PATH="$result" \
+              OFXIC_SETTINGS_PATH="$artifact_dir/settings-$protocol"
+            grep -Fq "Transcription completed" "$result"
+            grep -Fq "deterministic GUI transcript" "$result"
+          done
+
+          sam_result="$artifact_dir/segmentation.txt"
+          run_gui "$sam_result" "$artifact_dir/segmentation.log" \
+            OFXIC_ENDPOINT_URL=http://127.0.0.1:1 \
+            OFXIC_SEGMENTATION_ENDPOINT_URL=http://127.0.0.1:18085 \
+            OFXIC_SEGMENTATION_AUTORUN=1 \
+            OFXIC_SEGMENTATION_IMAGE="$artifact_dir/fixture.ppm" \
+            OFXIC_SEGMENTATION_POINT_X=0.5 \
+            OFXIC_SEGMENTATION_POINT_Y=0.5 \
+            OFXIC_SEGMENTATION_NEGATIVE_POINT_X=0.0 \
+            OFXIC_SEGMENTATION_NEGATIVE_POINT_Y=0.0 \
+            OFXIC_GUI_RESULT_PATH="$sam_result" \
+            OFXIC_SETTINGS_PATH="$artifact_dir/settings-sam"
+          grep -Fq "Segmentation completed" "$sam_result"
+          grep -Fq "PGM mask" "$sam_result"
+
+      - name: Upload deterministic task GUI artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ofxICExample-task-fixtures
+          path: ${{ runner.temp }}/task-gui-smoke
           if-no-files-found: error
           retention-days: 14
 
