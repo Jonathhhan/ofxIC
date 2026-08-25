@@ -257,13 +257,17 @@ const auto mask = segmentation.segmentSamBridge(request);
 
 `scripts\sam-bridge-server.py` implements the localhost process boundary. Its
 real mode invokes an independently supplied `sam-runner` with the existing
-`--model`, `--image`, `--output`, and repeated point-flag contract. Its fixture
+`--model`, `--image`, `--output`, and repeated point-flag contract. For runners
+that expose it, `--backend cpu|cuda` is forwarded explicitly instead of silently
+falling back to a slow CPU default. Its fixture
 mode exists only for deterministic GUI evidence and performs no inference. The
 client and bridge require `X-ofxIC-SAM-Bridge-Version: 1`, accept at most 64
 points, bound request and mask sizes, validate complete PPM/PGM payloads, and
 report stable text error codes. The bridge rejects concurrent model runs and
 supports `--runner-timeout <seconds>` rather than allowing an orphaned request
-to wait indefinitely.
+to wait indefinitely. Its bounded `GET /health` response reports bridge version,
+fixture/runner mode, and selected backend; the regular example exposes this as
+**Check bridge** before an image needs to be submitted.
 
 ## Scope
 
@@ -401,6 +405,9 @@ cannot be used as an `ofxIC` endpoint.
   -Model <model.ggml> -Image <input.ppm>` is the separate model-backed proof. It
   exercises the external runner through the bridge and regular GUI, requires a
   returned PGM mask, and keeps the runner, model, inputs, and output out of Git.
+- Before using SAM interactively, run `scripts\start-sam-bridge.ps1 -Runner
+  <sam-runner.exe> -Model <model.ggml> -Backend cuda` in a separate terminal and
+  leave it open. The GUI's SAM URL remains `http://127.0.0.1:18085`.
 - `OFXIC_SEGMENTATION_ENDPOINT_URL` selects the SAM bridge independently.
   `OFXIC_SEGMENTATION_NEGATIVE_POINT_X` and
   `OFXIC_SEGMENTATION_NEGATIVE_POINT_Y` add a negative prompt to GUI automation.

@@ -26,4 +26,15 @@ struct SegmentationResult {
 	explicit operator bool() const { return success; }
 };
 
+struct SegmentationBridgeStatus {
+	bool reachable = false;
+	bool cancelled = false;
+	int httpStatus = 0;
+	std::string version;
+	std::string mode;
+	std::string backend;
+	std::string error;
+	explicit operator bool() const { return reachable; }
+};
+
 } // namespace ofxIC

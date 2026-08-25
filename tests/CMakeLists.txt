@@ -62,4 +62,7 @@ if(Python3_Interpreter_FOUND)
 	add_test(
 		NAME ofxIC_web_snapshot_tests
 		COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_web_snapshot.py)
+	add_test(
+		NAME ofxIC_sam_bridge_tests
+		COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_sam_bridge.py)
 endif()

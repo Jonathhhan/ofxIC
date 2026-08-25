@@ -10,6 +10,8 @@ namespace ofxIC {
 class SegmentationClient {
 public:
 	explicit SegmentationClient(Endpoint & endpoint);
+	SegmentationBridgeStatus inspectSamBridge(
+		std::function<bool()> shouldCancel = nullptr) const;
 	SegmentationResult segmentSamBridge(
 		const SegmentationRequest & request,
 		std::function<bool()> shouldCancel = nullptr) const;

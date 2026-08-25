@@ -19,6 +19,9 @@
 - marker-driven regular-example music automation with automatic asynchronous
   job polling, machine-readable completion evidence, and a deterministic GUI
   fixture that verifies the timestamped output path;
+- a bounded SAM bridge `/health` route and regular-example **Check bridge** action
+  that report protocol version, fixture/runner mode, and selected backend before
+  submitting a segmentation request;
 - injected-transport tests for the Stability multipart contract, validation,
   job lifecycle, provider errors, and binary audio signatures.
 
@@ -33,6 +36,12 @@
 
 ### Fixed
 
+- image, video, and SAM previews now use a stable bounded height rather than the
+  remaining vertical space in a long scrollable ImGui window; SAM input and mask
+  images therefore no longer collapse to an effectively invisible one-pixel row;
+- the SAM bridge can now explicitly forward `--backend cpu|cuda`; this prevents
+  CUDA-capable external SAM3 runners from silently using CPU and exceeding the
+  regular GUI smoke deadline;
 - transcription failures now preserve the HTTP status while showing a bounded,
   single-line provider or decoder error detail instead of hiding the response
   behind a generic status such as `transcription endpoint returned HTTP 500`.

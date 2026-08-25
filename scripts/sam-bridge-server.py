@@ -1,6 +1,7 @@
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 import argparse
+import json
 import math
 import subprocess
 import tempfile
@@ -62,6 +63,25 @@ def validate_pgm(data):
         raise ValueError("ASCII PGM pixel payload is invalid")
 
 
+def adapter_command(adapter, model, image_path, mask_path, points, backend=None):
+    command = [str(adapter), "--model", str(model),
+               "--image", str(image_path), "--output", str(mask_path)]
+    if backend:
+        command += ["--backend", backend]
+    for point in points:
+        if len(point) != 3:
+            raise ValueError("point must contain x,y,label")
+        x, y, label = point
+        float_x, float_y = float(x), float(y)
+        if not math.isfinite(float_x) or not math.isfinite(float_y) or \
+                not 0.0 <= float_x <= 1.0 or not 0.0 <= float_y <= 1.0:
+            raise ValueError("point coordinates must be normalized")
+        if label not in ("positive", "negative"):
+            raise ValueError("point label is invalid")
+        command += ["--point-x", x, "--point-y", y, "--point-label", label]
+    return command
+
+
 def parse_multipart(content_type, body):
     marker = "boundary="
     if marker not in content_type:
@@ -88,6 +108,7 @@ def parse_multipart(content_type, body):
 class Handler(BaseHTTPRequestHandler):
     adapter = None
     model = None
+    backend = None
     fixture_mask = False
     runner_timeout = 300
     runner_lock = threading.Lock()
@@ -96,6 +117,23 @@ class Handler(BaseHTTPRequestHandler):
         body = f"{code}: {message}".encode("utf-8", "replace")
         self.send_response(status)
         self.send_header("Content-Type", "text/plain; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("X-ofxIC-SAM-Bridge-Version", BRIDGE_VERSION)
+        self.end_headers()
+        self.wfile.write(body)
+
+    def do_GET(self):
+        if self.path != "/health":
+            self.send_problem(404, "route_not_found", "use /health or /v1/segmentations")
+            return
+        body = json.dumps({
+            "status": "ok",
+            "version": BRIDGE_VERSION,
+            "mode": "fixture" if self.fixture_mask else "runner",
+            "backend": self.backend or "runner-default",
+        }).encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
         self.send_header("X-ofxIC-SAM-Bridge-Version", BRIDGE_VERSION)
         self.end_headers()
@@ -156,19 +194,8 @@ class Handler(BaseHTTPRequestHandler):
             image_path = Path(directory) / "input.ppm"
             mask_path = Path(directory) / "mask.pgm"
             image_path.write_bytes(image)
-            command = [str(self.adapter), "--model", str(self.model),
-                       "--image", str(image_path), "--output", str(mask_path)]
-            for point in points:
-                if len(point) != 3:
-                    raise ValueError("point must contain x,y,label")
-                x, y, label = point
-                float_x, float_y = float(x), float(y)
-                if not math.isfinite(float_x) or not math.isfinite(float_y) or \
-                        not 0.0 <= float_x <= 1.0 or not 0.0 <= float_y <= 1.0:
-                    raise ValueError("point coordinates must be normalized")
-                if label not in ("positive", "negative"):
-                    raise ValueError("point label is invalid")
-                command += ["--point-x", x, "--point-y", y, "--point-label", label]
+            command = adapter_command(
+                self.adapter, self.model, image_path, mask_path, points, self.backend)
             subprocess.run(command, check=True, timeout=self.runner_timeout)
             mask = mask_path.read_bytes()
             validate_pgm(mask)
@@ -184,6 +211,7 @@ if __name__ == "__main__":
     parser.add_argument("--port", type=int, default=18085)
     parser.add_argument("--adapter", type=Path)
     parser.add_argument("--model", type=Path)
+    parser.add_argument("--backend", choices=("cpu", "cuda"))
     parser.add_argument("--fixture-mask", action="store_true")
     parser.add_argument("--runner-timeout", type=int, default=300)
     args = parser.parse_args()
@@ -194,6 +222,7 @@ if __name__ == "__main__":
             parser.error("--model must name an existing SAM model")
     Handler.adapter = args.adapter
     Handler.model = args.model
+    Handler.backend = args.backend
     Handler.fixture_mask = args.fixture_mask
     if args.runner_timeout < 1 or args.runner_timeout > 3600:
         parser.error("--runner-timeout must be between 1 and 3600 seconds")

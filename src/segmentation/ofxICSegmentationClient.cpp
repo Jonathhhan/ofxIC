@@ -1,6 +1,7 @@
 #include "ofxICSegmentationClient.h"
 
 #include <algorithm>
+#include <cctype>
 #include <sstream>
 #include <utility>
 
@@ -9,6 +10,34 @@ namespace {
 
 constexpr std::size_t maximumImageBytes = 60U * 1024U * 1024U;
 constexpr std::size_t maximumPoints = 64U;
+
+std::string extractStringField(const std::string & json, const std::string & key) {
+	const std::string quotedKey = "\"" + key + "\"";
+	const std::size_t keyPosition = json.find(quotedKey);
+	if (keyPosition == std::string::npos) return {};
+	std::size_t position = json.find(':', keyPosition + quotedKey.size());
+	if (position == std::string::npos) return {};
+	++position;
+	while (position < json.size() && std::isspace(
+		static_cast<unsigned char>(json[position]))) ++position;
+	if (position >= json.size() || json[position++] != '"') return {};
+	std::string value;
+	bool escaped = false;
+	for (; position < json.size(); ++position) {
+		const char character = json[position];
+		if (escaped) {
+			value.push_back(character);
+			escaped = false;
+		} else if (character == '\\') {
+			escaped = true;
+		} else if (character == '"') {
+			return value;
+		} else {
+			value.push_back(character);
+		}
+	}
+	return {};
+}
 
 std::string safeFilename(std::string value) {
 	value.erase(std::remove_if(value.begin(), value.end(), [](char c) {
@@ -26,6 +55,42 @@ void appendField(std::string & body, const std::string & boundary,
 } // namespace
 
 SegmentationClient::SegmentationClient(Endpoint & endpoint) : endpoint(endpoint) {}
+
+SegmentationBridgeStatus SegmentationClient::inspectSamBridge(
+	std::function<bool()> shouldCancel) const {
+	SegmentationBridgeStatus result;
+	HttpRequest request;
+	request.method = HttpMethod::Get;
+	request.url = "/health";
+	request.accept = "application/json";
+	request.headers.emplace_back("X-ofxIC-SAM-Bridge-Version", "1");
+	request.timeoutSeconds = 10;
+	request.maxResponseBytes = 16U * 1024U;
+	request.shouldCancel = std::move(shouldCancel);
+	const HttpResponse response = endpoint.perform(std::move(request));
+	result.httpStatus = response.status;
+	result.cancelled = response.cancelled;
+	if (response.cancelled) {
+		result.error = response.error.empty() ? "request cancelled" : response.error;
+		return result;
+	}
+	if (!response.started || response.status < 200 || response.status >= 300) {
+		result.error = !response.body.empty() && response.body.size() <= 4096U
+			? response.body
+			: (response.error.empty() ? "SAM bridge health request failed" : response.error);
+		return result;
+	}
+	const std::string status = extractStringField(response.body, "status");
+	result.version = extractStringField(response.body, "version");
+	result.mode = extractStringField(response.body, "mode");
+	result.backend = extractStringField(response.body, "backend");
+	if (status != "ok" || result.version != "1") {
+		result.error = "SAM bridge returned an incompatible health response";
+		return result;
+	}
+	result.reachable = true;
+	return result;
+}
 
 SegmentationResult SegmentationClient::segmentSamBridge(
 	const SegmentationRequest & request,

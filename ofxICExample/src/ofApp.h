@@ -46,6 +46,7 @@ private:
 	bool loadAudio(const std::string & path);
 	void transcribeAudio();
 	bool loadSegmentationImage(const std::string & path);
+	void inspectSegmentationBridge();
 	void segmentImage();
 	void generateMedia();
 	void pollMediaJob();

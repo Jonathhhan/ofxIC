@@ -3,6 +3,7 @@ param(
 	[Parameter(Mandatory = $true)] [string] $Model,
 	[Parameter(Mandatory = $true)] [string] $Image,
 	[string] $Executable = (Join-Path $PSScriptRoot "..\ofxICExample\bin\ofxICExample.exe"),
+	[ValidateSet("cpu", "cuda")] [string] $Backend = "cuda",
 	[int] $Port = 18086
 )
 
@@ -32,7 +33,8 @@ try {
 	New-Item -ItemType Directory -Path $temporary | Out-Null
 	$server = Start-Process python.exe -ArgumentList @(
 		('"' + $bridge + '"'), '--port', $Port,
-		'--adapter', ('"' + $runnerPath + '"'), '--model', ('"' + $modelPath + '"')) `
+		'--adapter', ('"' + $runnerPath + '"'), '--model', ('"' + $modelPath + '"'),
+		'--backend', $Backend) `
 		-WindowStyle Hidden -PassThru
 	$deadline = [DateTime]::UtcNow.AddSeconds(5)
 	do {
@@ -56,7 +58,7 @@ try {
 	$env:OFXIC_SETTINGS_PATH = (Join-Path $temporary 'settings')
 	$example = Start-Process $executablePath -WorkingDirectory (Split-Path $executablePath) `
 		-WindowStyle Hidden -PassThru
-	$deadline = [DateTime]::UtcNow.AddSeconds(60)
+	$deadline = [DateTime]::UtcNow.AddSeconds(120)
 	do { Start-Sleep -Milliseconds 100 } while (-not (Test-Path $resultPath) -and
 		-not $example.HasExited -and [DateTime]::UtcNow -lt $deadline)
 	if (-not (Test-Path $resultPath)) { throw "GUI produced no model-backed segmentation evidence" }

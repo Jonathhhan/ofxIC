@@ -536,6 +536,7 @@ void ofApp::draw() {
 	bool loadAudioRequested = false;
 	bool transcribeAudioRequested = false;
 	bool loadSegmentationImageRequested = false;
+	bool inspectSegmentationBridgeRequested = false;
 	bool segmentImageRequested = false;
 	bool generateMediaRequested = false;
 	bool pollMediaRequested = false;
@@ -778,10 +779,12 @@ void ofApp::draw() {
 	ImGui::TextWrapped("%s", mediaStatus.c_str());
 	if (!mediaOutput.empty()) ImGui::TextWrapped("%s", mediaOutput.c_str());
 	const auto fitMediaPreview = [](float width, float height) {
-		const ImVec2 available = ImGui::GetContentRegionAvail();
+		if (width <= 0.0f || height <= 0.0f) return ImVec2(1.0f, 1.0f);
+		const float availableWidth = std::max(1.0f, ImGui::GetContentRegionAvail().x);
+		constexpr float maximumPreviewHeight = 320.0f;
 		const float scale = std::min(1.0f, std::min(
-			std::max(1.0f, available.x) / width,
-			std::max(1.0f, available.y) / height));
+			availableWidth / width,
+			maximumPreviewHeight / height));
 		return ImVec2(width * scale, height * scale);
 	};
 	if (generatedImage.isAllocated()) {
@@ -867,6 +870,8 @@ void ofApp::draw() {
 	if (ImGui::Button("Use chat URL##sam")) {
 		setTextBuffer(segmentationEndpointUrl, endpointUrl.data());
 	}
+	inspectSegmentationBridgeRequested = ImGui::Button("Check bridge");
+	ImGui::SameLine();
 	loadSegmentationImageRequested = ImGui::Button("Load segmentation image");
 	ImGui::SameLine();
 	ImGui::BeginDisabled(segmentationImageBytes.empty());
@@ -965,6 +970,7 @@ void ofApp::draw() {
 		if (configurationDirty) applyConfiguration();
 		transcribeAudio();
 	}
+	if (inspectSegmentationBridgeRequested) inspectSegmentationBridge();
 	if (segmentImageRequested) {
 		if (configurationDirty) applyConfiguration();
 		segmentImage();
@@ -1319,6 +1325,36 @@ bool ofApp::loadSegmentationImage(const std::string & path) {
 	segmentationFilename = ofFilePath::getBaseName(path) + ".ppm";
 	segmentationStatus = "Loaded " + ofFilePath::getFileName(path) + ".";
 	return true;
+}
+
+void ofApp::inspectSegmentationBridge() {
+	if (mediaBusy || busy.exchange(true)) return;
+	segmentationEndpoint.setBaseUrl(segmentationEndpointUrl.data());
+	segmentationEndpoint.setBearerToken(configuredSegmentationToken());
+	cancellationRequested = false;
+	requestCanCancel = true;
+	status = "Checking SAM bridge...";
+	segmentationStatus = status;
+	const std::string currentOutput = output;
+	const std::vector<std::string> currentModels = availableModels;
+	worker = std::thread([this, currentOutput, currentModels]() {
+		const auto bridge = segmentation.inspectSamBridge([this]() {
+			return cancellationRequested.load();
+		});
+		std::lock_guard<std::mutex> lock(resultMutex);
+		if (bridge.cancelled) {
+			pendingStatus = "Segmentation bridge check cancelled";
+		} else if (!bridge) {
+			pendingStatus = "Segmentation bridge unavailable: " + bridge.error;
+		} else {
+			pendingStatus = "Segmentation bridge ready: v" + bridge.version +
+				" / " + (bridge.mode.empty() ? "unknown mode" : bridge.mode) +
+				" / " + (bridge.backend.empty() ? "unknown backend" : bridge.backend);
+		}
+		pendingOutput = currentOutput;
+		pendingModels = currentModels;
+		finished = true;
+	});
 }
 
 void ofApp::segmentImage() {
