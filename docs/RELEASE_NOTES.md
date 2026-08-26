@@ -2,7 +2,10 @@
 
 ## Unreleased
 
-No changes yet.
+### Fixed
+
+- pressing Enter in the regular example chat now sends the complete message,
+  including spaces; Ctrl+Enter remains available for inserting a new line;
 
 ## 0.2.0-rc.3 — 2026-08-26
 

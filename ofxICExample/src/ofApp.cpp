@@ -647,10 +647,13 @@ void ofApp::draw() {
 		input.data(),
 		input.size(),
 		ImVec2(-1, 76),
-		ImGuiInputTextFlags_EnterReturnsTrue);
+		ImGuiInputTextFlags_EnterReturnsTrue |
+		ImGuiInputTextFlags_CtrlEnterForNewLine);
 	if (ImGui::Button("Send")) sendRequested = true;
 	ImGui::SameLine();
 	clearRequested = ImGui::Button("Clear conversation");
+	ImGui::SameLine();
+	ImGui::TextDisabled("Enter sends; Ctrl+Enter adds a line");
 	ImGui::EndDisabled();
 	if (busy) {
 		ImGui::SameLine();
