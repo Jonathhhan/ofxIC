@@ -15,6 +15,9 @@
 - SAM bridge inspection and segmentation now use the same operation-scoped
   `RequestControl` and `RequestFailure` classification as the other endpoint
   clients while retaining callback overloads for `0.2.x` source compatibility.
+- the regular example can now render direct-chat SSE chunks while a request is
+  still running, with an explicit boundary that keeps document-tool requests
+  on the existing non-streaming tool loop.
 
 ## 0.2.0-rc.4 — 2026-08-26
 

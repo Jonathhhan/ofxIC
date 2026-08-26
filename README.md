@@ -65,6 +65,11 @@ back out of chat history, and is reported separately from timeout, transport,
 provider, and invalid-response failures through `RequestFailure`. The previous
 standalone cancellation-predicate overloads remain available during `0.2.x`.
 
+The example's **Stream direct chat** option renders text chunks while a plain
+chat request is still running. It deliberately bypasses document tools because
+streaming tool calls are not part of the supported protocol yet; leave it off
+for grounded `search_documents` answers.
+
 The complete document workflow remains small:
 
 ```cpp
@@ -520,6 +525,14 @@ scripts\smoke-request-lifecycle.ps1
 
 This is deterministic local transport and GUI evidence; it does not claim that
 a hosted provider or model was contacted.
+
+Direct-chat streaming has its own deterministic GUI smoke. A local HTTP/1.1
+fixture delays its second SSE event and the script requires the regular example
+to expose the first chunk before the completed response:
+
+```powershell
+scripts\smoke-streaming.ps1
+```
 
 GitHub Actions also builds `ofxICExample` against the current official
 openFrameworks Linux nightly. The workflow records the resolved archive name,

@@ -108,6 +108,8 @@ private:
 	bool mediaConfigurationDirty = false;
 	bool musicConfigurationDirty = false;
 	bool focusMessageInput = true;
+	bool streamChat = false;
+	std::string pendingChatAutorun;
 	std::string settingsPath;
 	std::string settingsStatus;
 	std::string credentialStatus;
@@ -133,6 +135,7 @@ private:
 	std::string pendingOutput;
 	std::string pendingStatus;
 	std::string pendingProgressStatus;
+	std::string pendingStreamOutput;
 	std::string pendingSegmentationMask;
 	std::string pendingModelSelection;
 	std::vector<std::string> pendingModels;
