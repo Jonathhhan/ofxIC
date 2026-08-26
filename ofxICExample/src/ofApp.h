@@ -8,6 +8,7 @@
 
 #include <array>
 #include <atomic>
+#include <cstdint>
 #include <mutex>
 #include <map>
 #include <string>
@@ -139,6 +140,7 @@ private:
 	std::atomic<bool> finished{ false };
 	std::atomic<bool> cancellationRequested{ false };
 	std::atomic<bool> requestCanCancel{ false };
+	std::uint64_t automationCancelAtMillis = 0;
 	std::thread mediaWorker;
 	std::mutex mediaResultMutex;
 	std::string mediaStatus;

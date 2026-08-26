@@ -349,7 +349,15 @@ void ofApp::setup() {
 	const std::string documentPath = environmentValue("OFXIC_DOCUMENT_PATH");
 	if (!documentPath.empty()) loadDocument(documentPath);
 	status = "Ready. Inspect the endpoint, then send a message.";
-	if (environmentValue("OFXIC_INSPECT_AUTORUN") == "1") inspectEndpoint();
+	if (environmentValue("OFXIC_INSPECT_AUTORUN") == "1") {
+		const int cancelAfterMillis = ofToInt(
+			environmentValue("OFXIC_INSPECT_CANCEL_AFTER_MS"));
+		if (cancelAfterMillis > 0) {
+			automationCancelAtMillis = ofGetElapsedTimeMillis() +
+				static_cast<std::uint64_t>(cancelAfterMillis);
+		}
+		inspectEndpoint();
+	}
 	const std::string transcriptionAutorun = environmentValue("OFXIC_TRANSCRIPTION_AUTORUN");
 	if (transcriptionAutorun == "openai" || transcriptionAutorun == "whisper-cpp") {
 		transcriptionProtocol = transcriptionAutorun == "whisper-cpp" ? 1 : 0;
@@ -413,6 +421,11 @@ void ofApp::setup() {
 }
 
 void ofApp::update() {
+	if (automationCancelAtMillis > 0 && busy && requestCanCancel &&
+		ofGetElapsedTimeMillis() >= automationCancelAtMillis) {
+		automationCancelAtMillis = 0;
+		cancelRequest();
+	}
 	if (busy && requestCanCancel) {
 		std::lock_guard<std::mutex> lock(resultMutex);
 		if (!pendingProgressStatus.empty()) status = pendingProgressStatus;
@@ -1518,8 +1531,11 @@ void ofApp::inspectEndpoint() {
 	}
 	const std::string currentOutput = output;
 	const std::string currentModel = chat.getOptions().model;
-	worker = std::thread([this, currentOutput, currentModel]() {
+	const int timeoutSeconds = ofToInt(
+		environmentValue("OFXIC_INSPECT_TIMEOUT_SECONDS"));
+	worker = std::thread([this, currentOutput, currentModel, timeoutSeconds]() {
 		ofxIC::RequestControl control;
+		control.timeoutSeconds = timeoutSeconds;
 		control.shouldCancel = [this]() { return cancellationRequested.load(); };
 		const auto inspection = endpoint.inspect(control);
 		std::lock_guard<std::mutex> lock(resultMutex);

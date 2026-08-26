@@ -11,6 +11,9 @@
   operation-scoped `RequestControl` and distinguish cancellation, timeout,
   transport, provider, and invalid-response failures while preserving the
   `0.2.x` cancellation-callback overloads;
+- the regular example now supports a marker-gated slow-request GUI fixture that
+  independently observes timeout and cancellation through the real local HTTP
+  transport path;
 
 ### Fixed
 

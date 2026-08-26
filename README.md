@@ -509,6 +509,18 @@ libcurl and GUI shutdown path against a deliberately slow local endpoint:
 scripts\smoke-cancellation.ps1
 ```
 
+The request-lifecycle GUI smoke uses that same slow local endpoint twice and
+checks the result written by the regular example: a one-second bounded request
+must report `Inspection timed out`, while a separately marker-triggered cancel
+must report `Inspection cancelled`:
+
+```powershell
+scripts\smoke-request-lifecycle.ps1
+```
+
+This is deterministic local transport and GUI evidence; it does not claim that
+a hosted provider or model was contacted.
+
 GitHub Actions also builds `ofxICExample` against the current official
 openFrameworks Linux nightly. The workflow records the resolved archive name,
 opens the GUI on a virtual display, and uploads its screenshot and log. With
