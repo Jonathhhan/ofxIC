@@ -779,9 +779,9 @@ ChatResult Endpoint::chat(
 	if (response.status < 200 || response.status >= 300) {
 		result.failure = RequestFailure::Provider;
 		result.error = "chat endpoint returned HTTP " + std::to_string(response.status);
-		if (!response.error.empty()) {
-			result.error += ": " + response.error;
-		}
+		const std::string detail = extractErrorText(response.body);
+		if (!detail.empty()) result.error += ": " + detail;
+		else if (!response.error.empty()) result.error += ": " + response.error;
 		return result;
 	}
 

@@ -221,6 +221,25 @@ OFXIC_TEST(endpoint_reports_http_failures) {
 	OFXIC_REQUIRE(result.error.find("HTTP 503") != std::string::npos);
 }
 
+OFXIC_TEST(endpoint_reports_bounded_provider_error_details) {
+	ofxIC::Endpoint endpoint("https://provider.example", [](const ofxIC::HttpRequest &) {
+		ofxIC::HttpResponse response;
+		response.started = true;
+		response.status = 402;
+		response.body = R"({"error":{"message":"Free quota exhausted; add credits"}})";
+		return response;
+	});
+	ofxIC::ChatRequest request;
+	request.messages.push_back({ ofxIC::ChatRole::User, "Hello" });
+
+	const auto result = endpoint.chat(request);
+	OFXIC_REQUIRE(!result);
+	OFXIC_REQUIRE(result.httpStatus == 402);
+	OFXIC_REQUIRE(result.error ==
+		"chat endpoint returned HTTP 402: Free quota exhausted; add credits");
+	OFXIC_REQUIRE(result.rawResponse.find("Free quota exhausted") != std::string::npos);
+}
+
 OFXIC_TEST(endpoint_rejects_streaming_tools_before_transport) {
 	int calls = 0;
 	ofxIC::Endpoint endpoint("http://localhost:8001", [&](const ofxIC::HttpRequest &) {
