@@ -27,6 +27,7 @@ on:
       - "ofxICExample/**"
       - "scripts/sam-bridge-server.py"
       - "tests/transcription_endpoint_fixture.py"
+      - "tests/image_endpoint_fixture.py"
       - ".github/workflows/example-build.yml"
   push:
     branches:
@@ -39,6 +40,7 @@ on:
       - "ofxICExample/**"
       - "scripts/sam-bridge-server.py"
       - "tests/transcription_endpoint_fixture.py"
+      - "tests/image_endpoint_fixture.py"
       - ".github/workflows/example-build.yml"
 
 permissions:
@@ -377,6 +379,103 @@ jobs:
         with:
           name: ofxICExample-openai-video-rejection
           path: ${{ runner.temp }}/openai-video-rejection
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Exercise deterministic OpenAI image through GUI
+        timeout-minutes: 3
+        shell: bash
+        env:
+          LIBGL_ALWAYS_SOFTWARE: "1"
+          OFXIC_MEDIA_BACKEND: openai
+          OFXIC_MEDIA_ENDPOINT_URL: http://127.0.0.1:18087/v1
+          OFXIC_MEDIA_AUTORUN: image
+          OFXIC_MEDIA_PROMPT: "deterministic image fixture"
+        run: |
+          set -euo pipefail
+          app="$OF_ROOT/apps/myApps/ofxICExample"
+          artifact_dir="$RUNNER_TEMP/image-gui-smoke"
+          result="$artifact_dir/result.txt"
+          server_log="$artifact_dir/server.log"
+          mkdir -p "$artifact_dir"
+
+          python3 -u "$GITHUB_WORKSPACE/tests/image_endpoint_fixture.py" \
+            --port 18087 >"$server_log" 2>&1 &
+          server_pid=$!
+          cleanup_server() {
+            kill "$server_pid" 2>/dev/null || true
+            wait "$server_pid" 2>/dev/null || true
+          }
+          trap cleanup_server EXIT
+
+          for _ in $(seq 1 40); do
+            curl --fail --silent http://127.0.0.1:18087/health >/dev/null && break
+            kill -0 "$server_pid" 2>/dev/null || { cat "$server_log" >&2; exit 1; }
+            sleep 0.25
+          done
+          curl --fail --silent http://127.0.0.1:18087/health >/dev/null
+          export OFXIC_MEDIA_RESULT_PATH="$result"
+
+          xvfb-run \
+            --auto-servernum \
+            --server-args="-screen 0 1280x720x24 -nolisten tcp" \
+            bash -euo pipefail -c '
+              binary="$1"
+              log="$2"
+              result="$3"
+              screenshot="$4"
+
+              "$binary" >"$log" 2>&1 &
+              app_pid=$!
+              cleanup_app() {
+                kill "$app_pid" 2>/dev/null || true
+                wait "$app_pid" 2>/dev/null || true
+              }
+              trap cleanup_app EXIT
+
+              window_id=""
+              for _ in $(seq 1 60); do
+                window_id="$(xdotool search --name "^ofxIC Endpoint Workbench$" 2>/dev/null | head -n 1 || true)"
+                [[ -n "$window_id" ]] && break
+                kill -0 "$app_pid" 2>/dev/null || { cat "$log" >&2; exit 1; }
+                sleep 0.25
+              done
+              [[ -n "$window_id" ]] || { echo "Example window did not appear" >&2; exit 1; }
+
+              for _ in $(seq 1 80); do
+                [[ -s "$result" ]] && break
+                kill -0 "$app_pid" 2>/dev/null || { cat "$log" >&2; exit 1; }
+                sleep 0.25
+              done
+              [[ -s "$result" ]] || { echo "Timed out waiting for fixture image" >&2; cat "$log" >&2; exit 1; }
+              grep -Fq "OpenAI image generation completed" "$result"
+              grep -Fq "Saved:" "$result"
+
+              sleep 1
+              import -display "$DISPLAY" -window "$window_id" "$screenshot"
+              test -s "$screenshot"
+            ' bash \
+            "$app/bin/ofxICExample" \
+            "$artifact_dir/ofxICExample.log" \
+            "$result" \
+            "$artifact_dir/ofxICExample-image.png"
+
+          image_path="$(sed -n 's/^Saved: //p' "$result" | tail -n 1)"
+          test -n "$image_path"
+          test -s "$image_path"
+          cp "$image_path" "$artifact_dir/generated-image.png"
+          identify -format '%m %wx%h\n' "$artifact_dir/generated-image.png" \
+            >"$artifact_dir/image.txt"
+          grep -Fxq "PNG 8x8" "$artifact_dir/image.txt"
+          cat "$result"
+          cat "$artifact_dir/image.txt"
+
+      - name: Upload deterministic image GUI artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ofxICExample-image-fixture
+          path: ${{ runner.temp }}/image-gui-smoke
           if-no-files-found: error
           retention-days: 14
 

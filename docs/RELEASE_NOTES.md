@@ -9,6 +9,9 @@
   transcription, expose `RequestFailure`, and keep local HTTP cancellation
   distinct from provider-side remote-job cancellation;
 - the regular example can cancel its active media or music HTTP request.
+- a deterministic OpenAI-compatible image fixture now exercises the regular
+  GUI through Base64 decoding and verifies the saved PNG without provider
+  credits.
 
 ## 0.2.0-rc.4 — 2026-08-26
 
