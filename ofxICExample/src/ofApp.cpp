@@ -1237,9 +1237,18 @@ void ofApp::selectMediaBackend(int backendIndex) {
 	}
 	setTextBuffer(mediaEndpointUrl, mediaBackends[selectedMediaBackend].url);
 	const std::string imageModel(mediaImageModel.data());
-	if (selectedMediaBackend == 0 &&
-		(imageModel.empty() || imageModel == "black-forest-labs/FLUX.1-dev")) {
-		setTextBuffer(mediaImageModel, "gpt-image-2");
+	if (selectedMediaBackend == 0) {
+		if (imageModel.empty() || imageModel == "black-forest-labs/FLUX.1-dev") {
+			setTextBuffer(mediaImageModel, "gpt-image-2");
+		}
+		const bool supportedGptImageSize =
+			(mediaWidth == 1024 && mediaHeight == 1024) ||
+			(mediaWidth == 1024 && mediaHeight == 1536) ||
+			(mediaWidth == 1536 && mediaHeight == 1024);
+		if (!supportedGptImageSize) {
+			mediaWidth = 1024;
+			mediaHeight = 1024;
+		}
 	} else if (selectedMediaBackend == 1 &&
 		(imageModel.empty() || imageModel.compare(0, 9, "gpt-image") == 0)) {
 		setTextBuffer(mediaImageModel, "black-forest-labs/FLUX.1-dev");

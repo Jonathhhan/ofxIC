@@ -146,7 +146,9 @@ ImageResult MediaClient::generateImage(const ImageRequest & request) const {
 	}
 	if (response.status < 200 || response.status >= 300) {
 		result.error = "image endpoint returned HTTP " + std::to_string(response.status);
-		if (!response.error.empty()) result.error += ": " + response.error;
+		const std::string detail = Endpoint::extractErrorText(response.body);
+		if (!detail.empty()) result.error += ": " + detail;
+		else if (!response.error.empty()) result.error += ": " + response.error;
 		return result;
 	}
 	result.outputFormat = extractStringField(response.body, "output_format");

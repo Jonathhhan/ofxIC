@@ -49,6 +49,28 @@ OFXIC_TEST(media_client_accepts_image_urls) {
 	OFXIC_REQUIRE(result.urls[0] == "https://cdn.example/image.png");
 }
 
+OFXIC_TEST(media_client_surfaces_openai_image_error_detail) {
+	ofxIC::Endpoint endpoint("https://api.openai.com/v1", [](const ofxIC::HttpRequest &) {
+		ofxIC::HttpResponse response;
+		response.started = true;
+		response.status = 400;
+		response.body = R"({"error":{"message":"Invalid value for size: 512x512"}})";
+		return response;
+	});
+	ofxIC::MediaClient media(endpoint);
+	ofxIC::ImageRequest request;
+	request.prompt = "test";
+	request.model = "gpt-image-2";
+	request.width = 512;
+	request.height = 512;
+
+	const auto result = media.generateImage(request);
+	OFXIC_REQUIRE(!result);
+	OFXIC_REQUIRE(result.httpStatus == 400);
+	OFXIC_REQUIRE(result.error ==
+		"image endpoint returned HTTP 400: Invalid value for size: 512x512");
+}
+
 OFXIC_TEST(media_client_submits_native_image_job) {
 	ofxIC::HttpRequest captured;
 	ofxIC::Endpoint endpoint("http://localhost:1234", [&](const ofxIC::HttpRequest & request) {

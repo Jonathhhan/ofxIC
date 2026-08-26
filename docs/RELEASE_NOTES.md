@@ -19,6 +19,9 @@
 
 - pressing Enter in the regular example chat now sends the complete message,
   including spaces; Ctrl+Enter remains available for inserting a new line;
+- selecting the OpenAI image backend now resets the shared media dimensions to
+  the supported `1024x1024` GPT Image size, and image HTTP failures retain the
+  provider's bounded JSON error detail instead of showing only the status code;
 
 ## 0.2.0-rc.3 — 2026-08-26
 
