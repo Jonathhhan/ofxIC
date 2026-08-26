@@ -12,6 +12,9 @@
 - a deterministic OpenAI-compatible image fixture now exercises the regular
   GUI through Base64 decoding and verifies the saved PNG without provider
   credits.
+- SAM bridge inspection and segmentation now use the same operation-scoped
+  `RequestControl` and `RequestFailure` classification as the other endpoint
+  clients while retaining callback overloads for `0.2.x` source compatibility.
 
 ## 0.2.0-rc.4 — 2026-08-26
 

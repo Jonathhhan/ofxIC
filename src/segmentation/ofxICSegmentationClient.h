@@ -11,10 +11,15 @@ class SegmentationClient {
 public:
 	explicit SegmentationClient(Endpoint & endpoint);
 	SegmentationBridgeStatus inspectSamBridge(
-		std::function<bool()> shouldCancel = nullptr) const;
+		RequestControl control = {}) const;
+	SegmentationBridgeStatus inspectSamBridge(
+		std::function<bool()> shouldCancel) const;
 	SegmentationResult segmentSamBridge(
 		const SegmentationRequest & request,
-		std::function<bool()> shouldCancel = nullptr) const;
+		RequestControl control = {}) const;
+	SegmentationResult segmentSamBridge(
+		const SegmentationRequest & request,
+		std::function<bool()> shouldCancel) const;
 
 private:
 	Endpoint & endpoint;

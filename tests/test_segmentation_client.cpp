@@ -110,3 +110,65 @@ OFXIC_TEST(segmentation_client_rejects_invalid_prompt_before_transport) {
 	OFXIC_REQUIRE(!client.segmentSamBridge(request));
 	OFXIC_REQUIRE(calls == 0);
 }
+
+OFXIC_TEST(segmentation_bridge_inspection_forwards_control_and_timeout) {
+	ofxIC::HttpRequest captured;
+	ofxIC::Endpoint endpoint("http://example.test", [&](const ofxIC::HttpRequest & request) {
+		captured = request;
+		ofxIC::HttpResponse response;
+		response.failure = ofxIC::RequestFailure::Timeout;
+		response.error = "request timed out";
+		return response;
+	});
+	ofxIC::SegmentationClient client(endpoint);
+	ofxIC::RequestControl control;
+	control.timeoutSeconds = 4;
+	control.shouldCancel = [] { return false; };
+
+	const auto status = client.inspectSamBridge(control);
+	OFXIC_REQUIRE(!status);
+	OFXIC_REQUIRE(status.failure == ofxIC::RequestFailure::Timeout);
+	OFXIC_REQUIRE(captured.timeoutSeconds == 4);
+	OFXIC_REQUIRE(captured.shouldCancel && !captured.shouldCancel());
+}
+
+OFXIC_TEST(segmentation_request_forwards_control_and_cancellation) {
+	ofxIC::HttpRequest captured;
+	ofxIC::Endpoint endpoint("http://example.test", [&](const ofxIC::HttpRequest & request) {
+		captured = request;
+		ofxIC::HttpResponse response;
+		response.cancelled = true;
+		response.failure = ofxIC::RequestFailure::Cancelled;
+		response.error = "request cancelled";
+		return response;
+	});
+	ofxIC::SegmentationClient client(endpoint);
+	ofxIC::SegmentationRequest request;
+	request.imageBytes = "ppm";
+	request.points.push_back({});
+	ofxIC::RequestControl control;
+	control.timeoutSeconds = 6;
+	control.shouldCancel = [] { return true; };
+
+	const auto result = client.segmentSamBridge(request, control);
+	OFXIC_REQUIRE(!result);
+	OFXIC_REQUIRE(result.cancelled);
+	OFXIC_REQUIRE(result.failure == ofxIC::RequestFailure::Cancelled);
+	OFXIC_REQUIRE(captured.timeoutSeconds == 6);
+	OFXIC_REQUIRE(captured.shouldCancel && captured.shouldCancel());
+}
+
+OFXIC_TEST(segmentation_rejects_negative_timeout_before_transport) {
+	int calls = 0;
+	ofxIC::Endpoint endpoint("http://example.test", [&](const ofxIC::HttpRequest &) {
+		++calls;
+		return ofxIC::HttpResponse{};
+	});
+	ofxIC::SegmentationClient client(endpoint);
+	ofxIC::RequestControl control;
+	control.timeoutSeconds = -1;
+	const auto status = client.inspectSamBridge(control);
+	OFXIC_REQUIRE(!status);
+	OFXIC_REQUIRE(status.failure == ofxIC::RequestFailure::InvalidResponse);
+	OFXIC_REQUIRE(calls == 0);
+}

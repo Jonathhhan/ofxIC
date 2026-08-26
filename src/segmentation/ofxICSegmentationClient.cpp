@@ -58,23 +58,38 @@ SegmentationClient::SegmentationClient(Endpoint & endpoint) : endpoint(endpoint)
 
 SegmentationBridgeStatus SegmentationClient::inspectSamBridge(
 	std::function<bool()> shouldCancel) const {
+	RequestControl control;
+	control.shouldCancel = std::move(shouldCancel);
+	return inspectSamBridge(std::move(control));
+}
+
+SegmentationBridgeStatus SegmentationClient::inspectSamBridge(
+	RequestControl control) const {
 	SegmentationBridgeStatus result;
+	if (control.timeoutSeconds < 0) {
+		result.failure = RequestFailure::InvalidResponse;
+		result.error = "request timeout cannot be negative";
+		return result;
+	}
 	HttpRequest request;
 	request.method = HttpMethod::Get;
 	request.url = "/health";
 	request.accept = "application/json";
 	request.headers.emplace_back("X-ofxIC-SAM-Bridge-Version", "1");
-	request.timeoutSeconds = 10;
+	request.timeoutSeconds = control.timeoutSeconds > 0 ? control.timeoutSeconds : 10;
 	request.maxResponseBytes = 16U * 1024U;
-	request.shouldCancel = std::move(shouldCancel);
+	request.shouldCancel = std::move(control.shouldCancel);
 	const HttpResponse response = endpoint.perform(std::move(request));
 	result.httpStatus = response.status;
 	result.cancelled = response.cancelled;
+	result.failure = response.cancelled ? RequestFailure::Cancelled : response.failure;
 	if (response.cancelled) {
 		result.error = response.error.empty() ? "request cancelled" : response.error;
 		return result;
 	}
 	if (!response.started || response.status < 200 || response.status >= 300) {
+		if (result.failure == RequestFailure::None) result.failure = response.status > 0
+			? RequestFailure::Provider : RequestFailure::Transport;
 		result.error = !response.body.empty() && response.body.size() <= 4096U
 			? response.body
 			: (response.error.empty() ? "SAM bridge health request failed" : response.error);
@@ -85,6 +100,7 @@ SegmentationBridgeStatus SegmentationClient::inspectSamBridge(
 	result.mode = extractStringField(response.body, "mode");
 	result.backend = extractStringField(response.body, "backend");
 	if (status != "ok" || result.version != "1") {
+		result.failure = RequestFailure::InvalidResponse;
 		result.error = "SAM bridge returned an incompatible health response";
 		return result;
 	}
@@ -95,25 +111,43 @@ SegmentationBridgeStatus SegmentationClient::inspectSamBridge(
 SegmentationResult SegmentationClient::segmentSamBridge(
 	const SegmentationRequest & request,
 	std::function<bool()> shouldCancel) const {
+	RequestControl control;
+	control.shouldCancel = std::move(shouldCancel);
+	return segmentSamBridge(request, std::move(control));
+}
+
+SegmentationResult SegmentationClient::segmentSamBridge(
+	const SegmentationRequest & request,
+	RequestControl control) const {
 	SegmentationResult result;
+	if (control.timeoutSeconds < 0) {
+		result.failure = RequestFailure::InvalidResponse;
+		result.error = "request timeout cannot be negative";
+		return result;
+	}
 	if (request.imageBytes.empty()) {
+		result.failure = RequestFailure::InvalidResponse;
 		result.error = "segmentation image is empty";
 		return result;
 	}
 	if (request.imageBytes.size() > maximumImageBytes) {
+		result.failure = RequestFailure::InvalidResponse;
 		result.error = "segmentation image exceeds the 60 MiB client limit";
 		return result;
 	}
 	if (request.points.empty()) {
+		result.failure = RequestFailure::InvalidResponse;
 		result.error = "segmentation requires at least one point";
 		return result;
 	}
 	if (request.points.size() > maximumPoints) {
+		result.failure = RequestFailure::InvalidResponse;
 		result.error = "segmentation accepts at most 64 points";
 		return result;
 	}
 	for (const auto & point : request.points) {
 		if (point.x < 0.0f || point.x > 1.0f || point.y < 0.0f || point.y > 1.0f) {
+			result.failure = RequestFailure::InvalidResponse;
 			result.error = "segmentation point must use normalized coordinates";
 			return result;
 		}
@@ -141,17 +175,20 @@ SegmentationResult SegmentationClient::segmentSamBridge(
 	httpRequest.contentType = "multipart/form-data; boundary=" + boundary;
 	httpRequest.accept = "image/x-portable-graymap";
 	httpRequest.headers.emplace_back("X-ofxIC-SAM-Bridge-Version", "1");
-	httpRequest.timeoutSeconds = 300;
+	httpRequest.timeoutSeconds = control.timeoutSeconds > 0 ? control.timeoutSeconds : 300;
 	httpRequest.maxResponseBytes = 64U * 1024U * 1024U;
-	httpRequest.shouldCancel = std::move(shouldCancel);
+	httpRequest.shouldCancel = std::move(control.shouldCancel);
 	const auto response = endpoint.perform(std::move(httpRequest));
 	result.httpStatus = response.status;
 	result.cancelled = response.cancelled;
+	result.failure = response.cancelled ? RequestFailure::Cancelled : response.failure;
 	if (response.cancelled) {
 		result.error = response.error.empty() ? "request cancelled" : response.error;
 		return result;
 	}
 	if (!response.started || response.status < 200 || response.status >= 300) {
+		if (result.failure == RequestFailure::None) result.failure = response.status > 0
+			? RequestFailure::Provider : RequestFailure::Transport;
 		if (!response.body.empty() && response.body.size() <= 4096U) {
 			result.error = response.body;
 		} else {
@@ -163,6 +200,7 @@ SegmentationResult SegmentationClient::segmentSamBridge(
 	}
 	if (response.body.size() < 3 || response.body[0] != 'P' ||
 		(response.body[1] != '5' && response.body[1] != '2')) {
+		result.failure = RequestFailure::InvalidResponse;
 		result.error = "SAM bridge returned no PGM mask";
 		return result;
 	}

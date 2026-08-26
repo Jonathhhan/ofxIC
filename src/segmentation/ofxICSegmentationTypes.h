@@ -1,5 +1,7 @@
 #pragma once
 
+#include "../endpoint/ofxICRequestTypes.h"
+
 #include <string>
 #include <vector>
 
@@ -20,6 +22,7 @@ struct SegmentationRequest {
 struct SegmentationResult {
 	bool success = false;
 	bool cancelled = false;
+	RequestFailure failure = RequestFailure::None;
 	int httpStatus = 0;
 	std::string maskBytes;
 	std::string error;
@@ -29,6 +32,7 @@ struct SegmentationResult {
 struct SegmentationBridgeStatus {
 	bool reachable = false;
 	bool cancelled = false;
+	RequestFailure failure = RequestFailure::None;
 	int httpStatus = 0;
 	std::string version;
 	std::string mode;
