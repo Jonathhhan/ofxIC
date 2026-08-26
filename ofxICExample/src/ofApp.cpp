@@ -627,33 +627,6 @@ void ofApp::draw() {
 	ImGui::TextDisabled("%zu document(s), %zu chunk(s)",
 		documents.documentCount(), documents.chunkCount());
 	ImGui::TextWrapped("%s", documentStatus.c_str());
-	ImGui::SeparatorText("Transcription");
-	const char * transcriptionProtocols[] = {
-		"OpenAI /v1/audio/transcriptions", "whisper.cpp /inference" };
-	ImGui::BeginDisabled(busy || mediaBusy);
-	if (ImGui::Combo("Protocol", &transcriptionProtocol, transcriptionProtocols, 2)) {
-		setTextBuffer(transcriptionEndpointUrl,
-			ofxICExample::defaultTranscriptionEndpointUrl(transcriptionProtocol));
-	}
-	ImGui::InputText("Audio base URL", transcriptionEndpointUrl.data(),
-		transcriptionEndpointUrl.size());
-	ImGui::SameLine();
-	if (ImGui::Button("Use chat URL##audio")) {
-		setTextBuffer(transcriptionEndpointUrl, endpointUrl.data());
-	}
-	ImGui::InputText("Audio model", transcriptionModel.data(), transcriptionModel.size());
-	if (transcriptionProtocol == 1) {
-		ImGui::TextDisabled("whisper.cpp selects its model when the server starts.");
-	}
-	loadAudioRequested = ImGui::Button("Load audio");
-	ImGui::SameLine();
-	ImGui::BeginDisabled(audioBytes.empty());
-	transcribeAudioRequested = ImGui::Button("Transcribe");
-	ImGui::EndDisabled();
-	ImGui::EndDisabled();
-	ImGui::SameLine();
-	ImGui::TextDisabled("%s", audioFilename.empty() ? "no file" : audioFilename.c_str());
-	ImGui::TextWrapped("%s", audioStatus.c_str());
 	if (ImGui::CollapsingHeader("Loaded sources", ImGuiTreeNodeFlags_DefaultOpen)) {
 		for (const std::string & source : loadedDocumentSources) {
 			ImGui::BulletText("%s", source.c_str());
@@ -697,7 +670,47 @@ void ofApp::draw() {
 
 	ImGui::SetNextWindowPos(ImVec2(600, 248), ImGuiCond_FirstUseEver);
 	ImGui::SetNextWindowSize(ImVec2(584, 426), ImGuiCond_FirstUseEver);
-	ImGui::Begin("Image and video");
+	ImGui::Begin("Inference tasks");
+	const auto fitMediaPreview = [](float width, float height) {
+		if (width <= 0.0f || height <= 0.0f) return ImVec2(1.0f, 1.0f);
+		const float availableWidth = std::max(1.0f, ImGui::GetContentRegionAvail().x);
+		constexpr float maximumPreviewHeight = 320.0f;
+		const float scale = std::min(1.0f, std::min(
+			availableWidth / width,
+			maximumPreviewHeight / height));
+		return ImVec2(width * scale, height * scale);
+	};
+	if (ImGui::BeginTabBar("Inference task tabs")) {
+	if (ImGui::BeginTabItem("Transcription")) {
+		const char * transcriptionProtocols[] = {
+			"OpenAI /v1/audio/transcriptions", "whisper.cpp /inference" };
+		ImGui::BeginDisabled(busy || mediaBusy);
+		if (ImGui::Combo("Protocol", &transcriptionProtocol, transcriptionProtocols, 2)) {
+			setTextBuffer(transcriptionEndpointUrl,
+				ofxICExample::defaultTranscriptionEndpointUrl(transcriptionProtocol));
+		}
+		ImGui::InputText("Audio base URL", transcriptionEndpointUrl.data(),
+			transcriptionEndpointUrl.size());
+		ImGui::SameLine();
+		if (ImGui::Button("Use chat URL##audio")) {
+			setTextBuffer(transcriptionEndpointUrl, endpointUrl.data());
+		}
+		ImGui::InputText("Audio model", transcriptionModel.data(), transcriptionModel.size());
+		if (transcriptionProtocol == 1) {
+			ImGui::TextDisabled("whisper.cpp selects its model when the server starts.");
+		}
+		loadAudioRequested = ImGui::Button("Load audio");
+		ImGui::SameLine();
+		ImGui::BeginDisabled(audioBytes.empty());
+		transcribeAudioRequested = ImGui::Button("Transcribe");
+		ImGui::EndDisabled();
+		ImGui::EndDisabled();
+		ImGui::SameLine();
+		ImGui::TextDisabled("%s", audioFilename.empty() ? "no file" : audioFilename.c_str());
+		ImGui::TextWrapped("%s", audioStatus.c_str());
+		ImGui::EndTabItem();
+	}
+	if (ImGui::BeginTabItem("Image / video")) {
 	const char * backendNames[] = { "OpenAI images", "Hugging Face / fal-ai", "stable-diffusion.cpp" };
 	const char * mediaKinds[] = { "Image", "Video" };
 	ImGui::BeginDisabled(busy || mediaBusy);
@@ -720,6 +733,11 @@ void ofApp::draw() {
 	if (selectedMediaBackend != 1) {
 		if (ImGui::InputText(
 			"Media base URL", mediaEndpointUrl.data(), mediaEndpointUrl.size())) {
+			mediaConfigurationDirty = true;
+		}
+		ImGui::SameLine();
+		if (ImGui::Button("Use chat URL##media")) {
+			setTextBuffer(mediaEndpointUrl, endpointUrl.data());
 			mediaConfigurationDirty = true;
 		}
 	} else {
@@ -778,15 +796,6 @@ void ofApp::draw() {
 	if (mediaBusy) ImGui::TextDisabled("Waiting for media endpoint...");
 	ImGui::TextWrapped("%s", mediaStatus.c_str());
 	if (!mediaOutput.empty()) ImGui::TextWrapped("%s", mediaOutput.c_str());
-	const auto fitMediaPreview = [](float width, float height) {
-		if (width <= 0.0f || height <= 0.0f) return ImVec2(1.0f, 1.0f);
-		const float availableWidth = std::max(1.0f, ImGui::GetContentRegionAvail().x);
-		constexpr float maximumPreviewHeight = 320.0f;
-		const float scale = std::min(1.0f, std::min(
-			availableWidth / width,
-			maximumPreviewHeight / height));
-		return ImVec2(width * scale, height * scale);
-	};
 	if (generatedImage.isAllocated()) {
 		ImGui::Image(
 			(ImTextureID)(uintptr_t)generatedImage.getTexture().getTextureData().textureID,
@@ -796,7 +805,9 @@ void ofApp::draw() {
 			(ImTextureID)(uintptr_t)generatedVideo.getTexture().getTextureData().textureID,
 			fitMediaPreview(generatedVideo.getWidth(), generatedVideo.getHeight()));
 	}
-	ImGui::SeparatorText("Music generation");
+		ImGui::EndTabItem();
+	}
+	if (ImGui::BeginTabItem("Music")) {
 	ImGui::BeginDisabled(busy || mediaBusy);
 	if (ImGui::BeginCombo("Music backend", musicBackends[selectedMusicBackend].name)) {
 		for (std::size_t index = 0; index < musicBackends.size(); ++index) {
@@ -811,6 +822,11 @@ void ofApp::draw() {
 	ImGui::TextDisabled("%s", musicBackends[selectedMusicBackend].capabilityNote);
 	if (ImGui::InputText(
 		"Music base URL", musicEndpointUrl.data(), musicEndpointUrl.size())) {
+		musicConfigurationDirty = true;
+	}
+	ImGui::SameLine();
+	if (ImGui::Button("Use chat URL##music")) {
+		setTextBuffer(musicEndpointUrl, endpointUrl.data());
 		musicConfigurationDirty = true;
 	}
 	ImGui::InputTextMultiline(
@@ -861,7 +877,10 @@ void ofApp::draw() {
 		ImGui::SameLine();
 		if (ImGui::Button("Stop generated music")) generatedMusic.stop();
 	}
-	ImGui::SeparatorText("SAM bridge v1");
+		ImGui::EndTabItem();
+	}
+	if (ImGui::BeginTabItem("SAM")) {
+	ImGui::TextUnformatted("SAM bridge v1");
 	ImGui::TextDisabled("External endpoint: PPM + normalized points -> PGM mask");
 	ImGui::BeginDisabled(busy || mediaBusy);
 	ImGui::InputText("SAM base URL", segmentationEndpointUrl.data(),
@@ -932,6 +951,10 @@ void ofApp::draw() {
 		ImGui::Image(
 			(ImTextureID)(uintptr_t)segmentationMaskImage.getTexture().getTextureData().textureID,
 			fitMediaPreview(segmentationMaskImage.getWidth(), segmentationMaskImage.getHeight()));
+	}
+		ImGui::EndTabItem();
+	}
+	ImGui::EndTabBar();
 	}
 	ImGui::End();
 	gui.end();

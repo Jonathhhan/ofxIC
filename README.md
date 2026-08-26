@@ -321,11 +321,11 @@ Not part of the supported surface yet:
 ## Example
 
 `ofxICExample` uses `ofxImGui` to switch between `llama-server`,
-LM Studio, Hugging Face, OpenAI, and a custom endpoint. The same GUI also
-selects an independent media backend, generates images, submits native or
-  Hugging Face video jobs, polls them, displays returned media, submits local
-  ACE-Step or hosted Stability Audio 3 music jobs, saves and plays completed
-  MP3/WAV output with date-and-time filenames, and sends an
+LM Studio, Hugging Face, OpenAI, and a custom endpoint. A separate tabbed
+**Inference tasks** window gives transcription, image/video, music, and SAM one
+consistent visible workspace each. It selects independent backends, generates
+images, submits and polls video or music jobs, displays returned media, saves and
+plays completed MP3/WAV output with date-and-time filenames, and sends an
 explicitly selected audio file to either supported transcription protocol.
 Chat, transcription, SAM, image/video media, and music have separate endpoint
 URL fields so their external processes can remain available at the same time;

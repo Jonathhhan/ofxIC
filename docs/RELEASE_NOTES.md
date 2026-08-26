@@ -36,6 +36,10 @@
 
 ### Fixed
 
+- the regular example now groups transcription, image/video, music, and SAM in
+  one consistent tabbed **Inference tasks** window; transcription no longer
+  occupies the document-chat panel, and SAM is no longer hidden below unrelated
+  media controls;
 - image, video, and SAM previews now use a stable bounded height rather than the
   remaining vertical space in a long scrollable ImGui window; SAM input and mask
   images therefore no longer collapse to an effectively invisible one-pixel row;
