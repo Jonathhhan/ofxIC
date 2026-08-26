@@ -787,6 +787,10 @@ void ofApp::draw() {
 		pollMediaRequested = ImGui::Button("Poll job");
 	}
 	ImGui::EndDisabled();
+	if (mediaBusy) {
+		ImGui::SameLine();
+		cancelRequested = ImGui::Button("Cancel media request") || cancelRequested;
+	}
 	const std::string mediaToken = configuredMediaToken();
 	ImGui::TextDisabled("Media token: %s (%s)",
 		mediaToken.empty() ? "not loaded" : "loaded",
@@ -860,6 +864,10 @@ void ofApp::draw() {
 		pollMusicRequested = ImGui::Button("Poll music job");
 	}
 	ImGui::EndDisabled();
+	if (mediaBusy) {
+		ImGui::SameLine();
+		cancelRequested = ImGui::Button("Cancel music request") || cancelRequested;
+	}
 	if (selectedMusicBackend == 1) {
 		const std::string musicToken = configuredMusicToken();
 		ImGui::TextDisabled("Stability token: %s (%s)",
@@ -1617,9 +1625,14 @@ void ofApp::sendMessage() {
 }
 
 void ofApp::cancelRequest() {
-	if (!busy || !requestCanCancel) return;
+	if ((!busy || !requestCanCancel) && !mediaBusy) return;
 	cancellationRequested = true;
-	status = "Cancelling request...";
+	if (mediaBusy) {
+		mediaStatus = "Cancelling active media/music request...";
+		musicStatus = "Cancelling active media/music request...";
+	} else {
+		status = "Cancelling request...";
+	}
 }
 
 void ofApp::saveTokenCredential(
@@ -1669,6 +1682,7 @@ void ofApp::generateMedia() {
 		return;
 	}
 	if (mediaBusy.exchange(true)) return;
+	cancellationRequested = false;
 	const std::string prompt(mediaInput.data());
 	const int width = std::max(1, mediaWidth);
 	const int height = std::max(1, mediaHeight);
@@ -1682,6 +1696,8 @@ void ofApp::generateMedia() {
 		? (video ? "Submitting Hugging Face video..." : "Generating Hugging Face image...")
 		: (backend == 2 ? "Submitting native media job..." : "Generating OpenAI image...");
 	mediaWorker = std::thread([this, prompt, width, height, frames, fps, video, backend, mediaModel, autoPoll]() {
+		ofxIC::RequestControl control;
+		control.shouldCancel = [this]() { return cancellationRequested.load(); };
 		std::string nextStatus;
 		std::string nextOutput;
 		std::string nextBase64;
@@ -1694,7 +1710,7 @@ void ofApp::generateMedia() {
 			request.model = mediaModel;
 			request.width = width;
 			request.height = height;
-			const auto result = media.generateImage(request);
+			const auto result = media.generateImage(request, control);
 			nextStatus = result
 				? "OpenAI image generation completed"
 				: "OpenAI image generation failed: " + result.error;
@@ -1714,12 +1730,14 @@ void ofApp::generateMedia() {
 			request.height = height;
 			request.videoFrames = frames;
 			request.fps = fps;
-			nextJob = backend == 1 ? media.submitHuggingFaceFal(request) : media.submit(request);
+			nextJob = backend == 1
+				? media.submitHuggingFaceFal(request, control)
+				: media.submit(request, control);
 			for (int attempt = 0;
 				autoPoll && nextJob && !nextJob.terminal() && attempt < 1200;
 				++attempt) {
 				std::this_thread::sleep_for(std::chrono::milliseconds(500));
-				nextJob = media.poll(nextJob);
+				nextJob = media.poll(nextJob, control);
 			}
 			if (autoPoll && nextJob && !nextJob.terminal()) {
 				nextJob.success = false;
@@ -1753,9 +1771,12 @@ void ofApp::generateMedia() {
 void ofApp::pollMediaJob() {
 	if (currentMediaJob.id.empty() || busy || mediaBusy.exchange(true)) return;
 	const ofxIC::MediaJob job = currentMediaJob;
+	cancellationRequested = false;
 	mediaStatus = "Polling media job " + job.id + "...";
 	mediaWorker = std::thread([this, job]() {
-		ofxIC::MediaJob nextJob = media.poll(job);
+		ofxIC::RequestControl control;
+		control.shouldCancel = [this]() { return cancellationRequested.load(); };
+		ofxIC::MediaJob nextJob = media.poll(job, control);
 		std::string nextStatus = nextJob
 			? "Media job " + nextJob.id + " is " + mediaJobStateLabel(nextJob.state)
 			: "Media job failed: " + nextJob.error;
@@ -1786,6 +1807,7 @@ void ofApp::pollMediaJob() {
 void ofApp::generateMusic() {
 	if (!musicInput[0] || busy || mediaBusy.exchange(true)) return;
 	const std::string prompt(musicInput.data());
+	cancellationRequested = false;
 	const int duration = musicDuration;
 	const std::string format = musicOutputFormat == 1 ? "wav" : "mp3";
 	const int backend = selectedMusicBackend;
@@ -1795,6 +1817,8 @@ void ofApp::generateMusic() {
 		: "Submitting Stability Audio 3 music job...";
 	musicOutput.clear();
 	mediaWorker = std::thread([this, prompt, duration, format, backend, autoPoll]() {
+		ofxIC::RequestControl control;
+		control.shouldCancel = [this]() { return cancellationRequested.load(); };
 		std::string nextStatus;
 		std::string nextOutput;
 		std::string nextBytes;
@@ -1805,12 +1829,12 @@ void ofApp::generateMusic() {
 			request.caption = prompt;
 			request.durationSeconds = duration;
 			request.outputFormat = format;
-			nextAceStepJob = aceStepMusic.submit(request);
+			nextAceStepJob = aceStepMusic.submit(request, control);
 			const auto deadline = std::chrono::steady_clock::now() + std::chrono::minutes(20);
 			while (autoPoll && nextAceStepJob && !nextAceStepJob.terminal() &&
 				!cancellationRequested && std::chrono::steady_clock::now() < deadline) {
 				std::this_thread::sleep_for(std::chrono::milliseconds(500));
-				nextAceStepJob = aceStepMusic.poll(nextAceStepJob);
+				nextAceStepJob = aceStepMusic.poll(nextAceStepJob, control);
 			}
 			if (autoPoll && nextAceStepJob && !nextAceStepJob.terminal()) {
 				nextAceStepJob.success = false;
@@ -1835,12 +1859,12 @@ void ofApp::generateMusic() {
 			request.prompt = prompt;
 			request.durationSeconds = duration;
 			request.outputFormat = format;
-			nextStabilityJob = stabilityMusic.submit(request);
+			nextStabilityJob = stabilityMusic.submit(request, control);
 			const auto deadline = std::chrono::steady_clock::now() + std::chrono::minutes(20);
 			while (autoPoll && nextStabilityJob && !nextStabilityJob.terminal() &&
 				!cancellationRequested && std::chrono::steady_clock::now() < deadline) {
 				std::this_thread::sleep_for(std::chrono::milliseconds(500));
-				nextStabilityJob = stabilityMusic.poll(nextStabilityJob);
+				nextStabilityJob = stabilityMusic.poll(nextStabilityJob, control);
 			}
 			if (autoPoll && nextStabilityJob && !nextStabilityJob.terminal()) {
 				nextStabilityJob.success = false;
@@ -1876,6 +1900,7 @@ void ofApp::pollMusicJob() {
 	const int backend = selectedMusicBackend;
 	const ofxIC::StabilityAudioJob stabilityJob = currentMusicJob;
 	const ofxIC::AceStepMusicJob aceStepJob = currentAceStepMusicJob;
+	cancellationRequested = false;
 	if ((backend == 0 && aceStepJob.id.empty()) ||
 		(backend == 1 && stabilityJob.id.empty())) {
 		mediaBusy = false;
@@ -1884,6 +1909,8 @@ void ofApp::pollMusicJob() {
 	musicStatus = "Polling music job " +
 		(backend == 0 ? aceStepJob.id : stabilityJob.id) + "...";
 	mediaWorker = std::thread([this, backend, stabilityJob, aceStepJob]() {
+		ofxIC::RequestControl control;
+		control.shouldCancel = [this]() { return cancellationRequested.load(); };
 		ofxIC::StabilityAudioJob nextStabilityJob;
 		ofxIC::AceStepMusicJob nextAceStepJob;
 		std::string nextStatus;
@@ -1891,7 +1918,7 @@ void ofApp::pollMusicJob() {
 		std::string nextBytes;
 		std::string nextFormat;
 		if (backend == 0) {
-			nextAceStepJob = aceStepMusic.poll(aceStepJob);
+			nextAceStepJob = aceStepMusic.poll(aceStepJob, control);
 			nextStatus = nextAceStepJob
 				? "ACE-Step job " + nextAceStepJob.id + " is " +
 					musicJobStateLabel(nextAceStepJob.state)
@@ -1904,7 +1931,7 @@ void ofApp::pollMusicJob() {
 				nextOutput = "The local job is still running; poll again shortly.";
 			}
 		} else {
-			nextStabilityJob = stabilityMusic.poll(stabilityJob);
+			nextStabilityJob = stabilityMusic.poll(stabilityJob, control);
 			nextStatus = nextStabilityJob
 				? "Music job " + nextStabilityJob.id + " is " +
 					musicJobStateLabel(nextStabilityJob.state)

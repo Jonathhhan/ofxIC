@@ -1,5 +1,7 @@
 #pragma once
 
+#include "../endpoint/ofxICRequestTypes.h"
+
 #include <cstdint>
 #include <string>
 
@@ -25,6 +27,8 @@ struct StabilityAudioRequest {
 
 struct StabilityAudioJob {
 	bool success = false;
+	bool cancelled = false;
+	RequestFailure failure = RequestFailure::None;
 	int httpStatus = 0;
 	StabilityAudioJobState state = StabilityAudioJobState::Unknown;
 	std::string id;

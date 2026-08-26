@@ -170,9 +170,22 @@ MediaJobState parseQueueState(std::string value) {
 	return MediaJobState::Unknown;
 }
 
+void applyControl(HttpRequest & request, const RequestControl & control,
+	int defaultTimeoutSeconds) {
+	request.timeoutSeconds = control.timeoutSeconds > 0
+		? control.timeoutSeconds : defaultTimeoutSeconds;
+	request.shouldCancel = control.shouldCancel;
+}
+
+void applyResponseFailure(const HttpResponse & response, MediaJob & job) {
+	job.cancelled = response.cancelled;
+	job.failure = response.cancelled ? RequestFailure::Cancelled : response.failure;
+}
+
 } // namespace
 
-MediaJob MediaClient::submitHuggingFaceFal(const MediaJobRequest & request) const {
+MediaJob MediaClient::submitHuggingFaceFal(
+	const MediaJobRequest & request, RequestControl control) const {
 	MediaJob job;
 	job.kind = request.kind;
 	job.protocol = MediaProtocol::HuggingFaceFal;
@@ -182,11 +195,18 @@ MediaJob MediaClient::submitHuggingFaceFal(const MediaJobRequest & request) cons
 	job.mimeType = mimeForFormat(job.outputFormat, request.kind);
 	job.fps = request.kind == MediaKind::Video ? std::max(1, request.fps) : 0;
 	job.frameCount = request.kind == MediaKind::Video ? std::max(1, request.videoFrames) : 0;
+	if (control.timeoutSeconds < 0) {
+		job.failure = RequestFailure::InvalidResponse;
+		job.error = "request timeout cannot be negative";
+		return job;
+	}
 	if (request.prompt.empty()) {
+		job.failure = RequestFailure::InvalidResponse;
 		job.error = "media prompt is empty";
 		return job;
 	}
 	if (request.model.empty()) {
+		job.failure = RequestFailure::InvalidResponse;
 		job.error = "Hugging Face / fal-ai media model is empty";
 		return job;
 	}
@@ -196,10 +216,13 @@ MediaJob MediaClient::submitHuggingFaceFal(const MediaJobRequest & request) cons
 	mappingRequest.url = "https://huggingface.co/api/models/" +
 		encodeModelPath(request.model) + "?expand=inferenceProviderMapping";
 	mappingRequest.useBearerToken = false;
-	mappingRequest.timeoutSeconds = 30;
+	applyControl(mappingRequest, control, 30);
 	const HttpResponse mappingResponse = endpoint.perform(std::move(mappingRequest));
+	applyResponseFailure(mappingResponse, job);
 	job.httpStatus = mappingResponse.status;
 	if (!mappingResponse.started || mappingResponse.status < 200 || mappingResponse.status >= 300) {
+		if (job.failure == RequestFailure::None) job.failure = mappingResponse.status > 0
+			? RequestFailure::Provider : RequestFailure::Transport;
 		job.error = mappingResponse.error.empty()
 			? "could not resolve Hugging Face media model"
 			: mappingResponse.error;
@@ -212,10 +235,12 @@ MediaJob MediaClient::submitHuggingFaceFal(const MediaJobRequest & request) cons
 		: "text-to-image";
 	const std::string mappedTask = extractStringField(mapping, "task");
 	if (providerModel.empty()) {
+		job.failure = RequestFailure::InvalidResponse;
 		job.error = request.model + " is not available from fal-ai";
 		return job;
 	}
 	if (mappedTask != expectedTask) {
+		job.failure = RequestFailure::InvalidResponse;
 		job.error = request.model + " does not provide " + expectedTask + " through fal-ai";
 		return job;
 	}
@@ -227,17 +252,20 @@ MediaJob MediaClient::submitHuggingFaceFal(const MediaJobRequest & request) cons
 		submitRequest.url = withQueueRoute(std::move(submitRequest.url));
 	}
 	submitRequest.body = buildHuggingFaceFalBody(request);
-	submitRequest.timeoutSeconds = request.kind == MediaKind::Video ? 60 : 300;
+	applyControl(submitRequest, control, request.kind == MediaKind::Video ? 60 : 300);
 	const HttpResponse response = endpoint.perform(std::move(submitRequest));
+	applyResponseFailure(response, job);
 	job.httpStatus = response.status;
 	job.rawResponse = response.body;
 	if (!response.started) {
+		if (job.failure == RequestFailure::None) job.failure = RequestFailure::Transport;
 		job.error = response.error.empty()
 			? "Hugging Face / fal-ai media request did not start"
 			: response.error;
 		return job;
 	}
 	if (response.status < 200 || response.status >= 300) {
+		job.failure = RequestFailure::Provider;
 		job.error = "Hugging Face / fal-ai returned HTTP " + std::to_string(response.status);
 		if (response.status == 402) {
 			job.error += ": inference credits or pay-as-you-go billing are required";
@@ -251,13 +279,14 @@ MediaJob MediaClient::submitHuggingFaceFal(const MediaJobRequest & request) cons
 	if (request.kind == MediaKind::Image) {
 		const std::string outputUrl = extractStringField(response.body, "url");
 		if (outputUrl.empty()) {
+			job.failure = RequestFailure::InvalidResponse;
 			job.error = "Hugging Face / fal-ai image response returned no output URL";
 			return job;
 		}
 		job.id = "hf-fal-image";
 		job.state = MediaJobState::Completed;
 		job.resultUrl = outputUrl;
-		downloadHuggingFaceFalOutput(outputUrl, job);
+		downloadHuggingFaceFalOutput(outputUrl, job, control);
 		return job;
 	}
 
@@ -265,6 +294,7 @@ MediaJob MediaClient::submitHuggingFaceFal(const MediaJobRequest & request) cons
 	const std::string responseUrl = extractStringField(response.body, "response_url");
 	const std::string responsePath = urlPath(responseUrl);
 	if (job.id.empty() || responsePath.empty()) {
+		job.failure = RequestFailure::InvalidResponse;
 		job.error = "Hugging Face / fal-ai video response returned no queue job";
 		return job;
 	}
@@ -274,7 +304,7 @@ MediaJob MediaClient::submitHuggingFaceFal(const MediaJobRequest & request) cons
 	job.state = parseQueueState(extractStringField(response.body, "status"));
 	if (job.state == MediaJobState::Unknown) job.state = MediaJobState::Queued;
 	job.success = true;
-	return job.state == MediaJobState::Completed ? pollHuggingFaceFal(job) : job;
+	return job.state == MediaJobState::Completed ? pollHuggingFaceFal(job, control) : job;
 }
 
 std::string MediaClient::buildHuggingFaceFalBody(const MediaJobRequest & request) {
@@ -301,11 +331,20 @@ std::string MediaClient::buildHuggingFaceFalBody(const MediaJobRequest & request
 	return body.str();
 }
 
-MediaJob MediaClient::pollHuggingFaceFal(const MediaJob & job) const {
+MediaJob MediaClient::pollHuggingFaceFal(
+	const MediaJob & job, RequestControl control) const {
 	MediaJob result = job;
 	result.success = false;
 	result.error.clear();
+	result.cancelled = false;
+	result.failure = RequestFailure::None;
+	if (control.timeoutSeconds < 0) {
+		result.failure = RequestFailure::InvalidResponse;
+		result.error = "request timeout cannot be negative";
+		return result;
+	}
 	if (job.pollUrl.empty() || job.resultUrl.empty()) {
+		result.failure = RequestFailure::InvalidResponse;
 		result.error = "Hugging Face / fal-ai job has no polling URL";
 		return result;
 	}
@@ -313,17 +352,20 @@ MediaJob MediaClient::pollHuggingFaceFal(const MediaJob & job) const {
 	HttpRequest statusRequest;
 	statusRequest.method = HttpMethod::Get;
 	statusRequest.url = job.pollUrl;
-	statusRequest.timeoutSeconds = 30;
+	applyControl(statusRequest, control, 30);
 	const HttpResponse statusResponse = endpoint.perform(std::move(statusRequest));
+	applyResponseFailure(statusResponse, result);
 	result.httpStatus = statusResponse.status;
 	result.rawResponse = statusResponse.body;
 	if (!statusResponse.started) {
+		if (result.failure == RequestFailure::None) result.failure = RequestFailure::Transport;
 		result.error = statusResponse.error.empty()
 			? "Hugging Face / fal-ai poll did not start"
 			: statusResponse.error;
 		return result;
 	}
 	if (statusResponse.status < 200 || statusResponse.status >= 300) {
+		result.failure = RequestFailure::Provider;
 		result.error = "Hugging Face / fal-ai poll returned HTTP " +
 			std::to_string(statusResponse.status);
 		return result;
@@ -335,12 +377,14 @@ MediaJob MediaClient::pollHuggingFaceFal(const MediaJob & job) const {
 		return result;
 	}
 	if (result.state == MediaJobState::Failed || result.state == MediaJobState::Cancelled) {
+		result.failure = RequestFailure::Provider;
 		result.error = extractStringField(statusResponse.body, "error");
 		if (result.error.empty()) result.error = extractStringField(statusResponse.body, "message");
 		if (result.error.empty()) result.error = "Hugging Face / fal-ai job did not complete";
 		return result;
 	}
 	if (result.state != MediaJobState::Completed) {
+		result.failure = RequestFailure::InvalidResponse;
 		result.error = "Hugging Face / fal-ai job returned an unknown state";
 		return result;
 	}
@@ -348,11 +392,14 @@ MediaJob MediaClient::pollHuggingFaceFal(const MediaJob & job) const {
 	HttpRequest outputRequest;
 	outputRequest.method = HttpMethod::Get;
 	outputRequest.url = job.resultUrl;
-	outputRequest.timeoutSeconds = 60;
+	applyControl(outputRequest, control, 60);
 	const HttpResponse outputResponse = endpoint.perform(std::move(outputRequest));
+	applyResponseFailure(outputResponse, result);
 	result.httpStatus = outputResponse.status;
 	result.rawResponse = outputResponse.body;
 	if (!outputResponse.started || outputResponse.status < 200 || outputResponse.status >= 300) {
+		if (result.failure == RequestFailure::None) result.failure = outputResponse.status > 0
+			? RequestFailure::Provider : RequestFailure::Transport;
 		result.error = outputResponse.error.empty()
 			? "Hugging Face / fal-ai result is not available"
 			: outputResponse.error;
@@ -360,35 +407,41 @@ MediaJob MediaClient::pollHuggingFaceFal(const MediaJob & job) const {
 	}
 	const std::string outputUrl = extractStringField(outputResponse.body, "url");
 	if (outputUrl.empty()) {
+		result.failure = RequestFailure::InvalidResponse;
 		result.error = "Hugging Face / fal-ai result returned no output URL";
 		return result;
 	}
 	result.resultUrl = outputUrl;
-	downloadHuggingFaceFalOutput(outputUrl, result);
+	downloadHuggingFaceFalOutput(outputUrl, result, control);
 	return result;
 }
 
-bool MediaClient::downloadHuggingFaceFalOutput(const std::string & url, MediaJob & job) const {
+bool MediaClient::downloadHuggingFaceFalOutput(
+	const std::string & url, MediaJob & job, RequestControl control) const {
 	HttpRequest downloadRequest;
 	downloadRequest.method = HttpMethod::Get;
 	downloadRequest.url = url;
 	downloadRequest.accept = "*/*";
 	downloadRequest.useBearerToken = false;
-	downloadRequest.timeoutSeconds = 300;
+	applyControl(downloadRequest, control, 300);
 	downloadRequest.maxResponseBytes = 512U * 1024U * 1024U;
 	const HttpResponse response = endpoint.perform(std::move(downloadRequest));
+	applyResponseFailure(response, job);
 	job.httpStatus = response.status;
 	if (!response.started) {
+		if (job.failure == RequestFailure::None) job.failure = RequestFailure::Transport;
 		job.success = false;
 		job.error = response.error.empty() ? "media download did not start" : response.error;
 		return false;
 	}
 	if (response.status < 200 || response.status >= 300) {
+		job.failure = RequestFailure::Provider;
 		job.success = false;
 		job.error = "media download returned HTTP " + std::to_string(response.status);
 		return false;
 	}
 	if (response.body.empty()) {
+		job.failure = RequestFailure::InvalidResponse;
 		job.success = false;
 		job.error = "media download returned no bytes";
 		return false;

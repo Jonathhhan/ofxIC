@@ -10,8 +10,10 @@ class StabilityAudioClient {
 public:
 	explicit StabilityAudioClient(Endpoint & endpoint);
 
-	StabilityAudioJob submit(const StabilityAudioRequest & request) const;
-	StabilityAudioJob poll(const StabilityAudioJob & job) const;
+	StabilityAudioJob submit(const StabilityAudioRequest & request,
+		RequestControl control = {}) const;
+	StabilityAudioJob poll(const StabilityAudioJob & job,
+		RequestControl control = {}) const;
 
 private:
 	Endpoint & endpoint;

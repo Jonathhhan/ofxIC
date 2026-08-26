@@ -48,6 +48,27 @@ OFXIC_TEST(stability_audio_submits_stable_audio_3_job) {
 	OFXIC_REQUIRE(captured.headers.size() == 1);
 }
 
+OFXIC_TEST(stability_audio_forwards_control_and_classifies_timeout) {
+	ofxIC::HttpRequest captured;
+	ofxIC::Endpoint endpoint("https://api.stability.ai", [&](const ofxIC::HttpRequest & request) {
+		captured = request;
+		ofxIC::HttpResponse response;
+		response.failure = ofxIC::RequestFailure::Timeout;
+		response.error = "request timed out";
+		return response;
+	});
+	ofxIC::StabilityAudioClient audio(endpoint);
+	ofxIC::StabilityAudioRequest request;
+	request.prompt = "bounded music";
+	ofxIC::RequestControl control;
+	control.timeoutSeconds = 9;
+
+	const auto result = audio.submit(request, control);
+	OFXIC_REQUIRE(!result);
+	OFXIC_REQUIRE(result.failure == ofxIC::RequestFailure::Timeout);
+	OFXIC_REQUIRE(captured.timeoutSeconds == 9);
+}
+
 OFXIC_TEST(stability_audio_polls_until_mp3_is_complete) {
 	std::vector<ofxIC::HttpRequest> captured;
 	int calls = 0;

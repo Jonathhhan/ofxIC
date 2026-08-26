@@ -1,5 +1,7 @@
 #pragma once
 
+#include "../endpoint/ofxICRequestTypes.h"
+
 #include <string>
 #include <vector>
 
@@ -35,6 +37,8 @@ struct ImageRequest {
 
 struct ImageResult {
 	bool success = false;
+	bool cancelled = false;
+	RequestFailure failure = RequestFailure::None;
 	int httpStatus = 0;
 	std::string outputFormat;
 	std::vector<std::string> imagesBase64;
@@ -65,6 +69,8 @@ struct MediaJobRequest {
 
 struct MediaJob {
 	bool success = false;
+	bool cancelled = false;
+	RequestFailure failure = RequestFailure::None;
 	int httpStatus = 0;
 	MediaKind kind = MediaKind::Image;
 	MediaProtocol protocol = MediaProtocol::StableDiffusionCpp;

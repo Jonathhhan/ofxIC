@@ -11,12 +11,12 @@ class MediaClient {
 public:
 	explicit MediaClient(Endpoint & endpoint);
 
-	ImageResult generateImage(const ImageRequest & request) const;
-	MediaJob submit(const MediaJobRequest & request) const;
-	MediaJob submitHuggingFaceFal(const MediaJobRequest & request) const;
-	MediaJob poll(const MediaJob & job) const;
-	MediaJob poll(const std::string & idOrPollUrl) const;
-	MediaJob cancel(const MediaJob & job) const;
+	ImageResult generateImage(const ImageRequest & request, RequestControl control = {}) const;
+	MediaJob submit(const MediaJobRequest & request, RequestControl control = {}) const;
+	MediaJob submitHuggingFaceFal(const MediaJobRequest & request, RequestControl control = {}) const;
+	MediaJob poll(const MediaJob & job, RequestControl control = {}) const;
+	MediaJob poll(const std::string & idOrPollUrl, RequestControl control = {}) const;
+	MediaJob cancel(const MediaJob & job, RequestControl control = {}) const;
 
 private:
 	static std::string buildImageBody(const ImageRequest & request);
@@ -26,8 +26,9 @@ private:
 		const HttpResponse & response,
 		MediaKind fallbackKind,
 		std::string fallbackPollUrl = {});
-	MediaJob pollHuggingFaceFal(const MediaJob & job) const;
-	bool downloadHuggingFaceFalOutput(const std::string & url, MediaJob & job) const;
+	MediaJob pollHuggingFaceFal(const MediaJob & job, RequestControl control) const;
+	bool downloadHuggingFaceFalOutput(const std::string & url, MediaJob & job,
+		RequestControl control) const;
 
 	Endpoint & endpoint;
 };

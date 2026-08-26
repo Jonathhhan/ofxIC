@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### Changed
+
+- image, native/Hugging Face media, Stability Audio, and ACE-Step operations
+  now accept the same operation-scoped `RequestControl` used by chat and
+  transcription, expose `RequestFailure`, and keep local HTTP cancellation
+  distinct from provider-side remote-job cancellation;
+- the regular example can cancel its active media or music HTTP request.
+
 ## 0.2.0-rc.4 — 2026-08-26
 
 ### Changed

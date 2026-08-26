@@ -17,13 +17,23 @@ constexpr std::size_t maxAudioResponseBytes = 128U * 1024U * 1024U;
 AceStepMusicJob failure(
 	std::string message,
 	int httpStatus = 0,
-	std::string rawResponse = {}) {
+	std::string rawResponse = {},
+	RequestFailure requestFailure = RequestFailure::InvalidResponse,
+	bool cancelled = false) {
 	AceStepMusicJob result;
+	result.cancelled = cancelled;
+	result.failure = requestFailure;
 	result.httpStatus = httpStatus;
 	result.state = AceStepMusicJobState::Failed;
 	result.error = std::move(message);
 	result.rawResponse = std::move(rawResponse);
 	return result;
+}
+
+RequestFailure responseFailureKind(const HttpResponse & response) {
+	if (response.cancelled) return RequestFailure::Cancelled;
+	if (response.failure != RequestFailure::None) return response.failure;
+	return response.status > 0 ? RequestFailure::Provider : RequestFailure::Transport;
 }
 
 std::string trimCopy(const std::string & value) {
@@ -364,7 +374,9 @@ AceStepMusicJob completedJob(
 AceStepMusicClient::AceStepMusicClient(Endpoint & endpoint)
 	: endpoint(endpoint) {}
 
-AceStepMusicJob AceStepMusicClient::submit(const AceStepMusicRequest & request) const {
+AceStepMusicJob AceStepMusicClient::submit(
+	const AceStepMusicRequest & request, RequestControl control) const {
+	if (control.timeoutSeconds < 0) return failure("request timeout cannot be negative");
 	const std::string validationError = validate(request);
 	if (!validationError.empty()) return failure(validationError);
 
@@ -374,14 +386,15 @@ AceStepMusicJob AceStepMusicClient::submit(const AceStepMusicRequest & request) 
 	httpRequest.body = requestBody(request);
 	httpRequest.contentType = "application/json";
 	httpRequest.accept = "application/json";
-	httpRequest.timeoutSeconds = 240;
+	httpRequest.timeoutSeconds = control.timeoutSeconds > 0 ? control.timeoutSeconds : 240;
+	httpRequest.shouldCancel = control.shouldCancel;
 	httpRequest.maxResponseBytes = maxJsonResponseBytes;
 	httpRequest.useBearerToken = false;
 	const HttpResponse response = endpoint.perform(std::move(httpRequest));
 	if (response.status < 200 || response.status >= 300) {
 		return failure(responseFailure(
 			response, "ACE-Step /lm", Endpoint::extractErrorText(response.body)),
-			response.status, response.body);
+			response.status, response.body, responseFailureKind(response), response.cancelled);
 	}
 	const std::string id = extractStringField(response.body, "id");
 	if (!id.empty()) {
@@ -389,12 +402,13 @@ AceStepMusicJob AceStepMusicClient::submit(const AceStepMusicRequest & request) 
 		return submittedJob(id, request.outputFormat, AceStepMusicJobPhase::LanguageModel,
 			response.status, response.body);
 	}
-	return submitSynthesis(response.body, request.outputFormat);
+	return submitSynthesis(response.body, request.outputFormat, std::move(control));
 }
 
 AceStepMusicJob AceStepMusicClient::submitSynthesis(
 	const std::string & languageModelResponse,
-	const std::string & outputFormat) const {
+	const std::string & outputFormat,
+	RequestControl control) const {
 	const std::string body = synthRequestBody(languageModelResponse, outputFormat);
 	if (body.empty()) return failure("ACE-Step /lm returned no usable synthesis request JSON");
 
@@ -404,14 +418,15 @@ AceStepMusicJob AceStepMusicClient::submitSynthesis(
 	request.body = body;
 	request.contentType = "application/json";
 	request.accept = outputFormat == "wav" ? "audio/wav" : "audio/mpeg";
-	request.timeoutSeconds = 900;
+	request.timeoutSeconds = control.timeoutSeconds > 0 ? control.timeoutSeconds : 900;
+	request.shouldCancel = std::move(control.shouldCancel);
 	request.maxResponseBytes = maxAudioResponseBytes;
 	request.useBearerToken = false;
 	const HttpResponse response = endpoint.perform(std::move(request));
 	if (response.status < 200 || response.status >= 300) {
 		return failure(responseFailure(
 			response, "ACE-Step /synth", Endpoint::extractErrorText(response.body)),
-			response.status, response.body);
+			response.status, response.body, responseFailureKind(response), response.cancelled);
 	}
 	const std::string id = extractStringField(response.body, "id");
 	if (!id.empty()) {
@@ -422,7 +437,9 @@ AceStepMusicJob AceStepMusicClient::submitSynthesis(
 	return completedJob(response.body, outputFormat, response.status);
 }
 
-AceStepMusicJob AceStepMusicClient::poll(const AceStepMusicJob & job) const {
+AceStepMusicJob AceStepMusicClient::poll(
+	const AceStepMusicJob & job, RequestControl control) const {
+	if (control.timeoutSeconds < 0) return failure("request timeout cannot be negative");
 	if (!validJobId(job.id)) return failure("ACE-Step music job id is invalid");
 	if (job.outputFormat != "mp3" && job.outputFormat != "wav") {
 		return failure("ACE-Step music job output format must be mp3 or wav");
@@ -432,7 +449,8 @@ AceStepMusicJob AceStepMusicClient::poll(const AceStepMusicJob & job) const {
 	statusRequest.method = HttpMethod::Get;
 	statusRequest.url = "/job?id=" + job.id;
 	statusRequest.accept = "application/json";
-	statusRequest.timeoutSeconds = 30;
+	statusRequest.timeoutSeconds = control.timeoutSeconds > 0 ? control.timeoutSeconds : 30;
+	statusRequest.shouldCancel = control.shouldCancel;
 	statusRequest.maxResponseBytes = maxJsonResponseBytes;
 	statusRequest.useBearerToken = false;
 	const HttpResponse statusResponse = endpoint.perform(std::move(statusRequest));
@@ -440,7 +458,8 @@ AceStepMusicJob AceStepMusicClient::poll(const AceStepMusicJob & job) const {
 		AceStepMusicJob result = failure(
 			responseFailure(statusResponse, "ACE-Step /job",
 				Endpoint::extractErrorText(statusResponse.body)),
-			statusResponse.status, statusResponse.body);
+			statusResponse.status, statusResponse.body,
+			responseFailureKind(statusResponse), statusResponse.cancelled);
 		result.id = job.id;
 		result.outputFormat = job.outputFormat;
 		result.phase = job.phase;
@@ -479,7 +498,9 @@ AceStepMusicJob AceStepMusicClient::poll(const AceStepMusicJob & job) const {
 	resultRequest.accept = job.phase == AceStepMusicJobPhase::LanguageModel
 		? "application/json"
 		: (job.outputFormat == "wav" ? "audio/wav" : "audio/mpeg");
-	resultRequest.timeoutSeconds = job.phase == AceStepMusicJobPhase::LanguageModel ? 60 : 900;
+	resultRequest.timeoutSeconds = control.timeoutSeconds > 0 ? control.timeoutSeconds :
+		(job.phase == AceStepMusicJobPhase::LanguageModel ? 60 : 900);
+	resultRequest.shouldCancel = control.shouldCancel;
 	resultRequest.maxResponseBytes = job.phase == AceStepMusicJobPhase::LanguageModel
 		? maxJsonResponseBytes
 		: maxAudioResponseBytes;
@@ -488,10 +509,10 @@ AceStepMusicJob AceStepMusicClient::poll(const AceStepMusicJob & job) const {
 	if (response.status < 200 || response.status >= 300) {
 		return failure(responseFailure(response, "ACE-Step /job result",
 			Endpoint::extractErrorText(response.body)),
-			response.status, response.body);
+			response.status, response.body, responseFailureKind(response), response.cancelled);
 	}
 	if (job.phase == AceStepMusicJobPhase::LanguageModel) {
-		return submitSynthesis(response.body, job.outputFormat);
+		return submitSynthesis(response.body, job.outputFormat, std::move(control));
 	}
 	AceStepMusicJob result = completedJob(response.body, job.outputFormat, response.status);
 	result.id = job.id;

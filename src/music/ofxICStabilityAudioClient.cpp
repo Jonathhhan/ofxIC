@@ -21,8 +21,12 @@ constexpr std::size_t maxAudioResponseBytes = 128U * 1024U * 1024U;
 StabilityAudioJob failure(
 	std::string message,
 	int httpStatus = 0,
-	std::string rawResponse = {}) {
+	std::string rawResponse = {},
+	RequestFailure requestFailure = RequestFailure::InvalidResponse,
+	bool cancelled = false) {
 	StabilityAudioJob result;
+	result.cancelled = cancelled;
+	result.failure = requestFailure;
 	result.httpStatus = httpStatus;
 	result.state = StabilityAudioJobState::Failed;
 	result.error = std::move(message);
@@ -133,7 +137,11 @@ bool hasExpectedAudioSignature(const std::string & bytes, const std::string & fo
 StabilityAudioClient::StabilityAudioClient(Endpoint & endpoint)
 	: endpoint(endpoint) {}
 
-StabilityAudioJob StabilityAudioClient::submit(const StabilityAudioRequest & request) const {
+StabilityAudioJob StabilityAudioClient::submit(
+	const StabilityAudioRequest & request, RequestControl control) const {
+	if (control.timeoutSeconds < 0) {
+		return failure("request timeout cannot be negative");
+	}
 	const std::string validationError = validate(request);
 	if (!validationError.empty()) return failure(validationError);
 
@@ -144,13 +152,18 @@ StabilityAudioJob StabilityAudioClient::submit(const StabilityAudioRequest & req
 	httpRequest.body = multipartBody(request, boundary);
 	httpRequest.contentType = "multipart/form-data; boundary=" + boundary;
 	httpRequest.accept = "application/json";
-	httpRequest.timeoutSeconds = 60;
+	httpRequest.timeoutSeconds = control.timeoutSeconds > 0 ? control.timeoutSeconds : 60;
+	httpRequest.shouldCancel = std::move(control.shouldCancel);
 	httpRequest.maxResponseBytes = maxSubmitResponseBytes;
 	const HttpResponse response = endpoint.perform(std::move(httpRequest));
 	if (response.status != 202) {
 		return failure(responseFailure(
 			response, "music", Endpoint::extractErrorText(response.body)),
-			response.status, response.body);
+			response.status, response.body,
+			response.cancelled ? RequestFailure::Cancelled :
+				(response.failure != RequestFailure::None ? response.failure :
+					(response.status > 0 ? RequestFailure::Provider : RequestFailure::Transport)),
+			response.cancelled);
 	}
 
 	const std::string id = extractId(response.body);
@@ -168,7 +181,11 @@ StabilityAudioJob StabilityAudioClient::submit(const StabilityAudioRequest & req
 	return result;
 }
 
-StabilityAudioJob StabilityAudioClient::poll(const StabilityAudioJob & job) const {
+StabilityAudioJob StabilityAudioClient::poll(
+	const StabilityAudioJob & job, RequestControl control) const {
+	if (control.timeoutSeconds < 0) {
+		return failure("request timeout cannot be negative");
+	}
 	if (!isHexJobId(job.id)) return failure("music job id must be 64 hexadecimal characters");
 	if (job.outputFormat != "mp3" && job.outputFormat != "wav") {
 		return failure("music job output format must be mp3 or wav");
@@ -177,7 +194,8 @@ StabilityAudioJob StabilityAudioClient::poll(const StabilityAudioJob & job) cons
 	request.method = HttpMethod::Get;
 	request.url = "/v2beta/audio/results/" + job.id;
 	request.accept = "audio/*";
-	request.timeoutSeconds = 300;
+	request.timeoutSeconds = control.timeoutSeconds > 0 ? control.timeoutSeconds : 300;
+	request.shouldCancel = std::move(control.shouldCancel);
 	request.maxResponseBytes = maxAudioResponseBytes;
 	const HttpResponse response = endpoint.perform(std::move(request));
 	if (response.status == 202) {
@@ -194,7 +212,11 @@ StabilityAudioJob StabilityAudioClient::poll(const StabilityAudioJob & job) cons
 		StabilityAudioJob result = failure(
 			responseFailure(
 				response, "music result", Endpoint::extractErrorText(response.body)),
-			response.status, response.body);
+			response.status, response.body,
+			response.cancelled ? RequestFailure::Cancelled :
+				(response.failure != RequestFailure::None ? response.failure :
+					(response.status > 0 ? RequestFailure::Provider : RequestFailure::Transport)),
+			response.cancelled);
 		result.id = job.id;
 		result.outputFormat = job.outputFormat;
 		result.mimeType = job.outputFormat == "wav" ? "audio/wav" : "audio/mpeg";

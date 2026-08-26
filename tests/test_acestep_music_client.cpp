@@ -11,6 +11,31 @@ std::string wavBytes() {
 	return std::string("RIFF", 4) + std::string(4, '\0') + "WAVEfmt ";
 }
 
+OFXIC_TEST(acestep_music_forwards_control_and_classifies_cancellation) {
+	ofxIC::HttpRequest captured;
+	ofxIC::Endpoint endpoint("http://localhost:8001", [&](const ofxIC::HttpRequest & request) {
+		captured = request;
+		ofxIC::HttpResponse response;
+		response.cancelled = true;
+		response.failure = ofxIC::RequestFailure::Cancelled;
+		response.error = "request cancelled";
+		return response;
+	});
+	ofxIC::AceStepMusicClient music(endpoint);
+	ofxIC::AceStepMusicRequest request;
+	request.caption = "cancelled music";
+	ofxIC::RequestControl control;
+	control.timeoutSeconds = 11;
+	control.shouldCancel = [] { return true; };
+
+	const auto result = music.submit(request, control);
+	OFXIC_REQUIRE(!result);
+	OFXIC_REQUIRE(result.cancelled);
+	OFXIC_REQUIRE(result.failure == ofxIC::RequestFailure::Cancelled);
+	OFXIC_REQUIRE(captured.timeoutSeconds == 11);
+	OFXIC_REQUIRE(captured.shouldCancel && captured.shouldCancel());
+}
+
 ofxIC::HttpResponse response(int status, std::string body) {
 	ofxIC::HttpResponse result;
 	result.started = true;

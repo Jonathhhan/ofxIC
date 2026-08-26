@@ -121,15 +121,33 @@ std::string jobPath(const std::string & idOrPollUrl) {
 	return "/sdcpp/v1/jobs/" + idOrPollUrl;
 }
 
+void applyControl(HttpRequest & request, RequestControl control, int defaultTimeoutSeconds) {
+	request.timeoutSeconds = control.timeoutSeconds > 0
+		? control.timeoutSeconds : defaultTimeoutSeconds;
+	request.shouldCancel = std::move(control.shouldCancel);
+}
+
+void applyResponseFailure(const HttpResponse & response, bool & cancelled,
+	RequestFailure & failure) {
+	cancelled = response.cancelled;
+	failure = response.cancelled ? RequestFailure::Cancelled : response.failure;
+}
+
 } // namespace
 
 MediaClient::MediaClient(Endpoint & endpoint)
 	: endpoint(endpoint) {
 }
 
-ImageResult MediaClient::generateImage(const ImageRequest & request) const {
+ImageResult MediaClient::generateImage(const ImageRequest & request, RequestControl control) const {
 	ImageResult result;
+	if (control.timeoutSeconds < 0) {
+		result.failure = RequestFailure::InvalidResponse;
+		result.error = "request timeout cannot be negative";
+		return result;
+	}
 	if (request.prompt.empty()) {
+		result.failure = RequestFailure::InvalidResponse;
 		result.error = "image prompt is empty";
 		return result;
 	}
@@ -137,14 +155,18 @@ ImageResult MediaClient::generateImage(const ImageRequest & request) const {
 	httpRequest.method = HttpMethod::Post;
 	httpRequest.url = "/v1/images/generations";
 	httpRequest.body = buildImageBody(request);
+	applyControl(httpRequest, std::move(control), 180);
 	const HttpResponse response = endpoint.perform(std::move(httpRequest));
+	applyResponseFailure(response, result.cancelled, result.failure);
 	result.httpStatus = response.status;
 	result.rawResponse = response.body;
 	if (!response.started) {
+		if (result.failure == RequestFailure::None) result.failure = RequestFailure::Transport;
 		result.error = response.error.empty() ? "image request did not start" : response.error;
 		return result;
 	}
 	if (response.status < 200 || response.status >= 300) {
+		result.failure = RequestFailure::Provider;
 		result.error = "image endpoint returned HTTP " + std::to_string(response.status);
 		const std::string detail = Endpoint::extractErrorText(response.body);
 		if (!detail.empty()) result.error += ": " + detail;
@@ -155,6 +177,7 @@ ImageResult MediaClient::generateImage(const ImageRequest & request) const {
 	result.imagesBase64 = extractAllStringFields(response.body, "b64_json");
 	result.urls = extractAllStringFields(response.body, "url");
 	if (result.imagesBase64.empty() && result.urls.empty()) {
+		result.failure = RequestFailure::InvalidResponse;
 		result.error = "image endpoint returned no image";
 		return result;
 	}
@@ -162,10 +185,18 @@ ImageResult MediaClient::generateImage(const ImageRequest & request) const {
 	return result;
 }
 
-MediaJob MediaClient::submit(const MediaJobRequest & request) const {
+MediaJob MediaClient::submit(const MediaJobRequest & request, RequestControl control) const {
+	if (control.timeoutSeconds < 0) {
+		MediaJob result;
+		result.kind = request.kind;
+		result.failure = RequestFailure::InvalidResponse;
+		result.error = "request timeout cannot be negative";
+		return result;
+	}
 	if (request.prompt.empty()) {
 		MediaJob result;
 		result.kind = request.kind;
+		result.failure = RequestFailure::InvalidResponse;
 		result.error = "media prompt is empty";
 		return result;
 	}
@@ -175,38 +206,55 @@ MediaJob MediaClient::submit(const MediaJobRequest & request) const {
 		? "/sdcpp/v1/vid_gen"
 		: "/sdcpp/v1/img_gen";
 	httpRequest.body = buildJobBody(request);
+	applyControl(httpRequest, std::move(control), 180);
 	return parseJob(endpoint.perform(std::move(httpRequest)), request.kind);
 }
 
-MediaJob MediaClient::poll(const MediaJob & job) const {
+MediaJob MediaClient::poll(const MediaJob & job, RequestControl control) const {
 	if (job.protocol == MediaProtocol::HuggingFaceFal) {
-		return pollHuggingFaceFal(job);
+		return pollHuggingFaceFal(job, std::move(control));
 	}
 	const std::string target = job.pollUrl.empty() ? job.id : job.pollUrl;
-	MediaJob result = poll(target);
+	MediaJob result = poll(target, std::move(control));
 	if (result.kind == MediaKind::Image && job.kind == MediaKind::Video) {
 		result.kind = MediaKind::Video;
 	}
 	return result;
 }
 
-MediaJob MediaClient::poll(const std::string & idOrPollUrl) const {
+MediaJob MediaClient::poll(const std::string & idOrPollUrl, RequestControl control) const {
+	if (control.timeoutSeconds < 0) {
+		MediaJob result;
+		result.failure = RequestFailure::InvalidResponse;
+		result.error = "request timeout cannot be negative";
+		return result;
+	}
 	HttpRequest request;
 	request.method = HttpMethod::Get;
 	request.url = jobPath(idOrPollUrl);
 	if (request.url.empty()) {
 		MediaJob result;
+		result.failure = RequestFailure::InvalidResponse;
 		result.error = "media job id is empty";
 		return result;
 	}
 	const std::string pollUrl = request.url;
+	applyControl(request, std::move(control), 180);
 	return parseJob(endpoint.perform(std::move(request)), MediaKind::Image, pollUrl);
 }
 
-MediaJob MediaClient::cancel(const MediaJob & job) const {
+MediaJob MediaClient::cancel(const MediaJob & job, RequestControl control) const {
+	if (control.timeoutSeconds < 0) {
+		MediaJob result = job;
+		result.success = false;
+		result.failure = RequestFailure::InvalidResponse;
+		result.error = "request timeout cannot be negative";
+		return result;
+	}
 	if (job.protocol == MediaProtocol::HuggingFaceFal) {
 		MediaJob result = job;
 		result.success = false;
+		result.failure = RequestFailure::InvalidResponse;
 		result.error = "Hugging Face / fal-ai cancellation is not supported yet";
 		return result;
 	}
@@ -216,15 +264,19 @@ MediaJob MediaClient::cancel(const MediaJob & job) const {
 	if (request.url.empty()) {
 		MediaJob result;
 		result.kind = job.kind;
+		result.failure = RequestFailure::InvalidResponse;
 		result.error = "media job id is empty";
 		return result;
 	}
 	request.url += "/cancel";
 	request.body = "{}";
+	applyControl(request, std::move(control), 180);
 	MediaJob result = parseJob(endpoint.perform(std::move(request)), job.kind, job.pollUrl);
 	if (result.httpStatus >= 200 && result.httpStatus < 300 &&
 		result.state == MediaJobState::Cancelled) {
 		result.success = true;
+		result.cancelled = false;
+		result.failure = RequestFailure::None;
 		result.error.clear();
 	}
 	return result;
@@ -272,11 +324,14 @@ MediaJob MediaClient::parseJob(
 	result.httpStatus = response.status;
 	result.rawResponse = response.body;
 	result.pollUrl = std::move(fallbackPollUrl);
+	applyResponseFailure(response, result.cancelled, result.failure);
 	if (!response.started) {
+		if (result.failure == RequestFailure::None) result.failure = RequestFailure::Transport;
 		result.error = response.error.empty() ? "media job request did not start" : response.error;
 		return result;
 	}
 	if (response.status < 200 || response.status >= 300) {
+		result.failure = RequestFailure::Provider;
 		result.error = "media endpoint returned HTTP " + std::to_string(response.status);
 		if (!response.error.empty()) result.error += ": " + response.error;
 		return result;
@@ -292,15 +347,18 @@ MediaJob MediaClient::parseJob(
 	result.frameCount = extractIntField(response.body, "frame_count");
 	result.payloadsBase64 = extractAllStringFields(response.body, "b64_json");
 	if (result.state == MediaJobState::Failed || result.state == MediaJobState::Cancelled) {
+		result.failure = RequestFailure::Provider;
 		result.error = extractStringField(response.body, "message");
 		if (result.error.empty()) result.error = "media job did not complete";
 		return result;
 	}
 	if (result.state == MediaJobState::Completed && result.payloadsBase64.empty()) {
+		result.failure = RequestFailure::InvalidResponse;
 		result.error = "completed media job returned no payload";
 		return result;
 	}
 	if (result.id.empty() && result.state == MediaJobState::Unknown) {
+		result.failure = RequestFailure::InvalidResponse;
 		result.error = "media endpoint returned no job";
 		return result;
 	}

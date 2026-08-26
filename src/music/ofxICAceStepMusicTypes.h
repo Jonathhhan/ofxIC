@@ -1,5 +1,7 @@
 #pragma once
 
+#include "../endpoint/ofxICRequestTypes.h"
+
 #include <cstdint>
 #include <string>
 
@@ -33,6 +35,8 @@ struct AceStepMusicRequest {
 
 struct AceStepMusicJob {
 	bool success = false;
+	bool cancelled = false;
+	RequestFailure failure = RequestFailure::None;
 	int httpStatus = 0;
 	AceStepMusicJobState state = AceStepMusicJobState::Unknown;
 	AceStepMusicJobPhase phase = AceStepMusicJobPhase::LanguageModel;

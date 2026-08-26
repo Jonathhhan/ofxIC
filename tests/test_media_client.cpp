@@ -174,6 +174,8 @@ OFXIC_TEST(media_client_cancels_native_jobs) {
 	const auto cancelled = media.cancel(job);
 	OFXIC_REQUIRE(cancelled);
 	OFXIC_REQUIRE(cancelled.state == ofxIC::MediaJobState::Cancelled);
+	OFXIC_REQUIRE(!cancelled.cancelled);
+	OFXIC_REQUIRE(cancelled.failure == ofxIC::RequestFailure::None);
 	OFXIC_REQUIRE(captured.method == ofxIC::HttpMethod::Post);
 	OFXIC_REQUIRE(captured.url == "http://localhost:1234/sdcpp/v1/jobs/job-cancel/cancel");
 }
@@ -301,4 +303,49 @@ OFXIC_TEST(media_client_explains_hugging_face_payment_required) {
 	OFXIC_REQUIRE(!failed);
 	OFXIC_REQUIRE(failed.httpStatus == 402);
 	OFXIC_REQUIRE(failed.error.find("inference credits or pay-as-you-go billing are required") != std::string::npos);
+}
+
+OFXIC_TEST(media_client_forwards_control_and_classifies_local_cancellation) {
+	ofxIC::HttpRequest captured;
+	ofxIC::Endpoint endpoint("http://localhost:1234", [&](const ofxIC::HttpRequest & request) {
+		captured = request;
+		ofxIC::HttpResponse response;
+		response.started = false;
+		response.cancelled = true;
+		response.failure = ofxIC::RequestFailure::Cancelled;
+		response.error = "request cancelled";
+		return response;
+	});
+	ofxIC::MediaClient media(endpoint);
+	ofxIC::MediaJobRequest request;
+	request.prompt = "cancel this image";
+	ofxIC::RequestControl control;
+	control.timeoutSeconds = 7;
+	control.shouldCancel = [] { return true; };
+
+	const auto result = media.submit(request, control);
+	OFXIC_REQUIRE(!result);
+	OFXIC_REQUIRE(result.cancelled);
+	OFXIC_REQUIRE(result.failure == ofxIC::RequestFailure::Cancelled);
+	OFXIC_REQUIRE(captured.timeoutSeconds == 7);
+	OFXIC_REQUIRE(captured.shouldCancel && captured.shouldCancel());
+}
+
+OFXIC_TEST(media_client_keeps_remote_job_cancellation_distinct) {
+	ofxIC::Endpoint endpoint("http://localhost:1234", [](const ofxIC::HttpRequest &) {
+		ofxIC::HttpResponse response;
+		response.started = true;
+		response.status = 200;
+		response.body = R"({"id":"job-remote","kind":"vid_gen","status":"cancelled"})";
+		return response;
+	});
+	ofxIC::MediaClient media(endpoint);
+	ofxIC::MediaJob job;
+	job.kind = ofxIC::MediaKind::Video;
+	job.id = "job-remote";
+
+	const auto result = media.poll(job);
+	OFXIC_REQUIRE(result.state == ofxIC::MediaJobState::Cancelled);
+	OFXIC_REQUIRE(!result.cancelled);
+	OFXIC_REQUIRE(result.failure == ofxIC::RequestFailure::Provider);
 }

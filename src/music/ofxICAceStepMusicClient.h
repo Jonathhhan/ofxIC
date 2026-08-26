@@ -10,13 +10,16 @@ class AceStepMusicClient {
 public:
 	explicit AceStepMusicClient(Endpoint & endpoint);
 
-	AceStepMusicJob submit(const AceStepMusicRequest & request) const;
-	AceStepMusicJob poll(const AceStepMusicJob & job) const;
+	AceStepMusicJob submit(const AceStepMusicRequest & request,
+		RequestControl control = {}) const;
+	AceStepMusicJob poll(const AceStepMusicJob & job,
+		RequestControl control = {}) const;
 
 private:
 	AceStepMusicJob submitSynthesis(
 		const std::string & languageModelResponse,
-		const std::string & outputFormat) const;
+		const std::string & outputFormat,
+		RequestControl control) const;
 	Endpoint & endpoint;
 };
 
