@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### Changed
+
+- standalone deterministic tests now use C++20, matching the common modern
+  openFrameworks baseline while generated platform projects retain their
+  platform-specific OF standard settings;
+
 ### Fixed
 
 - pressing Enter in the regular example chat now sends the complete message,
