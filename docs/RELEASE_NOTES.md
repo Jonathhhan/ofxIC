@@ -22,6 +22,8 @@
 - selecting the OpenAI image backend now resets the shared media dimensions to
   the supported `1024x1024` GPT Image size, and image HTTP failures retain the
   provider's bounded JSON error detail instead of showing only the status code;
+- regular endpoint inspection now keeps its default timeout when the optional
+  GUI-fixture timeout marker is unset;
 
 ## 0.2.0-rc.3 — 2026-08-26
 

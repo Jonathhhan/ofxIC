@@ -1540,8 +1540,11 @@ void ofApp::inspectEndpoint() {
 	}
 	const std::string currentOutput = output;
 	const std::string currentModel = chat.getOptions().model;
-	const int timeoutSeconds = ofToInt(
-		environmentValue("OFXIC_INSPECT_TIMEOUT_SECONDS"));
+	const std::string configuredTimeout =
+		environmentValue("OFXIC_INSPECT_TIMEOUT_SECONDS");
+	const int timeoutSeconds = configuredTimeout.empty()
+		? 0
+		: ofToInt(configuredTimeout);
 	worker = std::thread([this, currentOutput, currentModel, timeoutSeconds]() {
 		ofxIC::RequestControl control;
 		control.timeoutSeconds = timeoutSeconds;
