@@ -32,6 +32,7 @@ using ToolLoopProgressCallback = std::function<void(const ToolLoopProgress &)>;
 struct ToolLoopResult {
 	bool success = false;
 	bool cancelled = false;
+	RequestFailure failure = RequestFailure::None;
 	std::string text;
 	std::string error;
 	std::size_t modelRequests = 0;
@@ -46,8 +47,10 @@ public:
 	ToolLoopResult run(
 		const std::string & userMessage,
 		std::size_t maxToolRounds = 4,
-		std::function<bool()> shouldCancel = nullptr,
+		RequestControl control = {},
 		ToolLoopProgressCallback onProgress = nullptr);
+	ToolLoopResult run(const std::string & userMessage, std::size_t maxToolRounds,
+		std::function<bool()> shouldCancel, ToolLoopProgressCallback onProgress = nullptr);
 
 private:
 	std::reference_wrapper<ChatSession> chat;

@@ -103,6 +103,7 @@ HttpResponse runWinHttpRequest(const HttpRequest & request) {
 	auto cancelled = [&]() {
 		if (!request.shouldCancel || !request.shouldCancel()) return false;
 		result.cancelled = true;
+		result.failure = RequestFailure::Cancelled;
 		result.error = "request cancelled";
 		return true;
 	};
@@ -132,11 +133,18 @@ HttpResponse runWinHttpRequest(const HttpRequest & request) {
 	if (!operation.get()) { result.error = winHttpError("WinHttpOpenRequest"); return result; }
 	WinHttpCancellation cancellation(operation, request.shouldCancel);
 	auto operationFailed = [&](const char * name) {
+		const DWORD error = GetLastError();
 		if (cancellation.wasCancelled()) {
 			result.cancelled = true;
+			result.failure = RequestFailure::Cancelled;
 			result.error = "request cancelled";
+		} else if (error == ERROR_WINHTTP_TIMEOUT) {
+			result.failure = RequestFailure::Timeout;
+			result.error = "request timed out";
 		} else {
-			result.error = winHttpError(name);
+			result.failure = RequestFailure::Transport;
+			result.error = std::string(name) + " failed with Windows error " +
+				std::to_string(error);
 		}
 	};
 	std::wstring headers = L"Accept: " + widen(request.accept) + L"\r\nContent-Type: " + widen(request.contentType) + L"\r\n";
@@ -448,6 +456,7 @@ bool processServerSentEventLine(
 	response.streamedText += text;
 	if (onChunk && !onChunk(text)) {
 		response.cancelled = true;
+		response.failure = RequestFailure::Cancelled;
 		response.error = "request cancelled";
 		return false;
 	}
@@ -468,6 +477,7 @@ bool shouldCancel(CurlState & state) {
 		return false;
 	}
 	state.response->cancelled = true;
+	state.response->failure = RequestFailure::Cancelled;
 	state.response->error = "request cancelled";
 	return true;
 }
@@ -578,6 +588,9 @@ HttpResponse runCurlRequest(const HttpRequest & request) {
 	result.status = static_cast<int>(status);
 	result.started = true;
 	if (code != CURLE_OK && !result.cancelled && result.error.empty()) {
+		result.failure = code == CURLE_OPERATION_TIMEDOUT
+			? RequestFailure::Timeout
+			: RequestFailure::Transport;
 		result.error = errorBuffer[0] ? errorBuffer : curl_easy_strerror(code);
 	}
 	if (!result.error.empty() && !result.cancelled) result.status = 0;
@@ -637,6 +650,7 @@ HttpResponse Endpoint::perform(HttpRequest request) const {
 	if (response.body.size() > request.maxResponseBytes) {
 		response.status = 0;
 		response.body.clear();
+		response.failure = RequestFailure::InvalidResponse;
 		response.error = "response exceeded " +
 			std::to_string(request.maxResponseBytes) + " byte limit";
 	}
@@ -644,25 +658,45 @@ HttpResponse Endpoint::perform(HttpRequest request) const {
 }
 
 EndpointStatus Endpoint::inspect(std::function<bool()> shouldCancel) const {
+	RequestControl control;
+	control.shouldCancel = std::move(shouldCancel);
+	return inspect(std::move(control));
+}
+
+EndpointStatus Endpoint::inspect(RequestControl control) const {
 	EndpointStatus status;
+	if (control.timeoutSeconds < 0) {
+		status.failure = RequestFailure::InvalidResponse;
+		status.error = "request timeout cannot be negative";
+		return status;
+	}
 	HttpRequest request;
 	request.method = HttpMethod::Get;
 	request.url = "/v1/models";
-	request.timeoutSeconds = 10;
+	request.timeoutSeconds = control.timeoutSeconds > 0 ? control.timeoutSeconds : 10;
 	request.maxResponseBytes = 8U * 1024U * 1024U;
-	request.shouldCancel = std::move(shouldCancel);
+	request.shouldCancel = std::move(control.shouldCancel);
 	const HttpResponse response = perform(request);
 	status.httpStatus = response.status;
 	status.cancelled = response.cancelled;
+	status.failure = response.failure;
 	if (response.cancelled) {
+		status.failure = RequestFailure::Cancelled;
 		status.error = response.error.empty() ? "request cancelled" : response.error;
 		return status;
 	}
 	if (!response.started) {
+		if (status.failure == RequestFailure::None) status.failure = RequestFailure::Transport;
 		status.error = response.error.empty() ? "request did not start" : response.error;
 		return status;
 	}
+	if (response.status <= 0) {
+		if (status.failure == RequestFailure::None) status.failure = RequestFailure::Transport;
+		status.error = response.error.empty() ? "model request failed" : response.error;
+		return status;
+	}
 	if (response.status < 200 || response.status >= 300) {
+		status.failure = RequestFailure::Provider;
 		status.error = "model endpoint returned HTTP " + std::to_string(response.status);
 		if (!response.error.empty()) {
 			status.error += ": " + response.error;
@@ -678,12 +712,28 @@ ChatResult Endpoint::chat(
 	const ChatRequest & request,
 	ChatChunkCallback onChunk,
 	std::function<bool()> shouldCancel) const {
+	RequestControl control;
+	control.shouldCancel = std::move(shouldCancel);
+	return chat(request, std::move(onChunk), std::move(control));
+}
+
+ChatResult Endpoint::chat(
+	const ChatRequest & request,
+	ChatChunkCallback onChunk,
+	RequestControl control) const {
 	ChatResult result;
+	if (control.timeoutSeconds < 0) {
+		result.failure = RequestFailure::InvalidResponse;
+		result.error = "request timeout cannot be negative";
+		return result;
+	}
 	if (request.messages.empty()) {
+		result.failure = RequestFailure::InvalidResponse;
 		result.error = "chat request has no messages";
 		return result;
 	}
 	if (request.options.stream && !request.tools.empty()) {
+		result.failure = RequestFailure::InvalidResponse;
 		result.error = "streaming tool calls are not supported yet";
 		return result;
 	}
@@ -695,7 +745,8 @@ ChatResult Endpoint::chat(
 	httpRequest.body = buildChatBody(request);
 	httpRequest.stream = request.options.stream;
 	httpRequest.onChunk = onChunk;
-	httpRequest.shouldCancel = std::move(shouldCancel);
+	httpRequest.timeoutSeconds = control.timeoutSeconds > 0 ? control.timeoutSeconds : 180;
+	httpRequest.shouldCancel = std::move(control.shouldCancel);
 
 	const auto startedAt = std::chrono::steady_clock::now();
 	const HttpResponse response = perform(httpRequest);
@@ -704,17 +755,21 @@ ChatResult Endpoint::chat(
 	result.httpStatus = response.status;
 	result.rawResponse = response.body;
 	result.cancelled = response.cancelled;
+	result.failure = response.failure;
 
 	if (!response.started) {
+		if (result.failure == RequestFailure::None) result.failure = RequestFailure::Transport;
 		result.error = response.error.empty() ? "request did not start" : response.error;
 		return result;
 	}
 	if (response.cancelled) {
+		result.failure = RequestFailure::Cancelled;
 		result.text = response.streamedText;
 		result.error = response.error.empty() ? "request cancelled" : response.error;
 		return result;
 	}
 	if (response.status <= 0) {
+		if (result.failure == RequestFailure::None) result.failure = RequestFailure::Transport;
 		result.error = "endpoint is not reachable at " + httpRequest.url;
 		if (!response.error.empty()) {
 			result.error += ": " + response.error;
@@ -722,6 +777,7 @@ ChatResult Endpoint::chat(
 		return result;
 	}
 	if (response.status < 200 || response.status >= 300) {
+		result.failure = RequestFailure::Provider;
 		result.error = "chat endpoint returned HTTP " + std::to_string(response.status);
 		if (!response.error.empty()) {
 			result.error += ": " + response.error;
@@ -736,6 +792,7 @@ ChatResult Endpoint::chat(
 		result.toolCalls = extractToolCalls(response.body);
 	}
 	if (result.text.empty() && result.toolCalls.empty()) {
+		result.failure = RequestFailure::InvalidResponse;
 		result.error = "chat endpoint returned no text";
 		return result;
 	}

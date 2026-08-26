@@ -61,6 +61,37 @@ OFXIC_TEST(endpoint_inspection_can_be_cancelled) {
 	OFXIC_REQUIRE(!status);
 	OFXIC_REQUIRE(status.cancelled);
 	OFXIC_REQUIRE(receivedCancellation);
+	OFXIC_REQUIRE(status.failure == ofxIC::RequestFailure::Cancelled);
+}
+
+OFXIC_TEST(endpoint_request_control_overrides_timeout) {
+	ofxIC::HttpRequest captured;
+	ofxIC::Endpoint endpoint("http://example.test", [&](const ofxIC::HttpRequest & request) {
+		captured = request;
+		ofxIC::HttpResponse response;
+		response.started = true;
+		response.status = 200;
+		response.body = R"({"data":[]})";
+		return response;
+	});
+	ofxIC::RequestControl control;
+	control.timeoutSeconds = 3;
+	OFXIC_REQUIRE(endpoint.inspect(control));
+	OFXIC_REQUIRE(captured.timeoutSeconds == 3);
+}
+
+OFXIC_TEST(endpoint_rejects_negative_request_timeout_before_transport) {
+	int calls = 0;
+	ofxIC::Endpoint endpoint("http://example.test", [&](const ofxIC::HttpRequest &) {
+		++calls;
+		return ofxIC::HttpResponse{};
+	});
+	ofxIC::RequestControl control;
+	control.timeoutSeconds = -1;
+	const auto status = endpoint.inspect(control);
+	OFXIC_REQUIRE(!status);
+	OFXIC_REQUIRE(calls == 0);
+	OFXIC_REQUIRE(status.failure == ofxIC::RequestFailure::InvalidResponse);
 }
 
 OFXIC_TEST(endpoint_rejects_oversized_model_response) {
@@ -76,6 +107,7 @@ OFXIC_TEST(endpoint_rejects_oversized_model_response) {
 	OFXIC_REQUIRE(!status);
 	OFXIC_REQUIRE(status.httpStatus == 0);
 	OFXIC_REQUIRE(status.error.find("byte limit") != std::string::npos);
+	OFXIC_REQUIRE(status.failure == ofxIC::RequestFailure::InvalidResponse);
 }
 
 OFXIC_TEST(endpoint_builds_chat_completions_body) {

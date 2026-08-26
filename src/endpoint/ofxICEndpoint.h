@@ -1,6 +1,7 @@
 #pragma once
 
 #include "../chat/ofxICChatTypes.h"
+#include "ofxICRequestTypes.h"
 
 #include <cstddef>
 #include <functional>
@@ -39,6 +40,7 @@ struct HttpRequest {
 struct HttpResponse {
 	bool started = false;
 	bool cancelled = false;
+	RequestFailure failure = RequestFailure::None;
 	int status = 0;
 	std::string body;
 	std::string streamedText;
@@ -50,6 +52,7 @@ using HttpTransport = std::function<HttpResponse(const HttpRequest &)>;
 struct EndpointStatus {
 	bool reachable = false;
 	bool cancelled = false;
+	RequestFailure failure = RequestFailure::None;
 	int httpStatus = 0;
 	std::vector<std::string> models;
 	std::string error;
@@ -71,11 +74,14 @@ public:
 	void setBearerToken(std::string token);
 	bool hasBearerToken() const;
 
-	EndpointStatus inspect(std::function<bool()> shouldCancel = nullptr) const;
+	EndpointStatus inspect(RequestControl control = {}) const;
+	EndpointStatus inspect(std::function<bool()> shouldCancel) const;
 	ChatResult chat(
 		const ChatRequest & request,
 		ChatChunkCallback onChunk = nullptr,
-		std::function<bool()> shouldCancel = nullptr) const;
+		RequestControl control = {}) const;
+	ChatResult chat(const ChatRequest & request, ChatChunkCallback onChunk,
+		std::function<bool()> shouldCancel) const;
 
 private:
 	HttpResponse perform(HttpRequest request) const;

@@ -49,28 +49,51 @@ TranscriptionClient::TranscriptionClient(Endpoint & endpoint) : endpoint(endpoin
 TranscriptionResult TranscriptionClient::transcribeOpenAI(
 	const TranscriptionRequest & request,
 	std::function<bool()> shouldCancel) const {
+	RequestControl control;
+	control.shouldCancel = std::move(shouldCancel);
+	return transcribeOpenAI(request, std::move(control));
+}
+
+TranscriptionResult TranscriptionClient::transcribeOpenAI(
+	const TranscriptionRequest & request,
+	RequestControl control) const {
 	if (request.audioBytes.size() > kOpenAIMaxAudioBytes) {
 		TranscriptionResult result;
+		result.failure = RequestFailure::InvalidResponse;
 		result.error = "OpenAI transcription files are limited to 25 MB; loaded file has " +
 			std::to_string(request.audioBytes.size()) + " bytes";
 		return result;
 	}
-	return transcribe(request, "/v1/audio/transcriptions", true, std::move(shouldCancel));
+	return transcribe(request, "/v1/audio/transcriptions", true, std::move(control));
 }
 
 TranscriptionResult TranscriptionClient::transcribeWhisperCpp(
 	const TranscriptionRequest & request,
 	std::function<bool()> shouldCancel) const {
-	return transcribe(request, "/inference", false, std::move(shouldCancel));
+	RequestControl control;
+	control.shouldCancel = std::move(shouldCancel);
+	return transcribeWhisperCpp(request, std::move(control));
+}
+
+TranscriptionResult TranscriptionClient::transcribeWhisperCpp(
+	const TranscriptionRequest & request,
+	RequestControl control) const {
+	return transcribe(request, "/inference", false, std::move(control));
 }
 
 TranscriptionResult TranscriptionClient::transcribe(
 	const TranscriptionRequest & request,
 	const std::string & path,
 	bool includeModel,
-	std::function<bool()> shouldCancel) const {
+	RequestControl control) const {
 	TranscriptionResult result;
+	if (control.timeoutSeconds < 0) {
+		result.failure = RequestFailure::InvalidResponse;
+		result.error = "request timeout cannot be negative";
+		return result;
+	}
 	if (request.audioBytes.empty()) {
+		result.failure = RequestFailure::InvalidResponse;
 		result.error = "transcription audio is empty";
 		return result;
 	}
@@ -80,22 +103,31 @@ TranscriptionResult TranscriptionClient::transcribe(
 	httpRequest.url = path;
 	httpRequest.body = buildMultipart(request, includeModel, boundary);
 	httpRequest.contentType = "multipart/form-data; boundary=" + boundary;
-	httpRequest.timeoutSeconds = 300;
+	httpRequest.timeoutSeconds = control.timeoutSeconds > 0 ? control.timeoutSeconds : 300;
 	httpRequest.maxResponseBytes = 16U * 1024U * 1024U;
-	httpRequest.shouldCancel = std::move(shouldCancel);
+	httpRequest.shouldCancel = std::move(control.shouldCancel);
 	const HttpResponse response = endpoint.perform(std::move(httpRequest));
 	result.httpStatus = response.status;
 	result.cancelled = response.cancelled;
+	result.failure = response.failure;
 	result.rawResponse = response.body;
 	if (response.cancelled) {
+		result.failure = RequestFailure::Cancelled;
 		result.error = response.error.empty() ? "request cancelled" : response.error;
 		return result;
 	}
 	if (!response.started) {
+		if (result.failure == RequestFailure::None) result.failure = RequestFailure::Transport;
 		result.error = response.error.empty() ? "transcription request did not start" : response.error;
 		return result;
 	}
+	if (response.status <= 0) {
+		if (result.failure == RequestFailure::None) result.failure = RequestFailure::Transport;
+		result.error = response.error.empty() ? "transcription request failed" : response.error;
+		return result;
+	}
 	if (response.status < 200 || response.status >= 300) {
+		result.failure = RequestFailure::Provider;
 		result.error = "transcription endpoint returned HTTP " + std::to_string(response.status);
 		const std::string detail = Endpoint::extractErrorText(response.body);
 		if (!detail.empty()) result.error += ": " + detail;
@@ -104,6 +136,7 @@ TranscriptionResult TranscriptionClient::transcribe(
 	}
 	result.text = Endpoint::extractChatText(response.body);
 	if (result.text.empty()) {
+		result.failure = RequestFailure::InvalidResponse;
 		result.error = "transcription endpoint returned no text";
 		return result;
 	}

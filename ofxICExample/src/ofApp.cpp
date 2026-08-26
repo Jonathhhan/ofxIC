@@ -1306,16 +1306,17 @@ void ofApp::transcribeAudio() {
 	const int protocol = transcriptionProtocol;
 	const auto currentModels = availableModels;
 	worker = std::thread([this, request = std::move(request), protocol, currentModels]() {
+		ofxIC::RequestControl control;
+		control.shouldCancel = [this]() { return cancellationRequested.load(); };
 		const auto result = protocol == 0
-			? transcription.transcribeOpenAI(request,
-				[this]() { return cancellationRequested.load(); })
-			: transcription.transcribeWhisperCpp(request,
-				[this]() { return cancellationRequested.load(); });
+			? transcription.transcribeOpenAI(request, control)
+			: transcription.transcribeWhisperCpp(request, control);
 		std::lock_guard<std::mutex> lock(resultMutex);
 		pendingOutput = result.text;
 		pendingStatus = result
 			? "Transcription completed"
-			: result.cancelled ? "Transcription cancelled"
+			: result.failure == ofxIC::RequestFailure::Cancelled ? "Transcription cancelled"
+			: result.failure == ofxIC::RequestFailure::Timeout ? "Transcription timed out"
 			: "Transcription failed: " + result.error;
 		pendingModels = currentModels;
 		finished = true;
@@ -1518,14 +1519,16 @@ void ofApp::inspectEndpoint() {
 	const std::string currentOutput = output;
 	const std::string currentModel = chat.getOptions().model;
 	worker = std::thread([this, currentOutput, currentModel]() {
-		const auto inspection = endpoint.inspect([this]() {
-			return cancellationRequested.load();
-		});
+		ofxIC::RequestControl control;
+		control.shouldCancel = [this]() { return cancellationRequested.load(); };
+		const auto inspection = endpoint.inspect(control);
 		std::lock_guard<std::mutex> lock(resultMutex);
 		pendingModels = inspection.models;
 		pendingModelSelection.clear();
-		if (inspection.cancelled) {
+		if (inspection.failure == ofxIC::RequestFailure::Cancelled) {
 			pendingStatus = "Inspection cancelled";
+		} else if (inspection.failure == ofxIC::RequestFailure::Timeout) {
+			pendingStatus = "Inspection timed out";
 		} else if (!inspection) {
 			pendingStatus = "Inspection failed: " + inspection.error;
 		} else if (!currentModel.empty()) {
@@ -1558,10 +1561,12 @@ void ofApp::sendMessage() {
 	focusMessageInput = true;
 	const std::vector<std::string> currentModels = availableModels;
 	worker = std::thread([this, message, currentModels]() {
+		ofxIC::RequestControl control;
+		control.shouldCancel = [this]() { return cancellationRequested.load(); };
 		const auto result = toolLoop.run(
 			message,
 			4,
-			[this]() { return cancellationRequested.load(); },
+			control,
 			[this](const ofxIC::ToolLoopProgress & progress) {
 				std::lock_guard<std::mutex> lock(resultMutex);
 				if (progress.stage == ofxIC::ToolLoopStage::ExecutingTool) {
@@ -1575,7 +1580,9 @@ void ofApp::sendMessage() {
 		pendingOutput = result.text;
 		pendingStatus = result
 			? "Inference completed with " + ofToString(result.modelRequests) + " model request(s)"
-			: result.cancelled ? "Request cancelled" : "Request failed: " + result.error;
+			: result.failure == ofxIC::RequestFailure::Cancelled ? "Request cancelled"
+			: result.failure == ofxIC::RequestFailure::Timeout ? "Request timed out"
+			: "Request failed: " + result.error;
 		pendingModels = currentModels;
 		finished = true;
 	});

@@ -45,19 +45,25 @@ if (result) {
 }
 ```
 
-Long-running chat and tool-loop requests accept an optional cancellation
-predicate. Run the blocking call on a worker thread and set the flag from the
-openFrameworks thread; the example exposes this as **Cancel request**:
+Long-running endpoint inspection, chat, tool-loop, and transcription requests
+accept an operation-scoped `RequestControl`. Run the blocking call on a worker
+thread and set the flag from the openFrameworks thread; the example exposes
+this as **Cancel request**:
 
 ```cpp
 std::atomic<bool> cancelRequested{ false };
-const auto result = loop.run("Summarize the loaded sources", 4, [&]() {
+ofxIC::RequestControl control;
+control.timeoutSeconds = 30; // zero keeps the operation's bounded default
+control.shouldCancel = [&]() {
 	return cancelRequested.load();
-});
+};
+const auto result = loop.run("Summarize the loaded sources", 4, control);
 ```
 
 Cancellation is forwarded to the HTTP transport, rolls the incomplete turn
-back out of chat history, and is reported separately from an endpoint failure.
+back out of chat history, and is reported separately from timeout, transport,
+provider, and invalid-response failures through `RequestFailure`. The previous
+standalone cancellation-predicate overloads remain available during `0.2.x`.
 
 The complete document workflow remains small:
 

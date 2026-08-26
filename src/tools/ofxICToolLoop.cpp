@@ -2,6 +2,8 @@
 
 #include "../chat/ofxICChatSession.h"
 
+#include <utility>
+
 namespace ofxIC {
 
 ToolLoop::ToolLoop(ChatSession & chat, const ToolRegistry & tools)
@@ -14,27 +16,46 @@ ToolLoopResult ToolLoop::run(
 	std::size_t maxToolRounds,
 	std::function<bool()> shouldCancel,
 	ToolLoopProgressCallback onProgress) {
+	RequestControl control;
+	control.shouldCancel = std::move(shouldCancel);
+	return run(userMessage, maxToolRounds, std::move(control), std::move(onProgress));
+}
+
+ToolLoopResult ToolLoop::run(
+	const std::string & userMessage,
+	std::size_t maxToolRounds,
+	RequestControl control,
+	ToolLoopProgressCallback onProgress) {
 	ToolLoopResult loopResult;
+	if (control.timeoutSeconds < 0) {
+		loopResult.failure = RequestFailure::InvalidResponse;
+		loopResult.error = "request timeout cannot be negative";
+		return loopResult;
+	}
 	if (userMessage.empty()) {
+		loopResult.failure = RequestFailure::InvalidResponse;
 		loopResult.error = "message is empty";
 		return loopResult;
 	}
 	ChatSession & session = chat.get();
 	if (session.getOptions().stream) {
+		loopResult.failure = RequestFailure::InvalidResponse;
 		loopResult.error = "tool loop streaming is not supported yet";
 		return loopResult;
 	}
 	const std::vector<ToolDefinition> definitions = tools.get().definitions();
 	if (definitions.empty()) {
+		loopResult.failure = RequestFailure::InvalidResponse;
 		loopResult.error = "tool registry is empty";
 		return loopResult;
 	}
 	const std::size_t checkpoint = session.messages.size();
-	const auto cancelled = [&shouldCancel]() {
-		return shouldCancel && shouldCancel();
+	const auto cancelled = [&control]() {
+		return control.shouldCancel && control.shouldCancel();
 	};
 	if (cancelled()) {
 		loopResult.cancelled = true;
+		loopResult.failure = RequestFailure::Cancelled;
 		loopResult.error = "request cancelled";
 		return loopResult;
 	}
@@ -44,12 +65,13 @@ ToolLoopResult ToolLoop::run(
 	if (onProgress) {
 		onProgress({ ToolLoopStage::RequestingModel, 1, {} });
 	}
-	ChatResult completion = session.complete({ user }, definitions, nullptr, shouldCancel);
+	ChatResult completion = session.complete({ user }, definitions, nullptr, control);
 	++loopResult.modelRequests;
 
 	for (std::size_t round = 0; completion && !completion.toolCalls.empty(); ++round) {
 		if (cancelled()) {
 			loopResult.cancelled = true;
+			loopResult.failure = RequestFailure::Cancelled;
 			loopResult.error = "request cancelled";
 			session.messages.resize(checkpoint);
 			return loopResult;
@@ -81,12 +103,13 @@ ToolLoopResult ToolLoop::run(
 			onProgress({ ToolLoopStage::RequestingModel, loopResult.modelRequests + 1, {} });
 		}
 		completion = session.complete(
-			std::move(toolMessages), definitions, nullptr, shouldCancel);
+			std::move(toolMessages), definitions, nullptr, control);
 		++loopResult.modelRequests;
 	}
 
 	if (!completion) {
 		loopResult.cancelled = completion.cancelled;
+		loopResult.failure = completion.failure;
 		loopResult.error = completion.error;
 		session.messages.resize(checkpoint);
 		return loopResult;

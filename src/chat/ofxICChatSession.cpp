@@ -38,8 +38,18 @@ ChatResult ChatSession::send(
 	const std::string & message,
 	ChatChunkCallback onChunk,
 	std::function<bool()> shouldCancel) {
+	RequestControl control;
+	control.shouldCancel = std::move(shouldCancel);
+	return send(message, std::move(onChunk), std::move(control));
+}
+
+ChatResult ChatSession::send(
+	const std::string & message,
+	ChatChunkCallback onChunk,
+	RequestControl control) {
 	if (message.empty()) {
 		ChatResult result;
+		result.failure = RequestFailure::InvalidResponse;
 		result.error = "message is empty";
 		return result;
 	}
@@ -47,14 +57,14 @@ ChatResult ChatSession::send(
 	ChatMessage userMessage;
 	userMessage.role = ChatRole::User;
 	userMessage.content = message;
-	return complete({ userMessage }, {}, std::move(onChunk), std::move(shouldCancel));
+	return complete({ userMessage }, {}, std::move(onChunk), std::move(control));
 }
 
 ChatResult ChatSession::complete(
 	std::vector<ChatMessage> newMessages,
 	const std::vector<ToolDefinition> & tools,
 	ChatChunkCallback onChunk,
-	std::function<bool()> shouldCancel) {
+	RequestControl control) {
 	const std::size_t checkpoint = messages.size();
 	messages.insert(messages.end(), newMessages.begin(), newMessages.end());
 	ChatRequest request;
@@ -64,7 +74,7 @@ ChatResult ChatSession::complete(
 	request.options = options;
 
 	ChatResult result = endpoint.get().chat(
-		request, std::move(onChunk), std::move(shouldCancel));
+		request, std::move(onChunk), std::move(control));
 	if (result) {
 		ChatMessage assistantMessage;
 		assistantMessage.role = ChatRole::Assistant;

@@ -7,6 +7,10 @@
 - standalone deterministic tests now use C++20, matching the common modern
   openFrameworks baseline while generated platform projects retain their
   platform-specific OF standard settings;
+- endpoint inspection, chat/tool-loop, and transcription now share an
+  operation-scoped `RequestControl` and distinguish cancellation, timeout,
+  transport, provider, and invalid-response failures while preserving the
+  `0.2.x` cancellation-callback overloads;
 
 ### Fixed
 

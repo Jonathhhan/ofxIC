@@ -11,16 +11,20 @@ class TranscriptionClient {
 public:
 	explicit TranscriptionClient(Endpoint & endpoint);
 	TranscriptionResult transcribeOpenAI(const TranscriptionRequest & request,
-		std::function<bool()> shouldCancel = nullptr) const;
+		RequestControl control = {}) const;
+	TranscriptionResult transcribeOpenAI(const TranscriptionRequest & request,
+		std::function<bool()> shouldCancel) const;
 	TranscriptionResult transcribeWhisperCpp(const TranscriptionRequest & request,
-		std::function<bool()> shouldCancel = nullptr) const;
+		RequestControl control = {}) const;
+	TranscriptionResult transcribeWhisperCpp(const TranscriptionRequest & request,
+		std::function<bool()> shouldCancel) const;
 
 private:
 	TranscriptionResult transcribe(
 		const TranscriptionRequest & request,
 		const std::string & path,
 		bool includeModel,
-		std::function<bool()> shouldCancel) const;
+		RequestControl control) const;
 	Endpoint & endpoint;
 };
 

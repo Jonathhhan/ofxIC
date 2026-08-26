@@ -1,5 +1,7 @@
 #pragma once
 
+#include "../endpoint/ofxICRequestTypes.h"
+
 #include <string>
 
 namespace ofxIC {
@@ -16,6 +18,7 @@ struct TranscriptionRequest {
 struct TranscriptionResult {
 	bool success = false;
 	bool cancelled = false;
+	RequestFailure failure = RequestFailure::None;
 	int httpStatus = 0;
 	std::string text;
 	std::string rawResponse;

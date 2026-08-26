@@ -92,7 +92,43 @@ OFXIC_TEST(transcription_client_reports_cancellation_separately) {
 	const auto result = client.transcribeOpenAI(request, []() { return true; });
 	OFXIC_REQUIRE(!result);
 	OFXIC_REQUIRE(result.cancelled);
+	OFXIC_REQUIRE(result.failure == ofxIC::RequestFailure::Cancelled);
 	OFXIC_REQUIRE(result.error == "request cancelled");
+}
+
+OFXIC_TEST(transcription_client_forwards_request_control_timeout) {
+	ofxIC::HttpRequest captured;
+	ofxIC::Endpoint endpoint("http://127.0.0.1:8080", [&](const ofxIC::HttpRequest & request) {
+		captured = request;
+		ofxIC::HttpResponse response;
+		response.started = true;
+		response.status = 200;
+		response.body = R"({"text":"ok"})";
+		return response;
+	});
+	ofxIC::TranscriptionClient client(endpoint);
+	ofxIC::TranscriptionRequest request;
+	request.audioBytes = "audio";
+	ofxIC::RequestControl control;
+	control.timeoutSeconds = 7;
+	OFXIC_REQUIRE(client.transcribeOpenAI(request, control));
+	OFXIC_REQUIRE(captured.timeoutSeconds == 7);
+}
+
+OFXIC_TEST(transcription_client_preserves_timeout_classification) {
+	ofxIC::Endpoint endpoint("http://127.0.0.1:8080", [](const ofxIC::HttpRequest &) {
+		ofxIC::HttpResponse response;
+		response.started = true;
+		response.failure = ofxIC::RequestFailure::Timeout;
+		response.error = "request timed out";
+		return response;
+	});
+	ofxIC::TranscriptionClient client(endpoint);
+	ofxIC::TranscriptionRequest request;
+	request.audioBytes = "audio";
+	const auto result = client.transcribeOpenAI(request);
+	OFXIC_REQUIRE(!result);
+	OFXIC_REQUIRE(result.failure == ofxIC::RequestFailure::Timeout);
 }
 
 OFXIC_TEST(transcription_client_reports_bounded_endpoint_error_details) {

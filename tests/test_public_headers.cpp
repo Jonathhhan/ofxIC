@@ -13,7 +13,10 @@ OFXIC_TEST(public_umbrella_header_exposes_api) {
 	ofxIC::AceStepMusicClient localMusic(endpoint);
 	ofxIC::TranscriptionClient transcription(endpoint);
 	ofxIC::SegmentationClient segmentation(endpoint);
+	ofxIC::RequestControl control;
+	control.timeoutSeconds = 1;
 	OFXIC_REQUIRE(endpoint.getBaseUrl() == "http://localhost:8001");
+	OFXIC_REQUIRE(control.timeoutSeconds == 1);
 	OFXIC_REQUIRE(chat.getMessages().empty());
 	OFXIC_REQUIRE(tools.contains("search_documents"));
 	ofxIC::ImageRequest image;

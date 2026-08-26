@@ -1,5 +1,7 @@
 #pragma once
 
+#include "../endpoint/ofxICRequestTypes.h"
+
 #include <functional>
 #include <string>
 #include <utility>
@@ -59,6 +61,7 @@ struct ChatRequest {
 struct ChatResult {
 	bool success = false;
 	bool cancelled = false;
+	RequestFailure failure = RequestFailure::None;
 	int httpStatus = 0;
 	float elapsedMs = 0.0f;
 	std::string text;
