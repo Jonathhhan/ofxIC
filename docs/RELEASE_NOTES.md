@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+No changes yet.
+
+## 0.2.0-rc.3 — 2026-08-26
+
 ### Added
 
 - a user-invoked, one-URL web snapshot utility that produces `.txt` or `.md`
