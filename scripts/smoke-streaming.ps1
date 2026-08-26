@@ -63,7 +63,9 @@ try {
 	}
 	$console = (Get-Content -Raw -LiteralPath $stdoutPath) +
 		(Get-Content -Raw -LiteralPath $stderrPath)
-	foreach ($expected in @("user: stream this", "assistant chunk: First ",
+	foreach ($expected in @("user: stream this",
+		"route: endpoint=http://127.0.0.1:$port model=fixture-model",
+		"assistant chunk: First ",
 		"assistant: First second")) {
 		if (-not $console.Contains($expected)) {
 			throw "console log did not contain: $expected"

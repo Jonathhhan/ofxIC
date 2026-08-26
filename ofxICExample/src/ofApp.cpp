@@ -1614,6 +1614,9 @@ void ofApp::sendMessage() {
 	input[0] = '\0';
 	lastMessage = message;
 	ofLogNotice("ofxIC chat") << "user: " << message;
+	const auto currentOptions = chat.getOptions();
+	ofLogNotice("ofxIC chat") << "route: endpoint=" << endpoint.getBaseUrl()
+		<< " model=" << (currentOptions.model.empty() ? "<default>" : currentOptions.model);
 	status = "Waiting for model...";
 	{
 		std::lock_guard<std::mutex> lock(resultMutex);

@@ -373,6 +373,7 @@ jobs:
               grep -Fq "Streaming inference completed" "$result"
               grep -Fq "First second" "$result"
               grep -Fq "user: stream this" "$log"
+              grep -Fq "route: endpoint=http://127.0.0.1:18088 model=fixture-model" "$log"
               grep -Fq "assistant chunk: First " "$log"
               grep -Fq "assistant: First second" "$log"
             ' bash "$app/bin/ofxICExample" "$log" "$result" "$partial"
