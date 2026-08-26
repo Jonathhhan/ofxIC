@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.2.0-rc.4 — 2026-08-26
+
 ### Changed
 
 - standalone deterministic tests now use C++20, matching the common modern
