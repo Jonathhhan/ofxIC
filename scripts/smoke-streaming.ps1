@@ -6,6 +6,8 @@ $ErrorActionPreference = "Stop"
 $port = Get-Random -Minimum 18100 -Maximum 18900
 $resultPath = Join-Path $env:TEMP "ofxic-stream-final-$PID.txt"
 $partialPath = Join-Path $env:TEMP "ofxic-stream-partial-$PID.txt"
+$stdoutPath = Join-Path $env:TEMP "ofxic-stream-stdout-$PID.log"
+$stderrPath = Join-Path $env:TEMP "ofxic-stream-stderr-$PID.log"
 $previous = @{}
 foreach ($name in @("OFXIC_ENDPOINT_URL", "OFXIC_MODEL", "OFXIC_CHAT_STREAM",
 	"OFXIC_CHAT_AUTORUN", "OFXIC_GUI_RESULT_PATH", "OFXIC_STREAM_RESULT_PATH")) {
@@ -15,7 +17,8 @@ foreach ($name in @("OFXIC_ENDPOINT_URL", "OFXIC_MODEL", "OFXIC_CHAT_STREAM",
 $server = $null
 $app = $null
 try {
-	Remove-Item -LiteralPath $resultPath, $partialPath -Force -ErrorAction SilentlyContinue
+	Remove-Item -LiteralPath $resultPath, $partialPath, $stdoutPath, $stderrPath `
+		-Force -ErrorAction SilentlyContinue
 	$serverScript = "$PSScriptRoot\stream-fixture-server.py"
 	$server = Start-Process python -ArgumentList "`"$serverScript`" --port $port" `
 		-PassThru -WindowStyle Hidden
@@ -27,7 +30,8 @@ try {
 	$env:OFXIC_CHAT_AUTORUN = "stream this"
 	$env:OFXIC_GUI_RESULT_PATH = $resultPath
 	$env:OFXIC_STREAM_RESULT_PATH = $partialPath
-	$app = Start-Process $Example -PassThru
+	$app = Start-Process $Example -PassThru `
+		-RedirectStandardOutput $stdoutPath -RedirectStandardError $stderrPath
 
 	$deadline = (Get-Date).AddSeconds(10)
 	$observedPartial = $false
@@ -57,6 +61,14 @@ try {
 	if ($final -notmatch "Streaming inference completed" -or $final -notmatch "First second") {
 		throw "unexpected streaming GUI result: $final"
 	}
+	$console = (Get-Content -Raw -LiteralPath $stdoutPath) +
+		(Get-Content -Raw -LiteralPath $stderrPath)
+	foreach ($expected in @("user: stream this", "assistant chunk: First ",
+		"assistant: First second")) {
+		if (-not $console.Contains($expected)) {
+			throw "console log did not contain: $expected"
+		}
+	}
 	Write-Host "Streaming GUI smoke passed (partial and final SSE state observed)"
 } finally {
 	if ($app -and -not $app.HasExited) { Stop-Process -Id $app.Id -Force }
@@ -64,5 +76,6 @@ try {
 	foreach ($name in $previous.Keys) {
 		[Environment]::SetEnvironmentVariable($name, $previous[$name])
 	}
-	Remove-Item -LiteralPath $resultPath, $partialPath -Force -ErrorAction SilentlyContinue
+	Remove-Item -LiteralPath $resultPath, $partialPath, $stdoutPath, $stderrPath `
+		-Force -ErrorAction SilentlyContinue
 }

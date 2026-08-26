@@ -18,6 +18,8 @@
 - the regular example can now render direct-chat SSE chunks while a request is
   still running, with an explicit boundary that keeps document-tool requests
   on the existing non-streaming tool loop.
+- chat user messages, streaming chunks, completed assistant messages, and
+  request failures are mirrored to the openFrameworks console log for diagnosis.
 
 ## 0.2.0-rc.4 — 2026-08-26
 

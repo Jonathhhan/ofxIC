@@ -372,6 +372,9 @@ jobs:
               [[ -s "$result" ]] || { echo "Timed out waiting for streaming result" >&2; cat "$log" >&2; exit 1; }
               grep -Fq "Streaming inference completed" "$result"
               grep -Fq "First second" "$result"
+              grep -Fq "user: stream this" "$log"
+              grep -Fq "assistant chunk: First " "$log"
+              grep -Fq "assistant: First second" "$log"
             ' bash "$app/bin/ofxICExample" "$log" "$result" "$partial"
 
       - name: Upload deterministic streaming GUI artifacts

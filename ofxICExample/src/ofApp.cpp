@@ -1613,6 +1613,7 @@ void ofApp::sendMessage() {
 	const std::string message(input.data());
 	input[0] = '\0';
 	lastMessage = message;
+	ofLogNotice("ofxIC chat") << "user: " << message;
 	status = "Waiting for model...";
 	{
 		std::lock_guard<std::mutex> lock(resultMutex);
@@ -1637,6 +1638,7 @@ void ofApp::sendMessage() {
 			const auto chatResult = chat.send(
 				message,
 				[this](const std::string & chunk) {
+					ofLogNotice("ofxIC chat") << "assistant chunk: " << chunk;
 					std::lock_guard<std::mutex> lock(resultMutex);
 					pendingStreamOutput += chunk;
 					return !cancellationRequested.load();
@@ -1665,6 +1667,11 @@ void ofApp::sendMessage() {
 							ofToString(progress.modelRequest) + ")...";
 					}
 				});
+		}
+		if (result) {
+			ofLogNotice("ofxIC chat") << "assistant: " << result.text;
+		} else {
+			ofLogError("ofxIC chat") << "request failed: " << result.error;
 		}
 		std::lock_guard<std::mutex> lock(resultMutex);
 		pendingOutput = result.text;
