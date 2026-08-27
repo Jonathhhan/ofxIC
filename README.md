@@ -546,4 +546,5 @@ tool loop, verifies the source identifier, and captures the rendered answer.
 surface. It is derived from the tested endpoint-first rewrite previously
 developed on the historical `ofxGgml` V2 branch, but it does not carry that
 repository's embedded-runtime or multi-addon history. See the
-[release notes](docs/RELEASE_NOTES.md) for the exact boundary.
+[release notes](docs/RELEASE_NOTES.md) for the exact boundary and the
+[roadmap](docs/ROADMAP.md) for the prioritized path to `0.2.0` and beyond.
