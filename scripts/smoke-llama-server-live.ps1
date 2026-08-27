@@ -176,10 +176,12 @@ try {
 		$exampleProcess.CloseMainWindow() | Out-Null
 		if (-not $exampleProcess.WaitForExit(3000)) {
 			Stop-Process -Id $exampleProcess.Id -Force -ErrorAction SilentlyContinue
+			$exampleProcess.WaitForExit(3000) | Out-Null
 		}
 	}
 	if ($serverProcess -and -not $serverProcess.HasExited) {
 		Stop-Process -Id $serverProcess.Id -Force -ErrorAction SilentlyContinue
+		$serverProcess.WaitForExit(5000) | Out-Null
 	}
 	foreach ($name in $previous.Keys) {
 		[Environment]::SetEnvironmentVariable($name, $previous[$name])

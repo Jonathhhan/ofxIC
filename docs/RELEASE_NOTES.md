@@ -1,5 +1,13 @@
 # Release Notes
 
+## Unreleased
+
+### Fixed
+
+- the local `llama-server` GUI smoke now waits for processes it force-stops
+  before deleting temporary evidence, preventing a successful inference run
+  from failing because redirected server logs are still locked on Windows.
+
 ## 0.2.0 — 2026-08-27
 
 ### Changed
