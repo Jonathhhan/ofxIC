@@ -20,12 +20,19 @@ Clone the repository into the openFrameworks addons directory:
 ```sh
 cd path/to/openFrameworks/addons
 git clone https://github.com/Jonathhhan/ofxIC.git
-git clone --branch develop https://github.com/jvcleave/ofxImGui.git
+git clone https://github.com/jvcleave/ofxImGui.git
+git -C ofxImGui checkout 4b5d04a3e73bbae34d564c9b78143e021f67377a
 ```
 
 Open `ofxICExample` with the openFrameworks Project Generator, or add
 `ofxIC` to an existing project. No model runtime or model file is installed
 with the addon.
+
+The addon does not override the C++ language standard selected by the generated
+openFrameworks project. Its standalone deterministic CMake tests require C++20;
+the canonical example is built with the standard supplied by the current
+openFrameworks platform template. This keeps the addon aligned with
+openFrameworks instead of imposing a separate compiler mode.
 
 ## Current API
 

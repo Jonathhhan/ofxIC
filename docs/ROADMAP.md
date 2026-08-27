@@ -67,6 +67,13 @@ Completion evidence:
 
 ### M2 — `0.2.0` release closure
 
+Status: completed. All public client classes are exercised by the canonical
+example; deterministic Windows and Linux tests plus the Linux nightly GUI passed
+from commit `c92fdb7`; release notes distinguish fixture and model-backed
+evidence; installation pins the CI-tested `ofxImGui` revision; and tracked-file
+inspection found no runtime binaries, models, caches, generated projects, or
+live evidence.
+
 Close the release around the demonstrated surface rather than adding another
 backend.
 
