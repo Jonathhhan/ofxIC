@@ -20,6 +20,10 @@
   on the existing non-streaming tool loop.
 - chat user messages, streaming chunks, completed assistant messages, and
   request failures are mirrored to the openFrameworks console log for diagnosis.
+- chat provider failures now retain a bounded JSON error detail, and the regular
+  example logs the active endpoint and model without exposing credentials;
+- deterministic Windows and Linux GUI smokes preserve a representative HTTP 402
+  credit failure through the real example status and console paths.
 
 ## 0.2.0-rc.4 — 2026-08-26
 

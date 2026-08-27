@@ -387,6 +387,61 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
+      - name: Preserve provider error detail through GUI
+        timeout-minutes: 2
+        shell: bash
+        env:
+          LIBGL_ALWAYS_SOFTWARE: "1"
+        run: |
+          set -euo pipefail
+          app="$OF_ROOT/apps/myApps/ofxICExample"
+          artifact_dir="$RUNNER_TEMP/provider-error-gui-smoke"
+          result="$artifact_dir/result.txt"
+          log="$artifact_dir/ofxICExample.log"
+          mkdir -p "$artifact_dir"
+          python3 -u "$GITHUB_WORKSPACE/scripts/provider-error-fixture.py" \
+            --port 18089 >"$artifact_dir/server.log" 2>&1 &
+          server_pid=$!
+          cleanup_server() { kill "$server_pid" 2>/dev/null || true; wait "$server_pid" 2>/dev/null || true; }
+          trap cleanup_server EXIT
+          sleep 0.25
+          kill -0 "$server_pid"
+
+          xvfb-run --auto-servernum \
+            --server-args="-screen 0 1280x720x24 -nolisten tcp" \
+            bash -euo pipefail -c '
+              binary="$1"; log="$2"; result="$3"
+              env OFXIC_ENDPOINT_URL=http://127.0.0.1:18089 \
+                OFXIC_MODEL=credit-fixture-model \
+                OFXIC_CHAT_STREAM=0 \
+                OFXIC_CHAT_AUTORUN="trigger provider error" \
+                OFXIC_GUI_RESULT_PATH="$result" \
+                "$binary" >"$log" 2>&1 &
+              app_pid=$!
+              cleanup() { kill "$app_pid" 2>/dev/null || true; wait "$app_pid" 2>/dev/null || true; }
+              trap cleanup EXIT
+              for _ in $(seq 1 100); do
+                [[ -s "$result" ]] && break
+                kill -0 "$app_pid" 2>/dev/null || { cat "$log" >&2; exit 1; }
+                sleep 0.1
+              done
+              [[ -s "$result" ]] || { echo "Timed out waiting for provider error" >&2; cat "$log" >&2; exit 1; }
+              detail="chat endpoint returned HTTP 402: You have depleted your monthly included credits."
+              grep -Fq "Request failed: $detail" "$result"
+              grep -Fq "user: trigger provider error" "$log"
+              grep -Fq "route: endpoint=http://127.0.0.1:18089 model=credit-fixture-model" "$log"
+              grep -Fq "request failed: $detail" "$log"
+            ' bash "$app/bin/ofxICExample" "$log" "$result"
+
+      - name: Upload provider error GUI artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ofxICExample-provider-error-fixture
+          path: ${{ runner.temp }}/provider-error-gui-smoke
+          if-no-files-found: error
+          retention-days: 14
+
       - name: Reject unsupported OpenAI video through GUI
         timeout-minutes: 2
         shell: bash
