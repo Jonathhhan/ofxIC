@@ -89,16 +89,42 @@ Completion evidence:
 - the release tag contains no binaries, models, caches, generated projects, or
   runtime output.
 
-### M3 — Evidence-triggered hardening
+### M3 — `0.2.x` evidence-triggered hardening
 
-After `0.2.0`, accept work only when a real consumer or failure identifies the
-next blocker. Likely candidates are streaming response compatibility across a
-second real endpoint, provider-specific media controls requested by an example,
-or remote-job cancellation when a supported provider exposes a concrete cancel
-contract.
+Keep the public surface stable while real applications exercise `0.2.0`. Accept
+patch work only when a supported workflow supplies a reproducer. Likely
+candidates are streaming response compatibility across a second real endpoint,
+provider-specific media controls requested by an example, or remote-job
+cancellation when a supported provider exposes a concrete cancel contract.
 
 Each candidate needs a reproducer, the responsible protocol boundary, and a
 claim-matched test before it becomes scheduled work.
+
+Completion evidence for each patch:
+
+- the first meaningful failure is retained in an issue, test, or release note;
+- the smallest responsible adapter changes without widening the addon boundary;
+- deterministic regression coverage passes on Windows and Linux;
+- model-backed or provider-backed claims remain separately marker-gated.
+
+### M4 — `0.3` only after real convergence
+
+Do not schedule `0.3` by date or by backend count. Start it only after two real
+consumers need the same non-trivial behavior and `0.2.x` compatibility cannot
+express it cleanly. A candidate may include a deliberate public-API cleanup or a
+shared protocol helper, but never an embedded runtime or generic model base.
+
+Admission evidence:
+
+- two named consumers exercise the duplicated behavior;
+- both failures or maintenance costs are reproducible;
+- the proposed common boundary removes that duplication without admitting
+  arbitrary filesystem, URL, provider, or runtime access;
+- migration and source-compatibility consequences are documented before code;
+- the canonical example can exercise every resulting public class.
+
+Until those conditions hold, the long-term action is maintenance, compatibility
+observation, and removal of proven friction—not speculative framework growth.
 
 ## Explicitly deferred
 
