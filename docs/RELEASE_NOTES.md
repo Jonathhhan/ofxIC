@@ -33,6 +33,8 @@
 - clean-checkout installation now pins the same `ofxImGui` revision exercised
   by CI, and the documented language-standard contract keeps standalone tests
   on C++20 while generated addon projects retain the openFrameworks standard.
+- all GitHub Actions workflows now use `actions/checkout@v6`, removing the
+  Node.js 20 deprecation warning observed during final release validation.
 
 ## 0.2.0-rc.4 — 2026-08-26
 

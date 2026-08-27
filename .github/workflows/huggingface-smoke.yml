@@ -25,7 +25,7 @@ jobs:
       OFXIC_MODEL: ${{ vars.HF_MODEL || 'openai/gpt-oss-120b' }}
       OFXIC_ENDPOINT_URL: ${{ vars.HF_SERVER_URL || 'https://router.huggingface.co/v1' }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Run hosted tool protocol
         shell: cmd
         run: scripts\smoke-huggingface.bat
