@@ -82,7 +82,7 @@ jobs:
 
       - name: Cache openFrameworks archive
         id: of-cache
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ${{ runner.temp }}/of-download/${{ steps.nightly.outputs.asset_name }}
           key: openframeworks-${{ runner.os }}-${{ steps.nightly.outputs.asset_name }}
@@ -226,7 +226,7 @@ jobs:
 
       - name: Upload GUI smoke artifacts
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ofxICExample-gui-linux-nightly
           path: ${{ runner.temp }}/gui-smoke
@@ -319,7 +319,7 @@ jobs:
 
       - name: Upload deterministic task GUI artifacts
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ofxICExample-task-fixtures
           path: ${{ runner.temp }}/task-gui-smoke
@@ -380,7 +380,7 @@ jobs:
 
       - name: Upload deterministic streaming GUI artifacts
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ofxICExample-streaming-fixture
           path: ${{ runner.temp }}/streaming-gui-smoke
@@ -435,7 +435,7 @@ jobs:
 
       - name: Upload provider error GUI artifacts
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ofxICExample-provider-error-fixture
           path: ${{ runner.temp }}/provider-error-gui-smoke
@@ -491,7 +491,7 @@ jobs:
 
       - name: Upload OpenAI video rejection artifacts
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ofxICExample-openai-video-rejection
           path: ${{ runner.temp }}/openai-video-rejection
@@ -588,7 +588,7 @@ jobs:
 
       - name: Upload deterministic image GUI artifacts
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ofxICExample-image-fixture
           path: ${{ runner.temp }}/image-gui-smoke
@@ -744,7 +744,7 @@ jobs:
 
       - name: Upload deterministic video GUI artifacts
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ofxICExample-video-fixture
           path: ${{ runner.temp }}/video-gui-smoke
@@ -857,7 +857,7 @@ jobs:
           always() &&
           github.ref == 'refs/heads/main' &&
           contains(github.event.head_commit.message, '[hf-gui-smoke]')
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ofxICExample-huggingface-gui
           path: ${{ runner.temp }}/hf-gui-smoke
@@ -952,7 +952,7 @@ jobs:
           always() &&
           github.event_name == 'workflow_dispatch' &&
           inputs.hf_media_task != 'none'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ofxICExample-huggingface-${{ inputs.hf_media_task }}
           path: ${{ runner.temp }}/hf-media-gui-smoke
