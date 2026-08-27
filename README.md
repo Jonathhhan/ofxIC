@@ -411,6 +411,16 @@ cannot be used as an `ofxIC` endpoint.
   It starts the external runtime, exercises the regular GUI, requires a nonempty
   model-produced transcript, and keeps binaries, models, audio, and output out
   of Git.
+- `scripts\smoke-llama-server-live.ps1 -Server <llama-server.exe> -Model
+  <model.gguf> -Document <source.md>` is the marker-gated local proof for the
+  core endpoint path. Set `OFXIC_RUN_LIVE_LLAMA_SERVER=1` explicitly before
+  running it. The script starts only the supplied external server, waits for
+  `/health`, drives the regular Release GUI through `/v1/models`, a two-request
+  document-tool loop, and a cited final answer, then stops only the processes it
+  launched. Use `-EvidenceDirectory <dir>` to retain logs and the GUI result;
+  otherwise temporary evidence is removed. The selected local model must support
+  the llama.cpp tool-call protocol. The script never downloads a model. The
+  complete path was verified with Qwen3.6-27B on 2026-08-27.
 - `scripts\smoke-segmentation.ps1` is the deterministic SAM bridge fixture and
   performs no inference. `scripts\smoke-sam-live.ps1 -Runner <sam-runner.exe>
   -Model <model.ggml> -Image <input.ppm>` is the separate model-backed proof. It

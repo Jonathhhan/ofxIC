@@ -24,6 +24,12 @@
   example logs the active endpoint and model without exposing credentials;
 - deterministic Windows and Linux GUI smokes preserve a representative HTTP 402
   credit failure through the real example status and console paths.
+- endpoint inspection now mirrors its non-secret route and result to the console;
+- a marker-gated Windows live smoke can start a user-supplied `llama-server` and
+  GGUF model, then require the regular GUI to inspect the endpoint and complete
+  the cited two-request local document-tool path without downloading a runtime
+  or model. This path passed with a tool-capable Qwen3.6-27B GGUF on 2026-08-27;
+  the model and live evidence were kept outside Git.
 
 ## 0.2.0-rc.4 — 2026-08-26
 

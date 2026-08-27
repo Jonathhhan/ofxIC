@@ -364,7 +364,7 @@ void ofApp::setup() {
 			automationCancelAtMillis = ofGetElapsedTimeMillis() +
 				static_cast<std::uint64_t>(cancelAfterMillis);
 		}
-		inspectEndpoint();
+		pendingInspectAutorun = true;
 	}
 	const std::string chatAutorun = environmentValue("OFXIC_CHAT_AUTORUN");
 	if (!chatAutorun.empty()) {
@@ -433,6 +433,10 @@ void ofApp::setup() {
 }
 
 void ofApp::update() {
+	if (pendingInspectAutorun && !busy) {
+		pendingInspectAutorun = false;
+		inspectEndpoint();
+	}
 	if (!pendingChatAutorun.empty() && !busy) {
 		setTextBuffer(input, pendingChatAutorun);
 		pendingChatAutorun.clear();
@@ -1574,6 +1578,8 @@ void ofApp::inspectEndpoint() {
 	}
 	const std::string currentOutput = output;
 	const std::string currentModel = chat.getOptions().model;
+	ofLogNotice("ofxIC inspect") << "route: endpoint=" << endpoint.getBaseUrl()
+		<< " model=" << (currentModel.empty() ? "<unspecified>" : currentModel);
 	const std::string configuredTimeout =
 		environmentValue("OFXIC_INSPECT_TIMEOUT_SECONDS");
 	const int timeoutSeconds = configuredTimeout.empty()
@@ -1582,7 +1588,12 @@ void ofApp::inspectEndpoint() {
 	worker = std::thread([this, currentOutput, currentModel, timeoutSeconds]() {
 		ofxIC::RequestControl control;
 		control.timeoutSeconds = timeoutSeconds;
-		control.shouldCancel = [this]() { return cancellationRequested.load(); };
+		const bool unattendedInspection =
+			environmentValue("OFXIC_INSPECT_AUTORUN") == "1" &&
+			environmentValue("OFXIC_INSPECT_CANCEL_AFTER_MS").empty();
+		if (!unattendedInspection) {
+			control.shouldCancel = [this]() { return cancellationRequested.load(); };
+		}
 		const auto inspection = endpoint.inspect(control);
 		std::lock_guard<std::mutex> lock(resultMutex);
 		pendingModels = inspection.models;
@@ -1603,6 +1614,8 @@ void ofApp::inspectEndpoint() {
 			pendingStatus = "Endpoint reachable; model: " + pendingModelSelection +
 				" (authentication not tested)";
 		}
+		if (inspection) ofLogNotice("ofxIC inspect") << pendingStatus;
+		else ofLogError("ofxIC inspect") << pendingStatus;
 		pendingOutput = currentOutput;
 		finished = true;
 	});

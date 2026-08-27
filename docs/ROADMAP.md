@@ -44,6 +44,12 @@ do not widen the core addon into a generic runtime or provider framework.
 
 ### M1 — Reproducible local core path
 
+Status: completed. The Release GUI path passed against a local `llama-server`
+with a tool-capable Qwen3.6-27B GGUF on 2026-08-27: endpoint inspection,
+two model requests, allowlisted document search, and an
+`ARCHITECTURE.md#chunk-2` citation were all observed. The model and retained
+runtime evidence remain outside Git.
+
 Provide one marker-gated Windows smoke command for a user-supplied
 `llama-server` executable and model. It must launch the server outside the addon,
 drive the regular GUI through endpoint inspection, chat, local document search,

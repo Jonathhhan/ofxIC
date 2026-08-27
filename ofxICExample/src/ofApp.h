@@ -110,6 +110,7 @@ private:
 	bool focusMessageInput = true;
 	bool streamChat = false;
 	std::string pendingChatAutorun;
+	bool pendingInspectAutorun = false;
 	std::string settingsPath;
 	std::string settingsStatus;
 	std::string credentialStatus;
