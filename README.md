@@ -28,6 +28,27 @@ Open `ofxICExample` with the openFrameworks Project Generator, or add
 `ofxIC` to an existing project. No model runtime or model file is installed
 with the addon.
 
+### Optional Windows CUDA server
+
+The addon remains an HTTP client, but these scripts can install a pinned,
+external CUDA build of `llama-server` into `%LOCALAPPDATA%\ofxIC\servers`.
+Executables, CUDA runtime files, logs, and models remain outside the repository.
+Downloads are accepted only when both official SHA-256 digests match.
+
+```powershell
+.\scripts\install-llama-server.ps1
+.\scripts\start-llama-server.ps1 -Model C:\models\model.gguf -FlashAttention
+.\scripts\install-stable-diffusion-server.ps1
+.\scripts\start-stable-diffusion-server.ps1 -DiffusionModel C:\models\image-model.gguf -FlashAttention
+```
+
+Use `-Plan` to inspect downloads or launch arguments without installing or
+starting anything. The pinned package is llama.cpp `b10516`, Windows x64,
+CUDA 13.3. Other backends may be added later; models remain a separate choice.
+The official stable-diffusion.cpp Windows package currently targets CUDA 12;
+its bundled runtime works with a compatible newer NVIDIA driver. Its server
+defaults to port `8081`, so it can run beside llama-server on port `8080`.
+
 The addon does not override the C++ language standard selected by the generated
 openFrameworks project. Its standalone deterministic CMake tests require C++20;
 the canonical example is built with the standard supplied by the current

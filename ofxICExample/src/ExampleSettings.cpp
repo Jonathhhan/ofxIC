@@ -40,6 +40,7 @@ bool validText(const std::string & value, std::size_t maximumSize) {
 bool validSettings(const ExampleSettings & settings) {
 	return settings.endpointProfile >= 0 && settings.endpointProfile <= 4 &&
 		validText(settings.endpointUrl, 512) && validText(settings.modelId, 256) &&
+		validText(settings.llamaModelDirectory, 1024) &&
 		validText(settings.transcriptionEndpointUrl, 512) &&
 		settings.transcriptionProtocol >= 0 && settings.transcriptionProtocol <= 1 &&
 		validText(settings.transcriptionModel, 256) &&
@@ -49,6 +50,10 @@ bool validSettings(const ExampleSettings & settings) {
 		validText(settings.mediaEndpointUrl, 512) &&
 		validText(settings.mediaImageModel, 256) &&
 		validText(settings.mediaVideoModel, 256) &&
+		validText(settings.stableDiffusionModelDirectory, 1024) &&
+		validText(settings.stableDiffusionModelPath, 1024) &&
+		settings.stableDiffusionCompleteCheckpoint >= 0 &&
+		settings.stableDiffusionCompleteCheckpoint <= 1 &&
 		settings.mediaWidth >= 1 && settings.mediaWidth <= 8192 &&
 		settings.mediaHeight >= 1 && settings.mediaHeight <= 8192 &&
 		settings.mediaFrames >= 1 && settings.mediaFrames <= 10000 &&
@@ -156,6 +161,8 @@ SettingsLoadStatus loadSettings(const std::string & path, ExampleSettings & sett
 			valid = parseString(value, parsed.endpointUrl);
 		} else if (key == "model_id") {
 			valid = parseString(value, parsed.modelId);
+		} else if (key == "llama_model_directory") {
+			valid = parseString(value, parsed.llamaModelDirectory);
 		} else if (key == "transcription_endpoint_url") {
 			valid = parseString(value, parsed.transcriptionEndpointUrl);
 		} else if (key == "transcription_protocol") {
@@ -174,6 +181,12 @@ SettingsLoadStatus loadSettings(const std::string & path, ExampleSettings & sett
 			valid = parseString(value, parsed.mediaImageModel);
 		} else if (key == "media_video_model") {
 			valid = parseString(value, parsed.mediaVideoModel);
+		} else if (key == "stable_diffusion_model_directory") {
+			valid = parseString(value, parsed.stableDiffusionModelDirectory);
+		} else if (key == "stable_diffusion_model_path") {
+			valid = parseString(value, parsed.stableDiffusionModelPath);
+		} else if (key == "stable_diffusion_complete_checkpoint") {
+			valid = parseInt(value, parsed.stableDiffusionCompleteCheckpoint);
 		} else if (key == "media_width") {
 			valid = parseInt(value, parsed.mediaWidth);
 		} else if (key == "media_height") {
@@ -216,6 +229,7 @@ bool saveSettings(const std::string & path, const ExampleSettings & settings) {
 		<< "endpoint_profile=" << settings.endpointProfile << '\n'
 		<< "endpoint_url=" << std::quoted(settings.endpointUrl) << '\n'
 		<< "model_id=" << std::quoted(settings.modelId) << '\n'
+		<< "llama_model_directory=" << std::quoted(settings.llamaModelDirectory) << '\n'
 		<< "transcription_endpoint_url=" << std::quoted(settings.transcriptionEndpointUrl) << '\n'
 		<< "transcription_protocol=" << settings.transcriptionProtocol << '\n'
 		<< "transcription_model=" << std::quoted(settings.transcriptionModel) << '\n'
@@ -225,6 +239,9 @@ bool saveSettings(const std::string & path, const ExampleSettings & settings) {
 		<< "media_endpoint_url=" << std::quoted(settings.mediaEndpointUrl) << '\n'
 		<< "media_image_model=" << std::quoted(settings.mediaImageModel) << '\n'
 		<< "media_video_model=" << std::quoted(settings.mediaVideoModel) << '\n'
+		<< "stable_diffusion_model_directory=" << std::quoted(settings.stableDiffusionModelDirectory) << '\n'
+		<< "stable_diffusion_model_path=" << std::quoted(settings.stableDiffusionModelPath) << '\n'
+		<< "stable_diffusion_complete_checkpoint=" << settings.stableDiffusionCompleteCheckpoint << '\n'
 		<< "media_width=" << settings.mediaWidth << '\n'
 		<< "media_height=" << settings.mediaHeight << '\n'
 		<< "media_frames=" << settings.mediaFrames << '\n'

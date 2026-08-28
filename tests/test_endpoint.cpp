@@ -221,6 +221,26 @@ OFXIC_TEST(endpoint_reports_http_failures) {
 	OFXIC_REQUIRE(result.error.find("HTTP 503") != std::string::npos);
 }
 
+OFXIC_TEST(endpoint_extracts_llama_text_serialized_requested_tool_call) {
+	ofxIC::Endpoint endpoint("http://localhost:8001", [](const ofxIC::HttpRequest &) {
+		ofxIC::HttpResponse response;
+		response.started = true;
+		response.status = 200;
+		response.body = R"({"choices":[{"message":{"content":"I will search. {{\"name\":\"search_documents\",\"arguments\":{\"query\":\"process boundary\"}}}"}}]})";
+		return response;
+	});
+	ofxIC::ChatRequest request;
+	request.messages.push_back({ ofxIC::ChatRole::User, "Search" });
+	request.tools.push_back({ "search_documents", "Search documents", "{}" });
+
+	const auto result = endpoint.chat(request);
+	OFXIC_REQUIRE(result);
+	OFXIC_REQUIRE(result.text.empty());
+	OFXIC_REQUIRE(result.toolCalls.size() == 1);
+	OFXIC_REQUIRE(result.toolCalls[0].name == "search_documents");
+	OFXIC_REQUIRE(result.toolCalls[0].argumentsJson.find("process boundary") != std::string::npos);
+}
+
 OFXIC_TEST(endpoint_reports_bounded_provider_error_details) {
 	ofxIC::Endpoint endpoint("https://provider.example", [](const ofxIC::HttpRequest &) {
 		ofxIC::HttpResponse response;

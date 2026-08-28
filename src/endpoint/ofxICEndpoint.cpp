@@ -435,6 +435,30 @@ std::string extractChatTextValue(const std::string & responseBody) {
 	return {};
 }
 
+ToolCall extractTextSerializedToolCall(const std::string & text) {
+	const std::size_t nameKey = text.find("\"name\"");
+	const std::size_t argumentsKey = text.find("\"arguments\"", nameKey);
+	if (nameKey == std::string::npos || argumentsKey == std::string::npos) return {};
+	const std::size_t objectStart = text.rfind('{', nameKey);
+	if (objectStart == std::string::npos) return {};
+	const std::size_t objectEnd = findMatchingJsonDelimiter(text, objectStart, '{', '}');
+	if (objectEnd == std::string::npos || argumentsKey >= objectEnd) return {};
+	const std::string name = extractScopedJsonStringField(
+		text, "name", objectStart, objectEnd);
+	const std::size_t argumentsColon = text.find(':', argumentsKey + 11);
+	const std::size_t argumentsStart = text.find('{', argumentsColon);
+	if (name.empty() || argumentsColon == std::string::npos ||
+		argumentsStart == std::string::npos || argumentsStart >= objectEnd) return {};
+	const std::size_t argumentsEnd = findMatchingJsonDelimiter(
+		text, argumentsStart, '{', '}');
+	if (argumentsEnd == std::string::npos || argumentsEnd > objectEnd) return {};
+	ToolCall call;
+	call.id = "llama-text-call-1";
+	call.name = name;
+	call.argumentsJson = text.substr(argumentsStart, argumentsEnd - argumentsStart + 1);
+	return call;
+}
+
 #if defined(OFXIC_HAS_CURL_HTTP_RUNTIME)
 bool processServerSentEventLine(
 	const std::string & line,
@@ -790,6 +814,15 @@ ChatResult Endpoint::chat(
 		: extractChatText(response.body);
 	if (!request.options.stream) {
 		result.toolCalls = extractToolCalls(response.body);
+		if (result.toolCalls.empty() && !request.tools.empty()) {
+			ToolCall textCall = extractTextSerializedToolCall(result.text);
+			const bool requested = std::any_of(request.tools.begin(), request.tools.end(),
+				[&textCall](const ToolDefinition & tool) { return tool.name == textCall.name; });
+			if (requested) {
+				result.toolCalls.push_back(std::move(textCall));
+				result.text.clear();
+			}
+		}
 	}
 	if (result.text.empty() && result.toolCalls.empty()) {
 		result.failure = RequestFailure::InvalidResponse;
