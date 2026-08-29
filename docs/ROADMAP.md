@@ -100,6 +100,84 @@ cancellation when a supported provider exposes a concrete cancel contract.
 Each candidate needs a reproducer, the responsible protocol boundary, and a
 claim-matched test before it becomes scheduled work.
 
+#### M3.1 — Local runtime and asynchronous-job lifecycle
+
+Status: completed from repeated GUI reproductions on Windows. Versioned
+`llama-server` and `sd-server` installations were present but stale cached or
+hard-coded paths made detection and launch unreliable; asynchronous media jobs
+also required a manual poll during normal GUI use.
+
+The canonical example now uses a version-independent, deterministically tested
+runtime-path resolver, preserves valid manual executable choices, persists
+non-secret runtime/model/launch settings with backward-compatible schema
+migration, and automatically follows supported media and music jobs until a
+terminal state. Finished payloads enter the existing preview/player path.
+These changes remain application-layer process orchestration and do not move a
+native runtime into the addon.
+
+#### M3.2 — Observable local runtime supervision
+
+Status: completed from the repeated GUI failures that previously surfaced only
+as disabled controls, indefinite “starting” text, or opaque process errors.
+
+The canonical example now supervises all five local runtime processes through
+one internal component with explicit stopped/starting/ready/exited/failed
+states, port-conflict preflight, executable-relative working directories,
+bounded stdout/stderr capture, console mirroring, PID and elapsed startup
+status, and owned-process shutdown. A central Overview tab provides start/stop
+control while task tabs retain configuration and detailed server output.
+Deterministic tests exercise initial/failure state and a real model-free Windows
+child process through output capture and clean exit. This remains example-layer
+orchestration and does not expand the public addon API.
+
+#### M3.3 — One-click task continuity and private local history
+
+Status: completed from the repeated GUI friction where users had to understand,
+start, and poll a separate runtime before they could perform the task they had
+already requested.
+
+Local chat and inspection, stable-diffusion.cpp media, whisper.cpp
+transcription, ACE-Step music, and localhost SAM actions now use one deferred
+task path: start or attach to the configured external process, wait
+asynchronously for explicit port readiness, and resume the original action.
+Only one task may wait at a time; it is visible and cancellable, has a bounded
+startup deadline, and never triggers provider fallback. Externally managed
+listeners are distinguished from owned child processes and are disconnected,
+not terminated.
+
+The example also keeps a bounded, user-clearable history of 100 task outcomes.
+It records timestamp, task type, normalized outcome/status, and saved output
+path, but no prompt, document content, credential, provider body, or generated
+payload. Serialization, retention, unsafe-field rejection, external-listener
+attachment, process lifecycle, and the existing protocol clients remain covered
+by deterministic tests. This is application-layer orchestration; no runtime or
+generic job framework enters the addon API.
+
+The model-free Windows vertical smoke `scripts/smoke-one-click-local.ps1`
+additionally proves that the regular Release GUI starts two different fixture
+runtimes, continues ACE-Step and SAM tasks, persists privacy-aware History,
+stops its owned children, and reports a never-ready child through automation and
+History after a bounded test timeout.
+
+#### M3.4 — Reproducible release engineering and support diagnostics
+
+Status: completed as the supportability gate for `0.2.1-dev`.
+
+Windows development now has one canonical rebuild command that verifies source
+membership in the generated openFrameworks project, uses `Rebuild` by default,
+verifies that the expected EXE was rewritten, and reports the exact artifact.
+Project regeneration remains an explicit option because it is needed only after
+adding sources and can fail independently of compilation. A second command
+combines the deterministic CMake suite, canonical example rebuild, and
+model-free GUI lifecycle smoke into one release-candidate check.
+
+The public headers expose explicit semantic development-version metadata, and
+the Overview tab exports a privacy-aware diagnostic snapshot. The report keeps
+support-relevant endpoint, task, and process state while excluding credentials,
+prompts, document content, payloads, server output, URL secrets, and exact
+runtime/model paths. The regular GUI smoke verifies both the report schema and
+those privacy exclusions.
+
 Completion evidence for each patch:
 
 - the first meaningful failure is retained in an issue, test, or release note;

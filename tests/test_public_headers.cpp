@@ -2,6 +2,9 @@
 #include "../src/ofxIC.h"
 
 OFXIC_TEST(public_umbrella_header_exposes_api) {
+	OFXIC_REQUIRE(std::string(ofxIC::versionString) == "0.2.1-dev");
+	OFXIC_REQUIRE(ofxIC::versionMajor == 0 && ofxIC::versionMinor == 2 &&
+		ofxIC::versionPatch == 1);
 	ofxIC::Endpoint endpoint("http://localhost:8001/v1");
 	ofxIC::ChatSession chat(endpoint);
 	ofxIC::DocumentIndex documents;

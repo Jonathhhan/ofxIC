@@ -1,6 +1,8 @@
 #pragma once
 
 #include "ExampleSettings.h"
+#include "ExampleManagedProcess.h"
+#include "ExampleJobHistory.h"
 #include "ExampleCredentialStore.h"
 #include "ofMain.h"
 #include "ofxIC.h"
@@ -28,10 +30,22 @@ public:
 	void exit() override;
 
 private:
+	enum class DeferredTask {
+		None,
+		Chat,
+		LlamaInspect,
+		Media,
+		Transcription,
+		Music,
+		SamInspect,
+		SamSegment
+	};
+
 	void applyConfiguration();
 	void applyMediaConfiguration();
 	void applyMusicConfiguration();
 	void applySettingsToUi(const ofxICExample::ExampleSettings & settings);
+	void applyLocalRuntimeDefaults();
 	ofxICExample::ExampleSettings settingsFromUi() const;
 	void saveExampleSettings();
 	void resetExampleSettings();
@@ -46,12 +60,19 @@ private:
 	void stopLocalWhisperServer();
 	void startLocalSamBridge();
 	void stopLocalSamBridge();
-	bool startManagedProcess(const std::string & executable, const std::vector<std::string> & arguments,
-		void *& handle, unsigned long & processId, std::string & processStatus, const std::string & name);
-	void stopManagedProcess(void *& handle, unsigned long & processId, std::string & processStatus,
-		const std::string & name);
-	void updateManagedProcess(void *& handle, unsigned long & processId, std::string & processStatus,
-		const std::string & name);
+	void updateManagedProcess(ofxICExample::ManagedProcess & process,
+		std::string & processStatus, const std::string & logName);
+	bool deferUntilRuntimeReady(DeferredTask task);
+	void continueDeferredTask();
+	void cancelDeferredTask();
+	void setDeferredTaskStatus(const std::string & message);
+	void writeDeferredTaskAutomationResult(const std::string & message);
+	const char * deferredTaskLabel(DeferredTask task) const;
+	const char * deferredTaskHistoryKind(DeferredTask task) const;
+	void recordTaskHistory(const std::string & task, const std::string & detail,
+		const std::string & outputPath = {});
+	std::string diagnosticsReport() const;
+	bool exportDiagnostics(const std::string & path);
 	void selectEndpointProfile(int profileIndex);
 	void selectMediaBackend(int backendIndex);
 	void selectMusicBackend(int backendIndex);
@@ -109,16 +130,17 @@ private:
 	float chatTopP = 0.95f;
 	int chatSeed = -1;
 	std::array<char, 1024> llamaServerPath{};
+	std::string detectedLlamaServerPath;
 	std::array<char, 1024> llamaModelPath{};
 	std::array<char, 1024> llamaModelDirectory{};
 	std::vector<std::string> detectedLlamaModels;
 	int llamaContextSize = 4096;
 	int llamaGpuLayers = 999;
 	bool llamaFlashAttention = true;
-	void * llamaProcessHandle = nullptr;
-	unsigned long llamaProcessId = 0;
+	ofxICExample::ManagedProcess llamaProcess;
 	std::string llamaServerStatus = "Local llama-server is stopped.";
 	std::array<char, 1024> stableDiffusionServerPath{};
+	std::string detectedStableDiffusionServerPath;
 	std::array<char, 1024> stableDiffusionModelPath{};
 	std::array<char, 1024> stableDiffusionVaePath{};
 	std::array<char, 1024> stableDiffusionTextEncoderPath{};
@@ -131,24 +153,20 @@ private:
 	bool stableDiffusionFlashAttention = true;
 	bool stableDiffusionCompleteCheckpoint = false;
 	bool stableDiffusionOffloadToCpu = false;
-	void * stableDiffusionProcessHandle = nullptr;
-	unsigned long stableDiffusionProcessId = 0;
+	ofxICExample::ManagedProcess stableDiffusionProcess;
 	std::string stableDiffusionServerStatus = "Local sd-server is stopped.";
 	std::array<char, 1024> aceStepServerPath{};
 	std::array<char, 2048> aceStepServerArguments{};
-	void * aceStepProcessHandle = nullptr;
-	unsigned long aceStepProcessId = 0;
+	ofxICExample::ManagedProcess aceStepProcess;
 	std::string aceStepServerStatus = "Local ACE-Step server is stopped.";
 	std::array<char, 1024> whisperServerPath{};
 	std::array<char, 1024> whisperModelPath{};
 	std::array<char, 2048> whisperServerArguments{};
-	void * whisperProcessHandle = nullptr;
-	unsigned long whisperProcessId = 0;
+	ofxICExample::ManagedProcess whisperProcess;
 	std::string whisperServerStatus = "Local whisper.cpp server is stopped.";
 	std::array<char, 1024> samBridgeExecutablePath{};
 	std::array<char, 2048> samBridgeArguments{};
-	void * samBridgeProcessHandle = nullptr;
-	unsigned long samBridgeProcessId = 0;
+	ofxICExample::ManagedProcess samBridgeProcess;
 	std::string samBridgeProcessStatus = "Local SAM bridge is stopped.";
 	std::array<char, 256> transcriptionModel{};
 	std::array<char, 256> mediaImageModel{};
@@ -178,6 +196,14 @@ private:
 	bool pendingInspectAutorun = false;
 	std::string settingsPath;
 	std::string settingsStatus;
+	std::string diagnosticsStatus = "No diagnostic report exported.";
+	std::string historyPath;
+	ofxICExample::JobHistory jobHistory{ 100 };
+	DeferredTask deferredTask = DeferredTask::None;
+	std::uint64_t deferredTaskDeadlineMillis = 0;
+	std::string activeTaskKind;
+	std::string activeMediaTaskKind;
+	std::string activeMusicTaskKind;
 	std::string credentialStatus;
 	std::map<std::string, std::string> storedTokens;
 	std::string lastMessage;
@@ -217,6 +243,7 @@ private:
 	std::string mediaStatus;
 	std::string mediaOutput;
 	std::string pendingMediaStatus;
+	std::string pendingMediaProgressStatus;
 	std::string pendingMediaOutput;
 	std::string pendingMediaBase64;
 	std::string pendingMediaBytes;

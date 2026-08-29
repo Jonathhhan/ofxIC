@@ -15,6 +15,9 @@ add_executable(ofxIC_tests
 	test_chat_session.cpp
 	test_document_index.cpp
 	test_example_settings.cpp
+	test_example_runtime_paths.cpp
+	test_example_managed_process.cpp
+	test_example_job_history.cpp
 	test_example_credentials.cpp
 	test_tool_loop.cpp
 	test_public_headers.cpp
@@ -28,6 +31,9 @@ add_executable(ofxIC_tests
 	../src/chat/ofxICChatSession.cpp
 	../src/documents/ofxICDocumentIndex.cpp
 	../ofxICExample/src/ExampleSettings.cpp
+	../ofxICExample/src/ExampleRuntimePaths.cpp
+	../ofxICExample/src/ExampleManagedProcess.cpp
+	../ofxICExample/src/ExampleJobHistory.cpp
 	../ofxICExample/src/ExampleCredentialStore.cpp
 	../src/tools/ofxICToolRegistry.cpp
 	../src/tools/ofxICToolLoop.cpp)
@@ -45,7 +51,7 @@ target_include_directories(ofxIC_acestep_live_smoke PRIVATE
 	${CMAKE_CURRENT_SOURCE_DIR}/../src)
 
 if(WIN32)
-	target_link_libraries(ofxIC_tests PRIVATE Advapi32 Winhttp)
+	target_link_libraries(ofxIC_tests PRIVATE Advapi32 Winhttp Ws2_32)
 	target_link_libraries(ofxIC_acestep_live_smoke PRIVATE Winhttp)
 endif()
 

@@ -67,6 +67,26 @@ addon.
 - Optional credential persistence belongs to the application layer. The
   Windows example uses Credential Manager; the addon core receives only the
   resulting bearer token and has no credential-vault dependency.
+- Optional local process supervision also belongs to the example application.
+  One internal supervisor is shared by llama-server, stable-diffusion.cpp,
+  ACE-Step, whisper.cpp, and the SAM bridge. It owns only processes it starts,
+  captures bounded stdout/stderr, checks loopback-port readiness, and terminates
+  owned children during explicit stop or application shutdown. The addon core
+  still sees only endpoint URLs and protocol responses.
+- Example-layer task orchestration keeps one pending local task at a time. It
+  can start or attach to the task's external loopback runtime, wait for explicit
+  readiness without blocking the UI, and dispatch the original request through
+  the existing protocol client. It does not select providers or silently fall
+  back to another backend. Startup waiting has a bounded deadline and propagates
+  failure to GUI status, automation evidence, and private task history.
+- The example's bounded local task history stores only timestamp, task type,
+  normalized outcome/status, and a saved output path. Prompts, document content,
+  credentials, provider bodies, and generated payloads are deliberately absent.
+- Support diagnostics also remain an example-layer concern. The exported
+  snapshot records version/build identity, sanitized endpoints, task state, and
+  process lifecycle metadata. It reports executable/model existence rather than
+  their locations, strips URL user info and query data, and omits credentials,
+  prompts, documents, payloads, free-form runtime status, and server output.
 - `ChatRequest`, `ChatOptions`, and `ChatResult` are explicit value types.
 - `HttpTransport` is injectable so protocol behavior can be tested without a
   model or network service.
@@ -80,8 +100,11 @@ addon.
 
 - No Core addon or common native runtime.
 - No tensor, graph, or universal model abstraction.
-- No automatic runtime discovery; HF model metadata is queried only to resolve
-  the requested model's current fal-ai route.
+- No runtime discovery in the addon core. The Windows example may discover
+  external script-installed executables below `%LOCALAPPDATA%\ofxIC\servers`
+  and launch them as independent child processes; it never links their runtime.
+  HF model metadata is queried only to resolve the requested model's current
+  fal-ai route.
 - No general agent framework around the one bounded document tool loop.
 - No in-addon crawler, browser renderer, live web-search tool, or model-selected
   URL fetch. `scripts/web_snapshot.py` is a separate, user-invoked ingestion

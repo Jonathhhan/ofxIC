@@ -30,8 +30,9 @@ with the addon.
 
 ### Optional Windows CUDA server
 
-The addon remains an HTTP client, but these scripts can install a pinned,
-external CUDA build of `llama-server` into `%LOCALAPPDATA%\ofxIC\servers`.
+The addon remains an HTTP client, but these scripts can install pinned,
+external CUDA builds of `llama-server` and `sd-server` into
+`%LOCALAPPDATA%\ofxIC\servers`.
 Executables, CUDA runtime files, logs, and models remain outside the repository.
 Downloads are accepted only when both official SHA-256 digests match.
 
@@ -48,12 +49,36 @@ CUDA 13.3. Other backends may be added later; models remain a separate choice.
 The official stable-diffusion.cpp Windows package currently targets CUDA 12;
 its bundled runtime works with a compatible newer NVIDIA driver. Its server
 defaults to port `8081`, so it can run beside llama-server on port `8080`.
+The Windows example discovers versioned installations below that directory at
+runtime, lets a manually selected executable take precedence, and starts the
+external process from the GUI. Detection is version-independent and belongs to
+the example application; no runtime is linked into the addon.
 
 The addon does not override the C++ language standard selected by the generated
 openFrameworks project. Its standalone deterministic CMake tests require C++20;
 the canonical example is built with the standard supplied by the current
 openFrameworks platform template. This keeps the addon aligned with
 openFrameworks instead of imposing a separate compiler mode.
+
+### Professional Windows build and validation
+
+Use the repository scripts instead of relying on Visual Studio's ambiguous
+incremental-build message:
+
+```powershell
+.\scripts\build-example.ps1
+.\scripts\validate-windows.ps1
+```
+
+`build-example.ps1` verifies that every addon/example `.cpp` belongs to the
+generated project and performs a real Release/x64 `Rebuild` by default, then
+prints the exact EXE path, write time, and size. `-Incremental` is an explicit
+faster opt-in. Use `-UpdateProject` only when source files were added and the
+local openFrameworks Project Generator needs to refresh the solution. The
+validation script runs deterministic CMake tests, rebuilds the canonical
+example, and then executes the model-free GUI lifecycle smoke. Current
+development builds expose the version string `0.2.1-dev` through
+`ofxIC::versionString`.
 
 ## Current API
 
@@ -363,7 +388,7 @@ Not part of the supported surface yet:
 LM Studio, Hugging Face, OpenAI, and a custom endpoint. A separate tabbed
 **Inference tasks** window gives transcription, image/video, music, and SAM one
 consistent visible workspace each. It selects independent backends, generates
-images, submits and polls video or music jobs, displays returned media, saves and
+images, automatically follows asynchronous image/video or music jobs, displays returned media, saves and
 plays completed MP3/WAV output with date-and-time filenames, and sends an
 explicitly selected audio file to either supported transcription protocol.
 Chat, transcription, SAM, image/video media, and music have separate endpoint
@@ -390,10 +415,48 @@ cannot be used as an `ofxIC` endpoint.
 
 - Choose an endpoint preset or enter a custom base URL.
 - Inspect `/v1/models` and select or enter the model ID.
-- Use **Save settings** to remember non-secret chat, media, and music choices in
-  `.ofxICExample.settings` in the user profile. **Reset saved settings** removes
+- Use **Save settings** to remember non-secret chat, media, music, local server
+  paths, model paths, and launch parameters in `.ofxICExample.settings` in the
+  user profile. **Reset saved settings** removes
   that file and restores built-in defaults; active environment overrides remain
   authoritative.
+- For a script-installed runtime, select its local backend and press **Use
+  detected llama-server** or **Use detected sd-server**. A valid manually
+  selected executable remains authoritative when starting. The GUI reports the
+  child PID, waits for its configured TCP port, and distinguishes a running
+  process from a ready listener.
+- Local actions are one-click tasks: if their configured runtime is not ready,
+  the GUI starts it, waits asynchronously for its loopback port, and continues
+  the original chat, inspection, transcription, SAM, image/video, or music task
+  automatically. The queued task remains visible and cancellable in **Overview**.
+- The **Overview** tab supervises all five local processes in one table. Each
+  task tab shows a colored `stopped`, `starting`, `ready`, `exited`, or `failed`
+  state and a bounded live stdout/stderr view. Server output is also mirrored to
+  the openFrameworks console. A listening expected port is adopted as an
+  externally managed runtime and is never terminated by the example; otherwise
+  launch uses the executable directory as the child working directory and
+  preserves exact Windows process-creation errors.
+- **Export diagnostics...** in Overview writes a bounded, privacy-aware support
+  snapshot with addon/build identity, configured endpoint hosts, task state, and
+  runtime lifecycle metadata. It deliberately omits credentials, prompts,
+  document content, response/generated payloads, server output, and exact
+  runtime/model paths. URL user info and query strings are removed. Automation
+  can select the output with `OFXIC_DIAGNOSTICS_PATH`.
+- The **History** tab retains at most 100 recent task outcomes and saved output
+  paths beside the non-secret settings file. Prompts, document contents,
+  credentials, generated payloads, and provider response bodies are not stored;
+  history can be cleared in one action.
+- Run `scripts\smoke-one-click-local.ps1` after building the Release example to
+  exercise GUI-managed ACE-Step and SAM fixture processes, automatic task
+  continuation, private History persistence, owned-child shutdown, and the
+  never-ready runtime timeout without models or provider credit. The production
+  startup timeout is 900 seconds; deterministic automation may override it with
+  `OFXIC_RUNTIME_START_TIMEOUT_SECONDS` (valid range: 1–3600 seconds).
+- Local `stable-diffusion.cpp`, Hugging Face/fal-ai media, ACE-Step, and
+  Stability Audio jobs are polled automatically. Completed image, video, and
+  audio payloads are saved and loaded into their preview/player without a
+  separate **Poll job** action; manual polling is retained only as a timeout or
+  diagnostic fallback.
 - Start the separate ACE-Step server (the `ofxGgmlMusic` default is
   `http://127.0.0.1:8085`), then select **ACE-Step local**. For a headless,
   explicitly opt-in model-backed check, set `OFXIC_RUN_LIVE_ACESTEP=1` and run
@@ -418,6 +481,8 @@ cannot be used as an `ofxIC` endpoint.
   settings file, displayed after entry, or committed with the project.
 - `OFXIC_ENDPOINT_URL`, `OFXIC_MODEL`, and `OFXIC_API_KEY` configure
   the initial state for scripts and CI.
+- `OFXIC_DIAGNOSTICS_PATH` exports the same privacy-aware Overview support
+  snapshot once setup and configured autoruns have been initialized.
 - `OFXIC_INSPECT_AUTORUN=1` starts endpoint inspection after setup; it is
   intended for launch and cancellation checks.
 - `scripts\smoke-huggingface-inspection.ps1` exercises the Windows GUI,

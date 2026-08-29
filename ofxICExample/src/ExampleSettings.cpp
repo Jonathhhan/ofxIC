@@ -1,6 +1,7 @@
 #include "ExampleSettings.h"
 
 #include <cstdio>
+#include <cmath>
 #include <fstream>
 #include <iomanip>
 #include <sstream>
@@ -9,7 +10,7 @@
 namespace ofxICExample {
 namespace {
 
-constexpr int settingsVersion = 1;
+constexpr int settingsVersion = 2;
 
 bool parseString(const std::string & value, std::string & destination) {
 	if (value.empty() || value.front() != '"') return false;
@@ -32,15 +33,75 @@ bool parseInt(const std::string & value, int & destination) {
 	return true;
 }
 
+bool parseFloat(const std::string & value, float & destination) {
+	std::istringstream stream(value);
+	float parsed = 0.0f;
+	if (!(stream >> parsed) || !std::isfinite(parsed)) return false;
+	stream >> std::ws;
+	if (!stream.eof()) return false;
+	destination = parsed;
+	return true;
+}
+
+std::string escapeLineText(const std::string & value) {
+	std::string escaped;
+	escaped.reserve(value.size());
+	for (const char character : value) {
+		if (character == '\\') escaped += "\\\\";
+		else if (character == '\n') escaped += "\\n";
+		else if (character == '\r') escaped += "\\r";
+		else escaped += character;
+	}
+	return escaped;
+}
+
+bool parseMultilineString(const std::string & value, std::string & destination) {
+	std::string escaped;
+	if (!parseString(value, escaped)) return false;
+	std::string decoded;
+	decoded.reserve(escaped.size());
+	for (std::size_t index = 0; index < escaped.size(); ++index) {
+		if (escaped[index] != '\\' || index + 1 >= escaped.size()) {
+			decoded += escaped[index];
+			continue;
+		}
+		const char next = escaped[++index];
+		if (next == 'n') decoded += '\n';
+		else if (next == 'r') decoded += '\r';
+		else if (next == '\\') decoded += '\\';
+		else {
+			decoded += '\\';
+			decoded += next;
+		}
+	}
+	destination = std::move(decoded);
+	return true;
+}
+
 bool validText(const std::string & value, std::size_t maximumSize) {
 	return value.size() < maximumSize &&
 		value.find_first_of("\r\n") == std::string::npos;
 }
 
+bool validMultilineText(const std::string & value, std::size_t maximumSize) {
+	return value.size() < maximumSize && value.find('\0') == std::string::npos;
+}
+
 bool validSettings(const ExampleSettings & settings) {
 	return settings.endpointProfile >= 0 && settings.endpointProfile <= 4 &&
 		validText(settings.endpointUrl, 512) && validText(settings.modelId, 256) &&
+		validMultilineText(settings.chatSystemPrompt, 2048) &&
+		validMultilineText(settings.chatStopSequences, 1024) &&
+		settings.chatMaxTokens >= 1 && settings.chatMaxTokens <= 131072 &&
+		std::isfinite(settings.chatTemperature) && settings.chatTemperature >= 0.0f &&
+		settings.chatTemperature <= 2.0f && std::isfinite(settings.chatTopP) &&
+		settings.chatTopP >= 0.0f && settings.chatTopP <= 1.0f &&
+		validText(settings.llamaServerPath, 1024) &&
+		validText(settings.llamaModelPath, 1024) &&
 		validText(settings.llamaModelDirectory, 1024) &&
+		settings.llamaContextSize >= 512 && settings.llamaContextSize <= 1048576 &&
+		settings.llamaGpuLayers >= 0 && settings.llamaGpuLayers <= 100000 &&
+		settings.llamaFlashAttention >= 0 && settings.llamaFlashAttention <= 1 &&
 		validText(settings.transcriptionEndpointUrl, 512) &&
 		settings.transcriptionProtocol >= 0 && settings.transcriptionProtocol <= 1 &&
 		validText(settings.transcriptionModel, 256) &&
@@ -51,9 +112,18 @@ bool validSettings(const ExampleSettings & settings) {
 		validText(settings.mediaImageModel, 256) &&
 		validText(settings.mediaVideoModel, 256) &&
 		validText(settings.stableDiffusionModelDirectory, 1024) &&
+		validText(settings.stableDiffusionServerPath, 1024) &&
 		validText(settings.stableDiffusionModelPath, 1024) &&
+		validText(settings.stableDiffusionVaePath, 1024) &&
+		validText(settings.stableDiffusionTextEncoderPath, 1024) &&
+		validText(settings.stableDiffusionClipLPath, 1024) &&
+		validText(settings.stableDiffusionClipGPath, 1024) &&
 		settings.stableDiffusionCompleteCheckpoint >= 0 &&
 		settings.stableDiffusionCompleteCheckpoint <= 1 &&
+		settings.stableDiffusionFlashAttention >= 0 &&
+		settings.stableDiffusionFlashAttention <= 1 &&
+		settings.stableDiffusionOffloadToCpu >= 0 &&
+		settings.stableDiffusionOffloadToCpu <= 1 &&
 		settings.mediaWidth >= 1 && settings.mediaWidth <= 8192 &&
 		settings.mediaHeight >= 1 && settings.mediaHeight <= 8192 &&
 		settings.mediaFrames >= 1 && settings.mediaFrames <= 10000 &&
@@ -61,7 +131,14 @@ bool validSettings(const ExampleSettings & settings) {
 		settings.musicBackend >= 0 && settings.musicBackend <= 1 &&
 		validText(settings.musicEndpointUrl, 512) &&
 		settings.musicDuration >= 1 && settings.musicDuration <= 600 &&
-		settings.musicOutputFormat >= 0 && settings.musicOutputFormat <= 1;
+		settings.musicOutputFormat >= 0 && settings.musicOutputFormat <= 1 &&
+		validText(settings.aceStepServerPath, 1024) &&
+		validText(settings.aceStepServerArguments, 2048) &&
+		validText(settings.whisperServerPath, 1024) &&
+		validText(settings.whisperModelPath, 1024) &&
+		validText(settings.whisperServerArguments, 2048) &&
+		validText(settings.samBridgeExecutablePath, 1024) &&
+		validText(settings.samBridgeArguments, 2048);
 }
 
 std::string normalizedUrl(std::string url) {
@@ -153,7 +230,7 @@ SettingsLoadStatus loadSettings(const std::string & path, ExampleSettings & sett
 		bool valid = true;
 		if (key == "version") {
 			int version = 0;
-			valid = parseInt(value, version) && version == settingsVersion;
+			valid = parseInt(value, version) && version >= 1 && version <= settingsVersion;
 			hasVersion = valid;
 		} else if (key == "endpoint_profile") {
 			valid = parseInt(value, parsed.endpointProfile);
@@ -161,8 +238,30 @@ SettingsLoadStatus loadSettings(const std::string & path, ExampleSettings & sett
 			valid = parseString(value, parsed.endpointUrl);
 		} else if (key == "model_id") {
 			valid = parseString(value, parsed.modelId);
+		} else if (key == "chat_system_prompt") {
+			valid = parseMultilineString(value, parsed.chatSystemPrompt);
+		} else if (key == "chat_stop_sequences") {
+			valid = parseMultilineString(value, parsed.chatStopSequences);
+		} else if (key == "chat_max_output") {
+			valid = parseInt(value, parsed.chatMaxTokens);
+		} else if (key == "chat_temperature") {
+			valid = parseFloat(value, parsed.chatTemperature);
+		} else if (key == "chat_top_p") {
+			valid = parseFloat(value, parsed.chatTopP);
+		} else if (key == "chat_seed") {
+			valid = parseInt(value, parsed.chatSeed);
+		} else if (key == "llama_server_path") {
+			valid = parseString(value, parsed.llamaServerPath);
+		} else if (key == "llama_model_path") {
+			valid = parseString(value, parsed.llamaModelPath);
 		} else if (key == "llama_model_directory") {
 			valid = parseString(value, parsed.llamaModelDirectory);
+		} else if (key == "llama_context_size") {
+			valid = parseInt(value, parsed.llamaContextSize);
+		} else if (key == "llama_gpu_layers") {
+			valid = parseInt(value, parsed.llamaGpuLayers);
+		} else if (key == "llama_flash_attention") {
+			valid = parseInt(value, parsed.llamaFlashAttention);
 		} else if (key == "transcription_endpoint_url") {
 			valid = parseString(value, parsed.transcriptionEndpointUrl);
 		} else if (key == "transcription_protocol") {
@@ -183,10 +282,24 @@ SettingsLoadStatus loadSettings(const std::string & path, ExampleSettings & sett
 			valid = parseString(value, parsed.mediaVideoModel);
 		} else if (key == "stable_diffusion_model_directory") {
 			valid = parseString(value, parsed.stableDiffusionModelDirectory);
+		} else if (key == "stable_diffusion_server_path") {
+			valid = parseString(value, parsed.stableDiffusionServerPath);
 		} else if (key == "stable_diffusion_model_path") {
 			valid = parseString(value, parsed.stableDiffusionModelPath);
+		} else if (key == "stable_diffusion_vae_path") {
+			valid = parseString(value, parsed.stableDiffusionVaePath);
+		} else if (key == "stable_diffusion_text_encoder_path") {
+			valid = parseString(value, parsed.stableDiffusionTextEncoderPath);
+		} else if (key == "stable_diffusion_clip_l_path") {
+			valid = parseString(value, parsed.stableDiffusionClipLPath);
+		} else if (key == "stable_diffusion_clip_g_path") {
+			valid = parseString(value, parsed.stableDiffusionClipGPath);
 		} else if (key == "stable_diffusion_complete_checkpoint") {
 			valid = parseInt(value, parsed.stableDiffusionCompleteCheckpoint);
+		} else if (key == "stable_diffusion_flash_attention") {
+			valid = parseInt(value, parsed.stableDiffusionFlashAttention);
+		} else if (key == "stable_diffusion_offload_to_cpu") {
+			valid = parseInt(value, parsed.stableDiffusionOffloadToCpu);
 		} else if (key == "media_width") {
 			valid = parseInt(value, parsed.mediaWidth);
 		} else if (key == "media_height") {
@@ -204,6 +317,20 @@ SettingsLoadStatus loadSettings(const std::string & path, ExampleSettings & sett
 			valid = parseInt(value, parsed.musicDuration);
 		} else if (key == "music_output_format") {
 			valid = parseInt(value, parsed.musicOutputFormat);
+		} else if (key == "ace_step_server_path") {
+			valid = parseString(value, parsed.aceStepServerPath);
+		} else if (key == "ace_step_server_arguments") {
+			valid = parseString(value, parsed.aceStepServerArguments);
+		} else if (key == "whisper_server_path") {
+			valid = parseString(value, parsed.whisperServerPath);
+		} else if (key == "whisper_model_path") {
+			valid = parseString(value, parsed.whisperModelPath);
+		} else if (key == "whisper_server_arguments") {
+			valid = parseString(value, parsed.whisperServerArguments);
+		} else if (key == "sam_bridge_executable_path") {
+			valid = parseString(value, parsed.samBridgeExecutablePath);
+		} else if (key == "sam_bridge_arguments") {
+			valid = parseString(value, parsed.samBridgeArguments);
 		}
 		if (!valid) return SettingsLoadStatus::Invalid;
 	}
@@ -229,7 +356,18 @@ bool saveSettings(const std::string & path, const ExampleSettings & settings) {
 		<< "endpoint_profile=" << settings.endpointProfile << '\n'
 		<< "endpoint_url=" << std::quoted(settings.endpointUrl) << '\n'
 		<< "model_id=" << std::quoted(settings.modelId) << '\n'
+		<< "chat_system_prompt=" << std::quoted(escapeLineText(settings.chatSystemPrompt)) << '\n'
+		<< "chat_stop_sequences=" << std::quoted(escapeLineText(settings.chatStopSequences)) << '\n'
+		<< "chat_max_output=" << settings.chatMaxTokens << '\n'
+		<< "chat_temperature=" << settings.chatTemperature << '\n'
+		<< "chat_top_p=" << settings.chatTopP << '\n'
+		<< "chat_seed=" << settings.chatSeed << '\n'
+		<< "llama_server_path=" << std::quoted(settings.llamaServerPath) << '\n'
+		<< "llama_model_path=" << std::quoted(settings.llamaModelPath) << '\n'
 		<< "llama_model_directory=" << std::quoted(settings.llamaModelDirectory) << '\n'
+		<< "llama_context_size=" << settings.llamaContextSize << '\n'
+		<< "llama_gpu_layers=" << settings.llamaGpuLayers << '\n'
+		<< "llama_flash_attention=" << settings.llamaFlashAttention << '\n'
 		<< "transcription_endpoint_url=" << std::quoted(settings.transcriptionEndpointUrl) << '\n'
 		<< "transcription_protocol=" << settings.transcriptionProtocol << '\n'
 		<< "transcription_model=" << std::quoted(settings.transcriptionModel) << '\n'
@@ -240,8 +378,15 @@ bool saveSettings(const std::string & path, const ExampleSettings & settings) {
 		<< "media_image_model=" << std::quoted(settings.mediaImageModel) << '\n'
 		<< "media_video_model=" << std::quoted(settings.mediaVideoModel) << '\n'
 		<< "stable_diffusion_model_directory=" << std::quoted(settings.stableDiffusionModelDirectory) << '\n'
+		<< "stable_diffusion_server_path=" << std::quoted(settings.stableDiffusionServerPath) << '\n'
 		<< "stable_diffusion_model_path=" << std::quoted(settings.stableDiffusionModelPath) << '\n'
+		<< "stable_diffusion_vae_path=" << std::quoted(settings.stableDiffusionVaePath) << '\n'
+		<< "stable_diffusion_text_encoder_path=" << std::quoted(settings.stableDiffusionTextEncoderPath) << '\n'
+		<< "stable_diffusion_clip_l_path=" << std::quoted(settings.stableDiffusionClipLPath) << '\n'
+		<< "stable_diffusion_clip_g_path=" << std::quoted(settings.stableDiffusionClipGPath) << '\n'
 		<< "stable_diffusion_complete_checkpoint=" << settings.stableDiffusionCompleteCheckpoint << '\n'
+		<< "stable_diffusion_flash_attention=" << settings.stableDiffusionFlashAttention << '\n'
+		<< "stable_diffusion_offload_to_cpu=" << settings.stableDiffusionOffloadToCpu << '\n'
 		<< "media_width=" << settings.mediaWidth << '\n'
 		<< "media_height=" << settings.mediaHeight << '\n'
 		<< "media_frames=" << settings.mediaFrames << '\n'
@@ -249,7 +394,14 @@ bool saveSettings(const std::string & path, const ExampleSettings & settings) {
 		<< "music_backend=" << settings.musicBackend << '\n'
 		<< "music_endpoint_url=" << std::quoted(settings.musicEndpointUrl) << '\n'
 		<< "music_duration=" << settings.musicDuration << '\n'
-		<< "music_output_format=" << settings.musicOutputFormat << '\n';
+		<< "music_output_format=" << settings.musicOutputFormat << '\n'
+		<< "ace_step_server_path=" << std::quoted(settings.aceStepServerPath) << '\n'
+		<< "ace_step_server_arguments=" << std::quoted(settings.aceStepServerArguments) << '\n'
+		<< "whisper_server_path=" << std::quoted(settings.whisperServerPath) << '\n'
+		<< "whisper_model_path=" << std::quoted(settings.whisperModelPath) << '\n'
+		<< "whisper_server_arguments=" << std::quoted(settings.whisperServerArguments) << '\n'
+		<< "sam_bridge_executable_path=" << std::quoted(settings.samBridgeExecutablePath) << '\n'
+		<< "sam_bridge_arguments=" << std::quoted(settings.samBridgeArguments) << '\n';
 	return static_cast<bool>(output);
 }
 

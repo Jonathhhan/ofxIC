@@ -2,8 +2,59 @@
 
 ## Unreleased
 
+### Added
+
+- public `ofxIC::versionMajor`, `versionMinor`, `versionPatch`, and
+  `versionString` metadata identify the current `0.2.1-dev` build;
+- `scripts/build-example.ps1` verifies generated-project source membership and
+  performs a Windows Release/x64 rebuild, with project regeneration available
+  explicitly; `scripts/validate-windows.ps1` combines the deterministic suite,
+  canonical example rebuild, and model-free GUI smoke;
+- the Overview tab exports a privacy-aware diagnostic snapshot containing
+  sanitized endpoint, task, and runtime lifecycle metadata without credentials,
+  prompts, documents, payloads, server output, or exact runtime/model paths;
+- the Windows example now discovers versioned script-installed `llama-server`
+  and `sd-server` executables without hard-coded build-directory names; the
+  resolver is deterministically tested and remains outside the addon core;
+- example settings schema v2 persists non-secret local runtime paths, model
+  paths, and launch parameters while continuing to load version 1 files.
+- the canonical example has a central runtime Overview and one internal process
+  supervisor for llama-server, sd-server, ACE-Step, whisper.cpp, and SAM, with
+  explicit lifecycle states and bounded live stdout/stderr display.
+- local task actions now start or attach to their external runtime, wait for
+  readiness without blocking the GUI, and automatically continue the original
+  chat/inspection, media, transcription, music, or SAM task;
+- a bounded, clearable History tab persists privacy-aware task metadata and
+  saved output paths without prompts, documents, credentials, response bodies,
+  or generated payloads.
+- a model-free Windows vertical smoke verifies GUI-owned ACE-Step and SAM
+  startup, automatic task continuation, History privacy, owned-child shutdown,
+  a bounded never-ready runtime failure, and diagnostics privacy through the
+  regular Release example.
+
+### Changed
+
+- supported asynchronous media and music jobs are now followed automatically
+  during normal GUI use; completed payloads are saved and loaded into the
+  existing image/video/audio preview, with manual polling retained as fallback;
+- local process status distinguishes process creation, TCP-port readiness,
+  exit, and explicit stop, and logs the resolved executable path used to launch
+  `llama-server`.
+- local process launch now attaches to an already listening expected port as an
+  explicitly external process, uses the executable directory as its working
+  directory when launching, mirrors captured output to the console, and stops
+  only processes owned by the example.
+- deferred runtime-start failures now reach the same automation result channel
+  as completed tasks and use stable History task identifiers; startup waiting
+  defaults to 900 seconds and has a bounded test override.
+
 ### Fixed
 
+- stale or missing GUI executable paths are repaired from the current external
+  installation before launch instead of producing an opaque Windows error 3;
+- local server start buttons remain actionable and report missing model or
+  executable inputs as explicit status messages instead of silently staying
+  disabled;
 - the local `llama-server` GUI smoke now waits for processes it force-stops
   before deleting temporary evidence, preventing a successful inference run
   from failing because redirected server logs are still locked on Windows.
