@@ -442,6 +442,9 @@ cannot be used as an `ofxIC` endpoint.
   document content, response/generated payloads, server output, and exact
   runtime/model paths. URL user info and query strings are removed. Automation
   can select the output with `OFXIC_DIAGNOSTICS_PATH`.
+- Settings, private History, and diagnostics use crash-safe atomic replacement:
+  an incomplete write cannot truncate the previously valid destination, and
+  failed temporary files are cleaned automatically.
 - The **History** tab retains at most 100 recent task outcomes and saved output
   paths beside the non-secret settings file. Prompts, document contents,
   credentials, generated payloads, and provider response bodies are not stored;

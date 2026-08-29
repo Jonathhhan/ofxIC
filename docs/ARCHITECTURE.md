@@ -87,6 +87,12 @@ addon.
   process lifecycle metadata. It reports executable/model existence rather than
   their locations, strips URL user info and query data, and omits credentials,
   prompts, documents, payloads, free-form runtime status, and server output.
+- Settings, task history, and support diagnostics share one example-internal
+  atomic text writer. It creates a unique same-directory temporary file and
+  replaces the destination only after a complete write, preserving an existing
+  file on replacement failure and cleaning temporary artifacts. This is not an
+  addon storage API; the abstraction exists because three real application
+  consumers need the same crash-safety behavior.
 - `ChatRequest`, `ChatOptions`, and `ChatResult` are explicit value types.
 - `HttpTransport` is injectable so protocol behavior can be tested without a
   model or network service.

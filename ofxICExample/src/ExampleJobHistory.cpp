@@ -1,4 +1,5 @@
 #include "ExampleJobHistory.h"
+#include "ExampleAtomicFile.h"
 
 #include <algorithm>
 #include <chrono>
@@ -88,10 +89,7 @@ bool JobHistory::load(const std::string & path) {
 
 bool JobHistory::save(const std::string & path) const {
 	if (path.empty()) return false;
-	const std::filesystem::path target(path);
-	const std::filesystem::path temporary = target.string() + ".tmp";
-	std::ofstream output(temporary, std::ios::binary | std::ios::trunc);
-	if (!output) return false;
+	std::ostringstream output;
 	output << "version=" << historyVersion << '\n';
 	for (const auto & entry : history) {
 		if (!validField(entry.timestamp) || !validField(entry.task) ||
@@ -101,15 +99,7 @@ bool JobHistory::save(const std::string & path) const {
 			<< std::quoted(entry.outcome) << ' ' << std::quoted(entry.detail) << ' '
 			<< std::quoted(entry.outputPath) << '\n';
 	}
-	output.close();
-	if (!output) return false;
-	std::error_code error;
-	std::filesystem::remove(target, error);
-	error.clear();
-	std::filesystem::rename(temporary, target, error);
-	if (!error) return true;
-	std::filesystem::remove(temporary, error);
-	return false;
+	return output && writeTextFileAtomically(path, output.str());
 }
 
 bool JobHistory::clear(const std::string & path) {

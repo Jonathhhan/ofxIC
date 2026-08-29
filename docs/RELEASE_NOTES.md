@@ -34,6 +34,9 @@
 
 ### Changed
 
+- example settings, private task History, and privacy-aware diagnostics now use
+  one crash-safe atomic writer with unique same-directory temporary files;
+  failed replacements preserve existing data and clean temporary artifacts;
 - supported asynchronous media and music jobs are now followed automatically
   during normal GUI use; completed payloads are saved and loaded into the
   existing image/video/audio preview, with manual polling retained as fallback;

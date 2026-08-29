@@ -1,4 +1,5 @@
 #include "ofApp.h"
+#include "ExampleAtomicFile.h"
 #include "ExampleRuntimePaths.h"
 
 #include <algorithm>
@@ -2193,43 +2194,12 @@ bool ofApp::exportDiagnostics(const std::string & path) {
 		diagnosticsStatus = "Diagnostic export cancelled.";
 		return false;
 	}
-	const std::filesystem::path target(path);
-	std::error_code error;
-	if (!target.parent_path().empty())
-		std::filesystem::create_directories(target.parent_path(), error);
-	if (error) {
-		diagnosticsStatus = "Could not create diagnostic output folder.";
+	std::string error;
+	if (!ofxICExample::writeTextFileAtomically(path, diagnosticsReport(), &error)) {
+		diagnosticsStatus = "Could not export diagnostics: " + error;
+		ofLogError("ofxIC diagnostics") << diagnosticsStatus;
 		return false;
 	}
-	const std::filesystem::path temporary = target.string() + ".tmp";
-	std::ofstream output(temporary, std::ios::binary | std::ios::trunc);
-	if (!output) {
-		diagnosticsStatus = "Could not open diagnostic output file.";
-		return false;
-	}
-	output << diagnosticsReport();
-	output.close();
-	if (!output) {
-		std::filesystem::remove(temporary, error);
-		diagnosticsStatus = "Could not write diagnostic output file.";
-		return false;
-	}
-#if defined(_WIN32)
-	if (!MoveFileExW(temporary.wstring().c_str(), target.wstring().c_str(),
-		MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
-		std::filesystem::remove(temporary, error);
-		diagnosticsStatus = "Could not replace diagnostic output file (Windows error " +
-			ofToString(GetLastError()) + ").";
-		return false;
-	}
-#else
-	std::filesystem::rename(temporary, target, error);
-	if (error) {
-		std::filesystem::remove(temporary, error);
-		diagnosticsStatus = "Could not replace diagnostic output file.";
-		return false;
-	}
-#endif
 	diagnosticsStatus = "Privacy-aware diagnostics exported to " + path;
 	ofLogNotice("ofxIC diagnostics") << diagnosticsStatus;
 	return true;

@@ -14,6 +14,7 @@ add_executable(ofxIC_tests
 	test_segmentation_client.cpp
 	test_chat_session.cpp
 	test_document_index.cpp
+	test_example_atomic_file.cpp
 	test_example_settings.cpp
 	test_example_runtime_paths.cpp
 	test_example_managed_process.cpp

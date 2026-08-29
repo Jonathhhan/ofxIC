@@ -1,4 +1,5 @@
 #include "ExampleSettings.h"
+#include "ExampleAtomicFile.h"
 
 #include <cstdio>
 #include <cmath>
@@ -350,8 +351,7 @@ SettingsLoadStatus loadSettings(const std::string & path, ExampleSettings & sett
 
 bool saveSettings(const std::string & path, const ExampleSettings & settings) {
 	if (path.empty() || !validSettings(settings)) return false;
-	std::ofstream output(path, std::ios::binary | std::ios::trunc);
-	if (!output) return false;
+	std::ostringstream output;
 	output << "version=" << settingsVersion << '\n'
 		<< "endpoint_profile=" << settings.endpointProfile << '\n'
 		<< "endpoint_url=" << std::quoted(settings.endpointUrl) << '\n'
@@ -402,7 +402,7 @@ bool saveSettings(const std::string & path, const ExampleSettings & settings) {
 		<< "whisper_server_arguments=" << std::quoted(settings.whisperServerArguments) << '\n'
 		<< "sam_bridge_executable_path=" << std::quoted(settings.samBridgeExecutablePath) << '\n'
 		<< "sam_bridge_arguments=" << std::quoted(settings.samBridgeArguments) << '\n';
-	return static_cast<bool>(output);
+	return output && writeTextFileAtomically(path, output.str());
 }
 
 bool removeSettings(const std::string & path) {

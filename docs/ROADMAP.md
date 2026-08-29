@@ -178,6 +178,22 @@ prompts, document content, payloads, server output, URL secrets, and exact
 runtime/model paths. The regular GUI smoke verifies both the report schema and
 those privacy exclusions.
 
+#### M3.5 — Crash-safe application persistence
+
+Status: completed after auditing the three existing local writers.
+
+Example settings previously truncated their destination directly, History
+removed its old destination before rename, and diagnostics carried a separate
+platform-specific implementation. They now share one example-internal atomic
+writer because all three are real consumers of the same non-trivial behavior.
+The writer uses a unique temporary file beside the destination, creates missing
+parent directories, replaces only after a complete write, preserves existing
+data when replacement fails, and removes failed temporary artifacts.
+
+Deterministic tests exercise initial creation, complete replacement, destination
+preservation, error reporting, and temporary-file cleanup. The helper remains
+outside the public addon surface and does not introduce a storage framework.
+
 Completion evidence for each patch:
 
 - the first meaningful failure is retained in an issue, test, or release note;
