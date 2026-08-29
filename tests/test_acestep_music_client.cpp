@@ -11,31 +11,6 @@ std::string wavBytes() {
 	return std::string("RIFF", 4) + std::string(4, '\0') + "WAVEfmt ";
 }
 
-OFXIC_TEST(acestep_music_forwards_control_and_classifies_cancellation) {
-	ofxIC::HttpRequest captured;
-	ofxIC::Endpoint endpoint("http://localhost:8001", [&](const ofxIC::HttpRequest & request) {
-		captured = request;
-		ofxIC::HttpResponse response;
-		response.cancelled = true;
-		response.failure = ofxIC::RequestFailure::Cancelled;
-		response.error = "request cancelled";
-		return response;
-	});
-	ofxIC::AceStepMusicClient music(endpoint);
-	ofxIC::AceStepMusicRequest request;
-	request.caption = "cancelled music";
-	ofxIC::RequestControl control;
-	control.timeoutSeconds = 11;
-	control.shouldCancel = [] { return true; };
-
-	const auto result = music.submit(request, control);
-	OFXIC_REQUIRE(!result);
-	OFXIC_REQUIRE(result.cancelled);
-	OFXIC_REQUIRE(result.failure == ofxIC::RequestFailure::Cancelled);
-	OFXIC_REQUIRE(captured.timeoutSeconds == 11);
-	OFXIC_REQUIRE(captured.shouldCancel && captured.shouldCancel());
-}
-
 ofxIC::HttpResponse response(int status, std::string body) {
 	ofxIC::HttpResponse result;
 	result.started = true;
@@ -46,81 +21,68 @@ ofxIC::HttpResponse response(int status, std::string body) {
 
 } // namespace
 
-OFXIC_TEST(acestep_music_generates_direct_local_audio) {
+OFXIC_TEST(acestep_music_uses_official_15_task_api_and_downloads_audio) {
 	std::vector<ofxIC::HttpRequest> captured;
+	int call = 0;
 	ofxIC::Endpoint endpoint("http://127.0.0.1:8085", [&](const ofxIC::HttpRequest & request) {
 		captured.push_back(request);
-		if (request.url.find("/lm") != std::string::npos) {
-			return response(200, R"({"result":{"caption":"enriched local music"}})");
+		switch (call++) {
+		case 0: return response(200, R"({"data":{"task_id":"task-42","status":"queued"},"code":200,"error":null})");
+		case 1: return response(200, R"({"data":[{"task_id":"task-42","status":0,"result":"[]"}],"code":200,"error":null})");
+		case 2: return response(200, R"({"data":[{"task_id":"task-42","status":1,"result":"[{\"file\":\"/v1/audio?path=%2Ftmp%2Fmusic.wav\"}]"}],"code":200,"error":null})");
+		default: return response(200, wavBytes());
 		}
-		return response(200, wavBytes());
 	});
 	endpoint.setBearerToken("must-not-leak-to-local-server");
 	ofxIC::AceStepMusicClient music(endpoint);
 	ofxIC::AceStepMusicRequest request;
 	request.caption = "Warm local ambient pulse";
-	request.durationSeconds = 8;
+	request.durationSeconds = 30;
 	request.seed = 42;
 	request.outputFormat = "wav";
 
-	const auto completed = music.submit(request);
-	OFXIC_REQUIRE(completed);
-	OFXIC_REQUIRE(completed.state == ofxIC::AceStepMusicJobState::Completed);
-	OFXIC_REQUIRE(completed.outputFormat == "wav");
+	const auto submitted = music.submit(request);
+	const auto generating = music.poll(submitted);
+	const auto completed = music.poll(generating);
+	OFXIC_REQUIRE(submitted && submitted.id == "task-42");
+	OFXIC_REQUIRE(submitted.phase == ofxIC::AceStepMusicJobPhase::Synthesis);
+	OFXIC_REQUIRE(generating && generating.state == ofxIC::AceStepMusicJobState::Generating);
+	OFXIC_REQUIRE(completed && completed.state == ofxIC::AceStepMusicJobState::Completed);
 	OFXIC_REQUIRE(completed.audioBytes == wavBytes());
-	OFXIC_REQUIRE(captured.size() == 2);
-	OFXIC_REQUIRE(captured[0].url == "http://127.0.0.1:8085/lm");
-	OFXIC_REQUIRE(captured[0].body.find("\"caption\":\"Warm local ambient pulse\"") != std::string::npos);
-	OFXIC_REQUIRE(captured[0].body.find("\"lyrics\":\"[Instrumental]\"") != std::string::npos);
-	OFXIC_REQUIRE(captured[0].body.find("\"duration\":8") != std::string::npos);
+	OFXIC_REQUIRE(captured.size() == 4);
+	OFXIC_REQUIRE(captured[0].url == "http://127.0.0.1:8085/release_task");
+	OFXIC_REQUIRE(captured[0].body.find("\"prompt\":\"Warm local ambient pulse\"") != std::string::npos);
+	OFXIC_REQUIRE(captured[0].body.find("\"audio_duration\":30") != std::string::npos);
+	OFXIC_REQUIRE(captured[0].body.find("\"model\":\"acestep-v15-turbo\"") != std::string::npos);
 	OFXIC_REQUIRE(captured[0].body.find("\"seed\":42") != std::string::npos);
 	OFXIC_REQUIRE(captured[0].headers.empty());
-	OFXIC_REQUIRE(captured[1].url == "http://127.0.0.1:8085/synth");
-	OFXIC_REQUIRE(captured[1].accept == "audio/wav");
-	OFXIC_REQUIRE(captured[1].body.find("\"caption\":\"enriched local music\"") != std::string::npos);
-	OFXIC_REQUIRE(captured[1].body.find("\"output_format\":\"wav16\"") != std::string::npos);
-	OFXIC_REQUIRE(captured[1].headers.empty());
+	OFXIC_REQUIRE(captured[1].url == "http://127.0.0.1:8085/query_result");
+	OFXIC_REQUIRE(captured[1].method == ofxIC::HttpMethod::Post);
+	OFXIC_REQUIRE(captured[1].body == "{\"task_id_list\":[\"task-42\"]}");
+	OFXIC_REQUIRE(captured[3].url == "http://127.0.0.1:8085/v1/audio?path=%2Ftmp%2Fmusic.wav");
 }
 
-OFXIC_TEST(acestep_music_advances_async_lm_and_synth_jobs) {
-	std::vector<ofxIC::HttpRequest> captured;
-	int call = 0;
-	ofxIC::Endpoint endpoint("http://127.0.0.1:8085/", [&](const ofxIC::HttpRequest & request) {
-		captured.push_back(request);
-		switch (call++) {
-		case 0: return response(200, R"({"id":"lm_job-1"})");
-		case 1: return response(200, R"({"status":"running"})");
-		case 2: return response(200, R"({"status":"done"})");
-		case 3: return response(200, R"({"caption":"enriched async music"})");
-		case 4: return response(202, R"({"id":"synth_job-2"})");
-		case 5: return response(200, R"({"status":"done"})");
-		default: return response(200, wavBytes());
-		}
+OFXIC_TEST(acestep_music_forwards_control_and_classifies_cancellation) {
+	ofxIC::HttpRequest captured;
+	ofxIC::Endpoint endpoint("http://localhost:8085", [&](const ofxIC::HttpRequest & request) {
+		captured = request;
+		ofxIC::HttpResponse result;
+		result.cancelled = true;
+		result.failure = ofxIC::RequestFailure::Cancelled;
+		result.error = "request cancelled";
+		return result;
 	});
 	ofxIC::AceStepMusicClient music(endpoint);
 	ofxIC::AceStepMusicRequest request;
-	request.caption = "Async local music";
-	request.outputFormat = "wav";
-
-	const auto lmSubmitted = music.submit(request);
-	const auto lmGenerating = music.poll(lmSubmitted);
-	const auto synthSubmitted = music.poll(lmGenerating);
-	const auto completed = music.poll(synthSubmitted);
-	OFXIC_REQUIRE(lmSubmitted);
-	OFXIC_REQUIRE(lmSubmitted.phase == ofxIC::AceStepMusicJobPhase::LanguageModel);
-	OFXIC_REQUIRE(lmSubmitted.id == "lm_job-1");
-	OFXIC_REQUIRE(lmGenerating.state == ofxIC::AceStepMusicJobState::Generating);
-	OFXIC_REQUIRE(synthSubmitted);
-	OFXIC_REQUIRE(synthSubmitted.phase == ofxIC::AceStepMusicJobPhase::Synthesis);
-	OFXIC_REQUIRE(synthSubmitted.id == "synth_job-2");
-	OFXIC_REQUIRE(completed);
-	OFXIC_REQUIRE(completed.state == ofxIC::AceStepMusicJobState::Completed);
-	OFXIC_REQUIRE(completed.audioBytes == wavBytes());
-	OFXIC_REQUIRE(captured.size() == 7);
-	OFXIC_REQUIRE(captured[1].url.find("/job?id=lm_job-1") != std::string::npos);
-	OFXIC_REQUIRE(captured[3].url.find("/job?id=lm_job-1&result=1") != std::string::npos);
-	OFXIC_REQUIRE(captured[4].url.find("/synth") != std::string::npos);
-	OFXIC_REQUIRE(captured[6].url.find("/job?id=synth_job-2&result=1") != std::string::npos);
+	request.caption = "cancelled music";
+	ofxIC::RequestControl control;
+	control.timeoutSeconds = 11;
+	control.shouldCancel = [] { return true; };
+	const auto result = music.submit(request, control);
+	OFXIC_REQUIRE(!result && result.cancelled);
+	OFXIC_REQUIRE(result.failure == ofxIC::RequestFailure::Cancelled);
+	OFXIC_REQUIRE(captured.timeoutSeconds == 11);
+	OFXIC_REQUIRE(captured.shouldCancel && captured.shouldCancel());
 }
 
 OFXIC_TEST(acestep_music_validates_before_transport) {
@@ -132,60 +94,39 @@ OFXIC_TEST(acestep_music_validates_before_transport) {
 	ofxIC::AceStepMusicClient music(endpoint);
 	ofxIC::AceStepMusicRequest request;
 	request.caption = "test";
-	request.durationSeconds = 0;
+	request.durationSeconds = 9;
 	const auto failed = music.submit(request);
 	OFXIC_REQUIRE(!failed);
 	OFXIC_REQUIRE(failed.error.find("duration") != std::string::npos);
 	OFXIC_REQUIRE(calls == 0);
 }
 
-OFXIC_TEST(acestep_music_rejects_non_audio_synthesis_success) {
+OFXIC_TEST(acestep_music_rejects_unsafe_audio_result_url) {
 	int call = 0;
 	ofxIC::Endpoint endpoint("http://127.0.0.1:8085", [&](const ofxIC::HttpRequest &) {
-		if (call++ == 0) return response(200, R"({"caption":"ready"})");
-		return response(200, R"({"message":"not audio"})");
+		if (call++ == 0) return response(200, R"({"data":{"task_id":"job-1"},"code":200,"error":null})");
+		return response(200, R"({"data":[{"task_id":"job-1","status":1,"result":"[{\"file\":\"https://attacker.example/audio.wav\"}]"}],"code":200,"error":null})");
 	});
 	ofxIC::AceStepMusicClient music(endpoint);
 	ofxIC::AceStepMusicRequest request;
-	request.caption = "test";
-	const auto failed = music.submit(request);
-	OFXIC_REQUIRE(!failed);
-	OFXIC_REQUIRE(failed.error.find("valid wav audio") != std::string::npos);
-}
-
-OFXIC_TEST(acestep_music_extracts_audio_from_multipart_synthesis) {
-	const std::string boundary = "ofxic-acestep-boundary";
-	const std::string multipart = "--" + boundary + "\r\n"
-		"Content-Type: application/json\r\n\r\n{}\r\n"
-		"--" + boundary + "\r\n"
-		"Content-Type: audio/wav\r\n"
-		"Content-Disposition: attachment; filename=music.wav\r\n\r\n" +
-		wavBytes() + "\r\n--" + boundary + "--\r\n";
-	int call = 0;
-	ofxIC::Endpoint endpoint("http://127.0.0.1:8085", [&](const ofxIC::HttpRequest &) {
-		if (call++ == 0) return response(200, R"({"caption":"ready"})");
-		return response(200, multipart);
-	});
-	ofxIC::AceStepMusicClient music(endpoint);
-	ofxIC::AceStepMusicRequest request;
-	request.caption = "multipart";
-	const auto completed = music.submit(request);
-	OFXIC_REQUIRE(completed);
-	OFXIC_REQUIRE(completed.state == ofxIC::AceStepMusicJobState::Completed);
-	OFXIC_REQUIRE(completed.audioBytes == wavBytes());
-}
-
-OFXIC_TEST(acestep_music_rejects_job_status_without_state) {
-	int call = 0;
-	ofxIC::Endpoint endpoint("http://127.0.0.1:8085", [&](const ofxIC::HttpRequest &) {
-		if (call++ == 0) return response(200, R"({"id":"job-1"})");
-		return response(200, R"({"message":"missing status"})");
-	});
-	ofxIC::AceStepMusicClient music(endpoint);
-	ofxIC::AceStepMusicRequest request;
-	request.caption = "invalid status";
+	request.caption = "safe local download";
 	const auto submitted = music.submit(request);
 	const auto failed = music.poll(submitted);
 	OFXIC_REQUIRE(!failed);
-	OFXIC_REQUIRE(failed.error.find("invalid status JSON") != std::string::npos);
+	OFXIC_REQUIRE(failed.error.find("safe /v1/audio") != std::string::npos);
+	OFXIC_REQUIRE(call == 2);
+}
+
+OFXIC_TEST(acestep_music_reports_official_task_failure) {
+	int call = 0;
+	ofxIC::Endpoint endpoint("http://127.0.0.1:8085", [&](const ofxIC::HttpRequest &) {
+		if (call++ == 0) return response(200, R"({"data":{"task_id":"job-failed"},"code":200,"error":null})");
+		return response(200, R"({"data":[{"task_id":"job-failed","status":2,"result":"out of memory"}],"code":200,"error":null})");
+	});
+	ofxIC::AceStepMusicClient music(endpoint);
+	ofxIC::AceStepMusicRequest request;
+	request.caption = "failure";
+	const auto failed = music.poll(music.submit(request));
+	OFXIC_REQUIRE(!failed);
+	OFXIC_REQUIRE(failed.error.find("out of memory") != std::string::npos);
 }

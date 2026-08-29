@@ -23,13 +23,18 @@ enum class AceStepMusicJobPhase {
 struct AceStepMusicRequest {
 	std::string caption;
 	std::string lyrics;
+	std::string model = "acestep-v15-turbo";
+	std::string vocalLanguage = "en";
 	int bpm = 0;
 	int durationSeconds = 30;
+	int inferenceSteps = 8;
 	std::string keyScale;
 	std::string timeSignature = "4";
 	std::int64_t seed = -1;
 	std::string negativePrompt;
 	bool instrumentalOnly = true;
+	bool thinking = false;
+	bool useFormat = false;
 	std::string outputFormat = "wav";
 };
 

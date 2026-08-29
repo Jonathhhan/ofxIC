@@ -67,6 +67,16 @@ function Resolve-MsBuild {
 	throw "MSBuild was not found. Install Visual Studio with Desktop development with C++."
 }
 
+function Get-CompatibleRelativePath([string] $BaseDirectory, [string] $TargetPath) {
+	$base = [System.IO.Path]::GetFullPath($BaseDirectory)
+	if (-not $base.EndsWith([System.IO.Path]::DirectorySeparatorChar.ToString())) {
+		$base += [System.IO.Path]::DirectorySeparatorChar
+	}
+	$baseUri = New-Object System.Uri($base)
+	$targetUri = New-Object System.Uri([System.IO.Path]::GetFullPath($TargetPath))
+	return [System.Uri]::UnescapeDataString($baseUri.MakeRelativeUri($targetUri).ToString()).Replace('/', '\')
+}
+
 if (-not (Test-Path -LiteralPath (Join-Path $openFrameworksRoot "libs") -PathType Container)) {
 	throw "The addon is not inside a complete openFrameworks checkout: $openFrameworksRoot"
 }
@@ -94,8 +104,7 @@ $missingSources = @(
 	Get-ChildItem -LiteralPath (Join-Path $exampleDirectory "src"),
 		(Join-Path $repository "src") -Recurse -File -Filter "*.cpp" |
 		ForEach-Object {
-			$relative = [System.IO.Path]::GetRelativePath($exampleDirectory, $_.FullName).
-				Replace('/', '\')
+			$relative = Get-CompatibleRelativePath $exampleDirectory $_.FullName
 			if (-not $projectText.Contains('Include="' + $relative + '"')) { $relative }
 		})
 if ($missingSources.Count -gt 0) {

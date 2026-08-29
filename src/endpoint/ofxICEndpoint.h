@@ -62,6 +62,16 @@ struct EndpointStatus {
 	}
 };
 
+struct EndpointUrlValidation {
+	bool valid = false;
+	bool secure = false;
+	bool loopback = false;
+	std::string normalizedUrl;
+	std::string error;
+
+	explicit operator bool() const { return valid; }
+};
+
 class Endpoint {
 public:
 	explicit Endpoint(
@@ -70,6 +80,8 @@ public:
 
 	void setBaseUrl(std::string baseUrl);
 	const std::string & getBaseUrl() const;
+
+	static EndpointUrlValidation validateBaseUrl(const std::string & baseUrl);
 
 	void setBearerToken(std::string token);
 	bool hasBearerToken() const;

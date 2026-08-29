@@ -16,7 +16,7 @@ const std::string settingsPath = "ofxic-example-settings-fixture.cfg";
 OFXIC_TEST(example_settings_round_trip_non_secret_values) {
 	ofxICExample::ExampleSettings saved;
 	saved.endpointProfile = 4;
-	saved.endpointUrl = "https://example.test/v1?mode=custom";
+	saved.endpointUrl = "https://example.test/v1/custom";
 	saved.modelId = "org/model with spaces";
 	saved.chatSystemPrompt = "Answer briefly.\nCite sources.";
 	saved.chatStopSequences = "STOP\nEND\\MARKER";

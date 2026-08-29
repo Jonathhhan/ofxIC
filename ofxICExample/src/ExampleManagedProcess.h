@@ -27,7 +27,8 @@ public:
 		const std::string & executable,
 		const std::vector<std::string> & arguments,
 		const std::string & name,
-		unsigned short readinessPort);
+		unsigned short readinessPort,
+		const std::string & workingDirectory = {});
 	bool useExisting(const std::string & name, unsigned short readinessPort);
 	void update();
 	void stop();

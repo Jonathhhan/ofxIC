@@ -16,10 +16,6 @@ public:
 		RequestControl control = {}) const;
 
 private:
-	AceStepMusicJob submitSynthesis(
-		const std::string & languageModelResponse,
-		const std::string & outputFormat,
-		RequestControl control) const;
 	Endpoint & endpoint;
 };
 

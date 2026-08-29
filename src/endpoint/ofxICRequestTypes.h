@@ -15,7 +15,8 @@ enum class RequestFailure {
 	Timeout,
 	Transport,
 	Provider,
-	InvalidResponse
+	InvalidResponse,
+	Validation
 };
 
 } // namespace ofxIC

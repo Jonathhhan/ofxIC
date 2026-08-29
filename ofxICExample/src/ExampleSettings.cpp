@@ -1,5 +1,6 @@
 #include "ExampleSettings.h"
 #include "ExampleAtomicFile.h"
+#include "../../src/endpoint/ofxICEndpoint.h"
 
 #include <cstdio>
 #include <cmath>
@@ -88,9 +89,13 @@ bool validMultilineText(const std::string & value, std::size_t maximumSize) {
 	return value.size() < maximumSize && value.find('\0') == std::string::npos;
 }
 
+bool validEndpoint(const std::string & value) {
+	return validText(value, 512) && ofxIC::Endpoint::validateBaseUrl(value);
+}
+
 bool validSettings(const ExampleSettings & settings) {
 	return settings.endpointProfile >= 0 && settings.endpointProfile <= 4 &&
-		validText(settings.endpointUrl, 512) && validText(settings.modelId, 256) &&
+		validEndpoint(settings.endpointUrl) && validText(settings.modelId, 256) &&
 		validMultilineText(settings.chatSystemPrompt, 2048) &&
 		validMultilineText(settings.chatStopSequences, 1024) &&
 		settings.chatMaxTokens >= 1 && settings.chatMaxTokens <= 131072 &&
@@ -103,13 +108,13 @@ bool validSettings(const ExampleSettings & settings) {
 		settings.llamaContextSize >= 512 && settings.llamaContextSize <= 1048576 &&
 		settings.llamaGpuLayers >= 0 && settings.llamaGpuLayers <= 100000 &&
 		settings.llamaFlashAttention >= 0 && settings.llamaFlashAttention <= 1 &&
-		validText(settings.transcriptionEndpointUrl, 512) &&
+		validEndpoint(settings.transcriptionEndpointUrl) &&
 		settings.transcriptionProtocol >= 0 && settings.transcriptionProtocol <= 1 &&
 		validText(settings.transcriptionModel, 256) &&
-		validText(settings.segmentationEndpointUrl, 512) &&
+		validEndpoint(settings.segmentationEndpointUrl) &&
 		settings.mediaBackend >= 0 && settings.mediaBackend <= 2 &&
 		settings.mediaKind >= 0 && settings.mediaKind <= 1 &&
-		validText(settings.mediaEndpointUrl, 512) &&
+		validEndpoint(settings.mediaEndpointUrl) &&
 		validText(settings.mediaImageModel, 256) &&
 		validText(settings.mediaVideoModel, 256) &&
 		validText(settings.stableDiffusionModelDirectory, 1024) &&
@@ -130,7 +135,7 @@ bool validSettings(const ExampleSettings & settings) {
 		settings.mediaFrames >= 1 && settings.mediaFrames <= 10000 &&
 		settings.mediaFps >= 1 && settings.mediaFps <= 240 &&
 		settings.musicBackend >= 0 && settings.musicBackend <= 1 &&
-		validText(settings.musicEndpointUrl, 512) &&
+		validEndpoint(settings.musicEndpointUrl) &&
 		settings.musicDuration >= 1 && settings.musicDuration <= 600 &&
 		settings.musicOutputFormat >= 0 && settings.musicOutputFormat <= 1 &&
 		validText(settings.aceStepServerPath, 1024) &&

@@ -186,7 +186,7 @@ bool ManagedProcess::useExisting(const std::string & name, unsigned short readin
 
 bool ManagedProcess::start(const std::string & executable,
 	const std::vector<std::string> & arguments, const std::string & name,
-	unsigned short readinessPort) {
+	unsigned short readinessPort, const std::string & requestedWorkingDirectory) {
 	if (running()) return true;
 	impl->processName = name.empty() ? "Local process" : name;
 	impl->port = readinessPort;
@@ -230,8 +230,19 @@ bool ManagedProcess::start(const std::string & executable,
 	startup.hStdOutput = outputWrite;
 	startup.hStdError = outputWrite;
 	PROCESS_INFORMATION processInfo{};
-	const std::wstring workingDirectory =
-		std::filesystem::path(executable).parent_path().wstring();
+	std::filesystem::path workingPath = requestedWorkingDirectory.empty()
+		? std::filesystem::path(executable).parent_path()
+		: std::filesystem::path(requestedWorkingDirectory);
+	std::error_code directoryError;
+	if (!workingPath.empty() && !std::filesystem::is_directory(workingPath, directoryError)) {
+		CloseHandle(outputWrite);
+		impl->closeHandles();
+		impl->processState = ManagedProcessState::Failed;
+		impl->processStatus = impl->processName + " working directory does not exist: " +
+			workingPath.string();
+		return false;
+	}
+	const std::wstring workingDirectory = workingPath.wstring();
 	const BOOL created = CreateProcessW(wideExecutable.c_str(), mutableCommand.data(),
 		nullptr, nullptr, TRUE, CREATE_NO_WINDOW, nullptr,
 		workingDirectory.empty() ? nullptr : workingDirectory.c_str(), &startup, &processInfo);

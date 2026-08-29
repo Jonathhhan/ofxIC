@@ -64,7 +64,7 @@ struct MusicBackendProfile {
 
 constexpr std::array<MusicBackendProfile, 2> musicBackends{{
 	{ "ACE-Step local", "http://127.0.0.1:8085",
-		"Local ACE-Step server; /lm, /synth, and /job stay outside this addon." },
+		"Official ACE-Step 1.5 API: /release_task, /query_result, then /v1/audio." },
 	{ "Stability Audio 3", "https://api.stability.ai",
 		"Hosted asynchronous Stability AI generation; provider credit is required." },
 }};
@@ -268,7 +268,29 @@ std::string bundledAddonSdTurboCheckpoint() {
 	return {};
 }
 
+std::string bundledSamBridgeScript() {
+	std::filesystem::path directory(ofFilePath::getCurrentExeDir());
+	for (int level = 0; level < 8 && !directory.empty(); ++level) {
+		for (const auto & relative : {
+			std::filesystem::path("scripts") / "sam-bridge-server.py",
+			std::filesystem::path("addons") / "ofxIC" / "scripts" / "sam-bridge-server.py" }) {
+			const auto candidate = directory / relative;
+			std::error_code error;
+			if (std::filesystem::is_regular_file(candidate, error))
+				return candidate.lexically_normal().string();
+		}
+		directory = directory.parent_path();
+	}
+	return {};
+}
+
 #if defined(_WIN32)
+std::string executableOnPath(const char * name) {
+	char resolved[MAX_PATH]{};
+	const DWORD length = SearchPathA(nullptr, name, nullptr, MAX_PATH, resolved, nullptr);
+	return length > 0 && length < MAX_PATH ? std::string(resolved, length) : std::string{};
+}
+
 std::wstring utf8ToWide(const std::string & value) {
 	if (value.empty()) return {};
 	const int size = MultiByteToWideChar(CP_UTF8, 0, value.c_str(), -1, nullptr, 0);
@@ -549,6 +571,39 @@ void ofApp::applyLocalRuntimeDefaults() {
 	} else {
 		ofLogWarning("ofxIC servers") << "sd-server not found";
 	}
+	const std::string installedAceStep = installedServerExecutable(
+		"ACE-Step-1.5-", "python.exe");
+	if (!installedAceStep.empty()) {
+		if (!ofxICExample::executableFileExists(aceStepServerPath.data()))
+			setTextBuffer(aceStepServerPath, installedAceStep);
+		if (!aceStepServerArguments[0]) setTextBuffer(aceStepServerArguments,
+			"-m acestep.api_server --host 127.0.0.1 --port 8085");
+		aceStepServerStatus = "Script-installed ACE-Step 1.5 environment detected.";
+		ofLogNotice("ofxIC servers") << "ACE-Step: " << installedAceStep;
+	} else {
+		ofLogWarning("ofxIC servers") << "ACE-Step 1.5 environment not found; run scripts\\install-acestep-server.ps1";
+	}
+	const std::string installedWhisper = installedServerExecutable(
+		"whisper.cpp-", "whisper-server.exe");
+	if (!installedWhisper.empty()) {
+		if (!ofxICExample::executableFileExists(whisperServerPath.data()))
+			setTextBuffer(whisperServerPath, installedWhisper);
+		whisperServerStatus = "Script-installed whisper-server detected; select a model.";
+		ofLogNotice("ofxIC servers") << "whisper-server: " << installedWhisper;
+	} else {
+		ofLogWarning("ofxIC servers") << "whisper-server not found; run scripts\\install-whisper-server.ps1";
+	}
+	const std::string samBridge = bundledSamBridgeScript();
+#if defined(_WIN32)
+	const std::string python = executableOnPath("python.exe");
+	if (!python.empty() && !samBridge.empty() &&
+		!ofxICExample::executableFileExists(samBridgeExecutablePath.data())) {
+		setTextBuffer(samBridgeExecutablePath, python);
+		if (!samBridgeArguments[0])
+			setTextBuffer(samBridgeArguments, "\"" + samBridge + "\" --port 18085");
+		samBridgeProcessStatus = "SAM bridge is available; add --adapter and --model to start real inference.";
+	}
+#endif
 	const std::string addonSdTurbo = bundledAddonSdTurboCheckpoint();
 	if (!ofFile::doesFileExist(stableDiffusionModelPath.data()) && !addonSdTurbo.empty()) {
 		setTextBuffer(stableDiffusionModelDirectory, ofFilePath::getEnclosingDirectory(addonSdTurbo, false));
@@ -1257,6 +1312,15 @@ void ofApp::draw() {
 			if (ImGui::CollapsingHeader("Local whisper.cpp server", ImGuiTreeNodeFlags_DefaultOpen)) {
 				ImGui::InputText("whisper-server executable", whisperServerPath.data(), whisperServerPath.size());
 				ImGui::SameLine(); chooseWhisperServerRequested = ImGui::Button("Choose server##whisper");
+				ImGui::SameLine();
+				if (ImGui::Button("Detect installed##whisper")) {
+					const std::string detected = installedServerExecutable("whisper.cpp-", "whisper-server.exe");
+					if (!detected.empty()) {
+						setTextBuffer(whisperServerPath, detected);
+						whisperServerStatus = "Script-installed whisper-server selected.";
+					} else whisperServerStatus = "No script-installed whisper-server found. Run scripts\\install-whisper-server.ps1.";
+					ofLogNotice("ofxIC servers") << "Detect whisper-server: " << (detected.empty() ? "not found" : detected);
+				}
 				ImGui::InputText("Whisper model", whisperModelPath.data(), whisperModelPath.size());
 				ImGui::SameLine(); chooseWhisperModelRequested = ImGui::Button("Choose model##whisper");
 				ImGui::InputText("Extra arguments##whisper", whisperServerArguments.data(), whisperServerArguments.size());
@@ -1473,9 +1537,20 @@ void ofApp::draw() {
 		ImGui::EndCombo();
 	}
 	ImGui::TextDisabled("%s", musicBackends[selectedMusicBackend].capabilityNote);
-	if (selectedMusicBackend == 0 && ImGui::CollapsingHeader("Local ACE-Step server", ImGuiTreeNodeFlags_DefaultOpen)) {
-		ImGui::InputText("ACE-Step executable", aceStepServerPath.data(), aceStepServerPath.size());
+	if (selectedMusicBackend == 0 && ImGui::CollapsingHeader("Local ACE-Step 1.5 server", ImGuiTreeNodeFlags_DefaultOpen)) {
+		ImGui::InputText("ACE-Step Python", aceStepServerPath.data(), aceStepServerPath.size());
 		ImGui::SameLine(); chooseAceStepServerRequested = ImGui::Button("Choose server##ace");
+		ImGui::SameLine();
+		if (ImGui::Button("Detect installed##ace")) {
+			const std::string detected = installedServerExecutable("ACE-Step-1.5-", "python.exe");
+			if (!detected.empty()) {
+				setTextBuffer(aceStepServerPath, detected);
+				if (!aceStepServerArguments[0]) setTextBuffer(aceStepServerArguments,
+					"-m acestep.api_server --host 127.0.0.1 --port 8085");
+				aceStepServerStatus = "Script-installed ACE-Step 1.5 environment selected.";
+			} else aceStepServerStatus = "No ACE-Step environment found. Run scripts\\install-acestep-server.ps1.";
+			ofLogNotice("ofxIC servers") << "Detect ACE-Step: " << (detected.empty() ? "not found" : detected);
+		}
 		ImGui::InputText("Server arguments", aceStepServerArguments.data(), aceStepServerArguments.size());
 		const bool running = aceStepProcess.running();
 		ImGui::BeginDisabled(running);
@@ -1551,9 +1626,10 @@ void ofApp::draw() {
 	ImGui::TextUnformatted("SAM bridge v1");
 	ImGui::TextDisabled("External endpoint: PPM + normalized points -> PGM mask");
 	if (ImGui::CollapsingHeader("Local SAM bridge process", ImGuiTreeNodeFlags_DefaultOpen)) {
-		ImGui::InputText("Bridge executable", samBridgeExecutablePath.data(), samBridgeExecutablePath.size());
+		ImGui::InputText("Python executable", samBridgeExecutablePath.data(), samBridgeExecutablePath.size());
 		ImGui::SameLine(); chooseSamBridgeRequested = ImGui::Button("Choose executable##sam");
-		ImGui::InputText("Bridge arguments", samBridgeArguments.data(), samBridgeArguments.size());
+		ImGui::InputText("Bridge + adapter arguments", samBridgeArguments.data(), samBridgeArguments.size());
+		ImGui::TextDisabled("Real inference requires: sam-bridge-server.py --adapter <runner.exe> --model <model> --backend cuda");
 		const bool running = samBridgeProcess.running();
 		ImGui::BeginDisabled(running);
 		startSamBridgeRequested = ImGui::Button("Start SAM bridge"); ImGui::EndDisabled();
@@ -2255,12 +2331,28 @@ void ofApp::startLocalAceStepServer() {
 		aceStepServerStatus = aceStepProcess.status();
 		return;
 	}
+	const std::string resolved = ofxICExample::resolveInstalledExecutable(
+		aceStepServerPath.data(), installedServerRoot(), "ACE-Step-1.5-", "python.exe");
+	if (resolved.empty()) {
+		aceStepServerStatus = "ACE-Step 1.5 environment not found. Run scripts\\install-acestep-server.ps1.";
+		ofLogError("ofxIC servers") << aceStepServerStatus;
+		return;
+	}
+	setTextBuffer(aceStepServerPath, resolved);
+	if (!aceStepServerArguments[0]) setTextBuffer(aceStepServerArguments,
+		"-m acestep.api_server --host 127.0.0.1 --port 8085");
 #if defined(_WIN32)
 	const auto arguments = splitWindowsArguments(aceStepServerArguments.data());
 #else
 	const std::vector<std::string> arguments;
 #endif
-	if (aceStepProcess.start(aceStepServerPath.data(), arguments, "ACE-Step server", 8085)) {
+	std::filesystem::path workingDirectory = std::filesystem::path(resolved).parent_path();
+	if (workingDirectory.filename() == "Scripts" &&
+		workingDirectory.parent_path().filename() == ".venv")
+		workingDirectory = workingDirectory.parent_path().parent_path();
+	ofLogNotice("ofxIC servers") << "Starting ACE-Step 1.5: " << resolved;
+	if (aceStepProcess.start(resolved, arguments, "ACE-Step 1.5 server", 8085,
+		workingDirectory.string())) {
 		setTextBuffer(musicEndpointUrl, "http://127.0.0.1:8085");
 		musicConfigurationDirty = true;
 	}
@@ -2279,6 +2371,14 @@ void ofApp::startLocalWhisperServer() {
 		whisperServerStatus = whisperProcess.status();
 		return;
 	}
+	const std::string resolved = ofxICExample::resolveInstalledExecutable(
+		whisperServerPath.data(), installedServerRoot(), "whisper.cpp-", "whisper-server.exe");
+	if (resolved.empty()) {
+		whisperServerStatus = "whisper-server not found. Run scripts\\install-whisper-server.ps1.";
+		ofLogError("ofxIC servers") << whisperServerStatus;
+		return;
+	}
+	setTextBuffer(whisperServerPath, resolved);
 	if (!ofFile::doesFileExist(whisperModelPath.data())) {
 		whisperServerStatus = "Selected whisper.cpp model does not exist: " +
 			std::string(whisperModelPath.data());
@@ -2290,8 +2390,8 @@ void ofApp::startLocalWhisperServer() {
 	std::vector<std::string> arguments;
 #endif
 	arguments.insert(arguments.begin(), { "-m", whisperModelPath.data(), "--host", "127.0.0.1", "--port", "8082" });
-	if (whisperProcess.start(
-		whisperServerPath.data(), arguments, "whisper.cpp server", 8082)) {
+	ofLogNotice("ofxIC servers") << "Starting whisper-server: " << resolved;
+	if (whisperProcess.start(resolved, arguments, "whisper.cpp server", 8082)) {
 		setTextBuffer(transcriptionEndpointUrl, "http://127.0.0.1:8082");
 	}
 	whisperServerStatus = whisperProcess.status();
@@ -2307,6 +2407,19 @@ void ofApp::startLocalSamBridge() {
 	if (samBridgeProcess.useExisting("SAM bridge", 18085)) {
 		setTextBuffer(segmentationEndpointUrl, "http://127.0.0.1:18085");
 		samBridgeProcessStatus = samBridgeProcess.status();
+		return;
+	}
+	if (!ofxICExample::executableFileExists(samBridgeExecutablePath.data())) {
+		samBridgeProcessStatus = "Python executable not found for the SAM bridge.";
+		ofLogError("ofxIC servers") << samBridgeProcessStatus;
+		return;
+	}
+	const std::string rawArguments = samBridgeArguments.data();
+	if (rawArguments.find("--fixture-mask") == std::string::npos &&
+		(rawArguments.find("--adapter") == std::string::npos ||
+		 rawArguments.find("--model") == std::string::npos)) {
+		samBridgeProcessStatus = "SAM needs both --adapter <runner.exe> and --model <model>; the bridge alone is not an inference runtime.";
+		ofLogError("ofxIC servers") << samBridgeProcessStatus;
 		return;
 	}
 #if defined(_WIN32)
@@ -2494,7 +2607,14 @@ void ofApp::resetExampleSettings() {
 
 void ofApp::applyConfiguration() {
 	if (busy || mediaBusy) return;
-	endpoint.setBaseUrl(endpointUrl.data());
+	const auto validation = ofxIC::Endpoint::validateBaseUrl(endpointUrl.data());
+	endpoint.setBaseUrl(validation ? validation.normalizedUrl : std::string(endpointUrl.data()));
+	if (!validation) {
+		status = "Invalid LLM endpoint: " + validation.error;
+		ofLogError("ofxIC configuration") << status;
+		return;
+	}
+	setTextBuffer(endpointUrl, validation.normalizedUrl);
 	endpoint.setBearerToken(configuredToken());
 	ofxIC::ChatOptions options = chat.getOptions();
 	options.model = modelId.data();
@@ -2512,16 +2632,28 @@ void ofApp::applyConfiguration() {
 	configurationDirty = false;
 	status = "Applied " + std::string(endpointProfiles[selectedProfile].name) +
 		" at " + endpoint.getBaseUrl();
+	if (!validation.secure && !validation.loopback)
+		status += " (warning: remote HTTP is unencrypted)";
 }
 
 void ofApp::applyMediaConfiguration() {
 	if (busy || mediaBusy) return;
-	mediaEndpoint.setBaseUrl(mediaEndpointUrl.data());
+	const auto validation = ofxIC::Endpoint::validateBaseUrl(mediaEndpointUrl.data());
+	mediaEndpoint.setBaseUrl(validation ? validation.normalizedUrl :
+		std::string(mediaEndpointUrl.data()));
+	if (!validation) {
+		mediaStatus = "Invalid media endpoint: " + validation.error;
+		ofLogError("ofxIC configuration") << mediaStatus;
+		return;
+	}
+	setTextBuffer(mediaEndpointUrl, validation.normalizedUrl);
 	mediaEndpoint.setBearerToken(configuredMediaToken());
 	mediaConfigurationDirty = false;
 	currentMediaJob = {};
 	mediaStatus = "Applied " + std::string(mediaBackends[selectedMediaBackend].name) +
 		" at " + mediaEndpoint.getBaseUrl();
+	if (!validation.secure && !validation.loopback)
+		mediaStatus += " (warning: remote HTTP is unencrypted)";
 }
 
 void ofApp::selectEndpointProfile(int profileIndex) {
@@ -2587,13 +2719,23 @@ std::string ofApp::configuredToken() const {
 
 void ofApp::applyMusicConfiguration() {
 	if (busy || mediaBusy) return;
-	musicEndpoint.setBaseUrl(musicEndpointUrl.data());
+	const auto validation = ofxIC::Endpoint::validateBaseUrl(musicEndpointUrl.data());
+	musicEndpoint.setBaseUrl(validation ? validation.normalizedUrl :
+		std::string(musicEndpointUrl.data()));
+	if (!validation) {
+		musicStatus = "Invalid music endpoint: " + validation.error;
+		ofLogError("ofxIC configuration") << musicStatus;
+		return;
+	}
+	setTextBuffer(musicEndpointUrl, validation.normalizedUrl);
 	musicEndpoint.setBearerToken(selectedMusicBackend == 1 ? configuredMusicToken() : "");
 	musicConfigurationDirty = false;
 	currentMusicJob = {};
 	currentAceStepMusicJob = {};
 	musicStatus = "Applied " + std::string(musicBackends[selectedMusicBackend].name) +
 		" at " + musicEndpoint.getBaseUrl();
+	if (!validation.secure && !validation.loopback)
+		musicStatus += " (warning: remote HTTP is unencrypted)";
 }
 
 bool ofApp::loadAudio(const std::string & path) {
@@ -2618,9 +2760,18 @@ bool ofApp::loadAudio(const std::string & path) {
 void ofApp::transcribeAudio() {
 	if (audioBytes.empty() || mediaBusy || busy) return;
 	if (transcriptionProtocol == 1 && deferUntilRuntimeReady(DeferredTask::Transcription)) return;
+	const auto validation = ofxIC::Endpoint::validateBaseUrl(transcriptionEndpointUrl.data());
+	transcriptionEndpoint.setBaseUrl(validation ? validation.normalizedUrl :
+		std::string(transcriptionEndpointUrl.data()));
+	if (!validation) {
+		audioStatus = "Invalid transcription endpoint: " + validation.error;
+		status = audioStatus;
+		writeAutomationResult(audioStatus, "");
+		return;
+	}
+	setTextBuffer(transcriptionEndpointUrl, validation.normalizedUrl);
 	if (busy.exchange(true)) return;
 	activeTaskKind = "transcription";
-	transcriptionEndpoint.setBaseUrl(transcriptionEndpointUrl.data());
 	transcriptionEndpoint.setBearerToken(configuredTranscriptionToken());
 	cancellationRequested = false;
 	requestCanCancel = true;
@@ -2690,9 +2841,18 @@ void ofApp::inspectSegmentationBridge() {
 	if (mediaBusy || busy) return;
 	if (usesManagedSamBridge(segmentationEndpointUrl.data()) &&
 		deferUntilRuntimeReady(DeferredTask::SamInspect)) return;
+	const auto validation = ofxIC::Endpoint::validateBaseUrl(segmentationEndpointUrl.data());
+	segmentationEndpoint.setBaseUrl(validation ? validation.normalizedUrl :
+		std::string(segmentationEndpointUrl.data()));
+	if (!validation) {
+		segmentationStatus = "Invalid SAM endpoint: " + validation.error;
+		status = segmentationStatus;
+		writeAutomationResult(segmentationStatus, "");
+		return;
+	}
+	setTextBuffer(segmentationEndpointUrl, validation.normalizedUrl);
 	if (busy.exchange(true)) return;
 	activeTaskKind = "sam-inspection";
-	segmentationEndpoint.setBaseUrl(segmentationEndpointUrl.data());
 	segmentationEndpoint.setBearerToken(configuredSegmentationToken());
 	cancellationRequested = false;
 	requestCanCancel = true;
@@ -2724,9 +2884,18 @@ void ofApp::segmentImage() {
 	if (segmentationImageBytes.empty() || mediaBusy || busy) return;
 	if (usesManagedSamBridge(segmentationEndpointUrl.data()) &&
 		deferUntilRuntimeReady(DeferredTask::SamSegment)) return;
+	const auto validation = ofxIC::Endpoint::validateBaseUrl(segmentationEndpointUrl.data());
+	segmentationEndpoint.setBaseUrl(validation ? validation.normalizedUrl :
+		std::string(segmentationEndpointUrl.data()));
+	if (!validation) {
+		segmentationStatus = "Invalid SAM endpoint: " + validation.error;
+		status = segmentationStatus;
+		writeAutomationResult(segmentationStatus, "");
+		return;
+	}
+	setTextBuffer(segmentationEndpointUrl, validation.normalizedUrl);
 	if (busy.exchange(true)) return;
 	activeTaskKind = "segmentation";
-	segmentationEndpoint.setBaseUrl(segmentationEndpointUrl.data());
 	segmentationEndpoint.setBearerToken(configuredSegmentationToken());
 	cancellationRequested = false;
 	requestCanCancel = true;

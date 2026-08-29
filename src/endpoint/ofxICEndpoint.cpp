@@ -631,7 +631,8 @@ HttpResponse runCurlRequest(const HttpRequest & request) {
 } // namespace
 
 Endpoint::Endpoint(std::string baseUrl, HttpTransport transport)
-	: baseUrl(normalizeBaseUrl(baseUrl))
+	: baseUrl(normalizeBaseUrl(trimCopy(baseUrl).empty()
+		? "http://127.0.0.1:8080" : baseUrl))
 	, transport(transport ? std::move(transport) : Endpoint::runHttpRequest) {
 }
 
@@ -643,6 +644,115 @@ const std::string & Endpoint::getBaseUrl() const {
 	return baseUrl;
 }
 
+EndpointUrlValidation Endpoint::validateBaseUrl(const std::string & value) {
+	EndpointUrlValidation result;
+	const std::string trimmed = trimCopy(value);
+	if (trimmed.empty()) {
+		result.error = "base URL is empty";
+		return result;
+	}
+	if (trimmed.size() > 2048) {
+		result.error = "base URL exceeds 2048 characters";
+		return result;
+	}
+	for (const unsigned char character : trimmed) {
+		if (character <= 0x20 || character == 0x7f || character == '\\') {
+			result.error = "base URL contains whitespace, control characters, or backslashes";
+			return result;
+		}
+	}
+	result.normalizedUrl = normalizeBaseUrl(trimmed);
+	std::size_t authorityStart = 0;
+	if (result.normalizedUrl.compare(0, 8, "https://") == 0) {
+		result.secure = true;
+		authorityStart = 8;
+	} else if (result.normalizedUrl.compare(0, 7, "http://") == 0) {
+		authorityStart = 7;
+	} else {
+		result.error = "base URL must begin with lowercase http:// or https://";
+		return result;
+	}
+	if (result.normalizedUrl.find_first_of("?#", authorityStart) != std::string::npos) {
+		result.error = "base URL must not contain a query string or fragment";
+		return result;
+	}
+	const std::size_t authorityEnd = result.normalizedUrl.find('/', authorityStart);
+	const std::string authority = result.normalizedUrl.substr(authorityStart,
+		authorityEnd == std::string::npos ? std::string::npos : authorityEnd - authorityStart);
+	if (authority.empty()) {
+		result.error = "base URL host is empty";
+		return result;
+	}
+	if (authority.find('@') != std::string::npos) {
+		result.error = "base URL must not embed user names or credentials";
+		return result;
+	}
+
+	std::string host;
+	std::string port;
+	if (authority.front() == '[') {
+		const std::size_t closingBracket = authority.find(']');
+		if (closingBracket == std::string::npos || closingBracket == 1) {
+			result.error = "base URL contains an invalid bracketed IPv6 host";
+			return result;
+		}
+		host = authority.substr(1, closingBracket - 1);
+		const std::string remainder = authority.substr(closingBracket + 1);
+		if (!remainder.empty()) {
+			if (remainder.front() != ':' || remainder.size() == 1) {
+				result.error = "base URL contains an invalid IPv6 port";
+				return result;
+			}
+			port = remainder.substr(1);
+		}
+	} else {
+		const std::size_t colon = authority.rfind(':');
+		if (colon != std::string::npos) {
+			if (authority.find(':') != colon) {
+				result.error = "IPv6 hosts in base URLs must use brackets";
+				return result;
+			}
+			host = authority.substr(0, colon);
+			port = authority.substr(colon + 1);
+		} else {
+			host = authority;
+		}
+	}
+	if (host.empty()) {
+		result.error = "base URL host is empty";
+		return result;
+	}
+	for (const unsigned char character : host) {
+		if (!(std::isalnum(character) || character == '.' || character == '-' ||
+			character == ':' || character == '_')) {
+			result.error = "base URL host contains unsupported characters";
+			return result;
+		}
+	}
+	if (!port.empty()) {
+		int parsedPort = 0;
+		for (const unsigned char character : port) {
+			if (!std::isdigit(character)) {
+				result.error = "base URL port must be numeric";
+				return result;
+			}
+			parsedPort = parsedPort * 10 + (character - '0');
+			if (parsedPort > 65535) break;
+		}
+		if (parsedPort < 1 || parsedPort > 65535) {
+			result.error = "base URL port must be between 1 and 65535";
+			return result;
+		}
+	}
+	std::string lowerHost = host;
+	std::transform(lowerHost.begin(), lowerHost.end(), lowerHost.begin(),
+		[](const unsigned char character) { return static_cast<char>(std::tolower(character)); });
+	result.loopback = lowerHost == "localhost" || lowerHost == "::1" ||
+		lowerHost.compare(0, 4, "127.") == 0;
+	result.valid = true;
+	return result;
+}
+
 void Endpoint::setBearerToken(std::string token) {
 	bearerToken = trimCopy(token);
 }
@@ -652,6 +762,13 @@ bool Endpoint::hasBearerToken() const {
 }
 
 HttpResponse Endpoint::perform(HttpRequest request) const {
+	const EndpointUrlValidation validation = validateBaseUrl(baseUrl);
+	if (!validation) {
+		HttpResponse response;
+		response.failure = RequestFailure::Validation;
+		response.error = "invalid endpoint configuration: " + validation.error;
+		return response;
+	}
 	if (request.url.compare(0, 7, "http://") != 0 &&
 		request.url.compare(0, 8, "https://") != 0) {
 		if (request.url.empty() || request.url.front() != '/') {
@@ -838,9 +955,6 @@ ChatResult Endpoint::chat(
 
 std::string Endpoint::normalizeBaseUrl(const std::string & baseUrl) {
 	std::string normalized = stripTrailingSlash(trimCopy(baseUrl));
-	if (normalized.empty()) {
-		normalized = "http://127.0.0.1:8080";
-	}
 	for (const char * suffixValue : {
 		"/v1/chat/completions",
 		"/chat/completions",
