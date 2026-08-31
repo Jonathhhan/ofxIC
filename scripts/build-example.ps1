@@ -1,4 +1,6 @@
 param(
+	[ValidatePattern('^[A-Za-z0-9._-]+$')]
+	[string] $Example = "ofxICExample",
 	[ValidateSet("Debug", "Release")]
 	[string] $Configuration = "Release",
 	[ValidateSet("x64")]
@@ -13,9 +15,9 @@ param(
 $ErrorActionPreference = "Stop"
 $repository = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot ".."))
 $openFrameworksRoot = [System.IO.Path]::GetFullPath((Join-Path $repository "..\.."))
-$exampleDirectory = Join-Path $repository "ofxICExample"
-$solution = Join-Path $exampleDirectory "ofxICExample.sln"
-$executable = Join-Path $exampleDirectory "bin\ofxICExample.exe"
+$exampleDirectory = Join-Path $repository $Example
+$solution = Join-Path $exampleDirectory ($Example + ".sln")
+$executable = Join-Path $exampleDirectory ("bin\" + $Example + ".exe")
 
 function Resolve-ProjectGenerator {
 	if ($ProjectGenerator) {
@@ -95,7 +97,7 @@ if ($UpdateProject) {
 if (-not (Test-Path -LiteralPath $solution -PathType Leaf)) {
 	throw "Generated solution is missing: $solution"
 }
-$project = Join-Path $exampleDirectory "ofxICExample.vcxproj"
+$project = Join-Path $exampleDirectory ($Example + ".vcxproj")
 if (-not (Test-Path -LiteralPath $project -PathType Leaf)) {
 	throw "Generated Visual Studio project is missing: $project"
 }
@@ -115,7 +117,7 @@ if ($missingSources.Count -gt 0) {
 Write-Output "Verified generated project source membership"
 
 $runningExamples = @(
-	Get-CimInstance Win32_Process -Filter "Name = 'ofxICExample.exe'" `
+	Get-CimInstance Win32_Process -Filter ("Name = '" + $Example + ".exe'") `
 		-ErrorAction SilentlyContinue |
 		Where-Object {
 			$_.ExecutablePath -and
@@ -125,7 +127,7 @@ $runningExamples = @(
 		})
 if ($runningExamples.Count -gt 0) {
 	$pids = ($runningExamples | ForEach-Object { $_.ProcessId }) -join ", "
-	throw "Close the running ofxICExample before rebuilding (PID: $pids)."
+	throw "Close the running $Example before rebuilding (PID: $pids)."
 }
 
 $builder = Resolve-MsBuild
@@ -147,3 +149,7 @@ if ($target -eq "Rebuild" -and $artifact.LastWriteTimeUtc -lt $started.AddSecond
 Write-Output ("Built: " + $artifact.FullName)
 Write-Output ("Timestamp: " + $artifact.LastWriteTime.ToString("yyyy-MM-dd HH:mm:ss"))
 Write-Output ("Bytes: " + $artifact.Length)
+if ($Example -eq "ofxICExample") {
+	& (Join-Path $PSScriptRoot "stage-installed-runtimes.ps1")
+	if ($LASTEXITCODE -ne 0) { throw "Runtime staging failed with exit code $LASTEXITCODE" }
+}

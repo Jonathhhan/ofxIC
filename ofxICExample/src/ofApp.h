@@ -60,8 +60,15 @@ private:
 	void stopLocalWhisperServer();
 	void startLocalSamBridge();
 	void stopLocalSamBridge();
+	void startRuntimeInstaller(const std::string & runtime,
+		const std::string & script, const std::vector<std::string> & arguments = {});
+	void updateRuntimeInstaller();
 	void updateManagedProcess(ofxICExample::ManagedProcess & process,
 		std::string & processStatus, const std::string & logName);
+	void configureRuntimeAutomation();
+	void updateRuntimeAutomation();
+	void finishRuntimeAutomation(const std::string & state,
+		const std::string & status);
 	bool deferUntilRuntimeReady(DeferredTask task);
 	void continueDeferredTask();
 	void cancelDeferredTask();
@@ -154,20 +161,39 @@ private:
 	bool stableDiffusionCompleteCheckpoint = false;
 	bool stableDiffusionOffloadToCpu = false;
 	ofxICExample::ManagedProcess stableDiffusionProcess;
+	std::string stableDiffusionActiveModelPath;
 	std::string stableDiffusionServerStatus = "Local sd-server is stopped.";
 	std::array<char, 1024> aceStepServerPath{};
+	std::string detectedAceStepServerPath;
 	std::array<char, 2048> aceStepServerArguments{};
+	std::array<char, 1024> aceStepModelDirectory{};
 	ofxICExample::ManagedProcess aceStepProcess;
 	std::string aceStepServerStatus = "Local ACE-Step server is stopped.";
 	std::array<char, 1024> whisperServerPath{};
+	std::string detectedWhisperServerPath;
 	std::array<char, 1024> whisperModelPath{};
 	std::array<char, 2048> whisperServerArguments{};
 	ofxICExample::ManagedProcess whisperProcess;
 	std::string whisperServerStatus = "Local whisper.cpp server is stopped.";
 	std::array<char, 1024> samBridgeExecutablePath{};
+	std::string detectedSamPythonPath;
 	std::array<char, 2048> samBridgeArguments{};
+	std::array<char, 1024> samRunnerPath{};
+	std::string detectedSamRunnerPath;
+	std::array<char, 1024> samModelPath{};
+	bool samCuda = true;
 	ofxICExample::ManagedProcess samBridgeProcess;
 	std::string samBridgeProcessStatus = "Local SAM bridge is stopped.";
+	std::string runtimeAutomation;
+	std::string runtimeAutomationResultPath;
+	std::uint64_t runtimeAutomationStartedAtMillis = 0;
+	std::uint64_t runtimeAutomationTimeoutMillis = 900000;
+	bool runtimeAutomationPlanOnly = false;
+	bool runtimeAutomationFinished = false;
+	ofxICExample::ManagedProcess installerProcess;
+	std::string installerTarget;
+	std::string installerStatus = "No runtime installer is currently running.";
+	bool installerCompletionHandled = true;
 	std::array<char, 256> transcriptionModel{};
 	std::array<char, 256> mediaImageModel{};
 	std::array<char, 256> mediaVideoModel{};

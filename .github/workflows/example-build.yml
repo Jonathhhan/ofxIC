@@ -24,6 +24,8 @@ on:
     paths:
       - "src/**"
       - "addon_config.mk"
+      - "example-chat/**"
+      - "example-documents/**"
       - "ofxICExample/**"
       - "scripts/build-example.ps1"
       - "scripts/validate-windows.ps1"
@@ -32,6 +34,7 @@ on:
       - "tests/runtime_no_listener_fixture.py"
       - "tests/transcription_endpoint_fixture.py"
       - "tests/image_endpoint_fixture.py"
+      - "tests/acestep_endpoint_fixture.py"
       - ".github/workflows/example-build.yml"
   push:
     branches:
@@ -41,6 +44,8 @@ on:
     paths:
       - "src/**"
       - "addon_config.mk"
+      - "example-chat/**"
+      - "example-documents/**"
       - "ofxICExample/**"
       - "scripts/build-example.ps1"
       - "scripts/validate-windows.ps1"
@@ -49,6 +54,7 @@ on:
       - "tests/runtime_no_listener_fixture.py"
       - "tests/transcription_endpoint_fixture.py"
       - "tests/image_endpoint_fixture.py"
+      - "tests/acestep_endpoint_fixture.py"
       - ".github/workflows/example-build.yml"
 
 permissions:
@@ -136,16 +142,30 @@ jobs:
           git -C "$OF_ROOT/addons/ofxImGui" fetch --depth 1 origin "$OFXIMGUI_COMMIT"
           git -C "$OF_ROOT/addons/ofxImGui" checkout --detach FETCH_HEAD
           app="$OF_ROOT/apps/myApps/ofxICExample"
+          minimal_app="$OF_ROOT/apps/myApps/example-chat"
+          documents_app="$OF_ROOT/apps/myApps/example-documents"
           mkdir -p "${app%/*}"
           cp -R "$GITHUB_WORKSPACE/ofxICExample" "$app"
+          cp -R "$GITHUB_WORKSPACE/example-chat" "$minimal_app"
+          cp -R "$GITHUB_WORKSPACE/example-documents" "$documents_app"
           cp "$OF_ROOT/scripts/templates/linux64/Makefile" "$app/Makefile"
           cp "$OF_ROOT/scripts/templates/linux64/config.make" "$app/config.make"
+          cp "$OF_ROOT/scripts/templates/linux64/Makefile" "$minimal_app/Makefile"
+          cp "$OF_ROOT/scripts/templates/linux64/config.make" "$minimal_app/config.make"
+          cp "$OF_ROOT/scripts/templates/linux64/Makefile" "$documents_app/Makefile"
+          cp "$OF_ROOT/scripts/templates/linux64/config.make" "$documents_app/config.make"
 
       - name: Build example
         shell: bash
         run: |
           set -euo pipefail
           app="$OF_ROOT/apps/myApps/ofxICExample"
+          minimal_app="$OF_ROOT/apps/myApps/example-chat"
+          documents_app="$OF_ROOT/apps/myApps/example-documents"
+          make -C "$minimal_app" Release -j2
+          test -x "$minimal_app/bin/example-chat"
+          make -C "$documents_app" Release -j2
+          test -x "$documents_app/bin/example-documents"
           make -C "$app" Release -j2
           test -x "$app/bin/ofxICExample"
           echo "Built with $OF_NIGHTLY_ASSET"

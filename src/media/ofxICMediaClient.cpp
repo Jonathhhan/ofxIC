@@ -89,6 +89,64 @@ std::vector<std::string> extractAllStringFields(
 	return values;
 }
 
+std::size_t matchingDelimiter(const std::string & json, std::size_t openPosition,
+	char openDelimiter, char closeDelimiter) {
+	int depth = 0;
+	bool inString = false;
+	bool escaped = false;
+	for (std::size_t position = openPosition; position < json.size(); ++position) {
+		const char character = json[position];
+		if (inString) {
+			if (escaped) escaped = false;
+			else if (character == '\\') escaped = true;
+			else if (character == '"') inString = false;
+			continue;
+		}
+		if (character == '"') inString = true;
+		else if (character == openDelimiter) ++depth;
+		else if (character == closeDelimiter && --depth == 0) return position;
+	}
+	return std::string::npos;
+}
+
+std::string extractArrayField(const std::string & json, const std::string & key,
+	std::size_t searchFrom = 0) {
+	const std::string quoted = "\"" + key + "\"";
+	const std::size_t keyPosition = json.find(quoted, searchFrom);
+	if (keyPosition == std::string::npos) return {};
+	std::size_t position = json.find(':', keyPosition + quoted.size());
+	if (position == std::string::npos) return {};
+	++position;
+	while (position < json.size() &&
+		std::isspace(static_cast<unsigned char>(json[position]))) ++position;
+	if (position >= json.size() || json[position] != '[') return {};
+	const std::size_t end = matchingDelimiter(json, position, '[', ']');
+	return end == std::string::npos ? std::string{} :
+		json.substr(position, end - position + 1U);
+}
+
+std::vector<std::string> extractStringArrayField(const std::string & json,
+	const std::string & key, std::size_t searchFrom = 0) {
+	const std::string array = extractArrayField(json, key, searchFrom);
+	std::vector<std::string> result;
+	std::size_t position = 1;
+	while (position < array.size()) {
+		while (position < array.size() && array[position] != '"') ++position;
+		if (position >= array.size()) break;
+		const std::string value = extractJsonStringAt(array, position);
+		if (value.empty()) break;
+		result.push_back(value);
+		++position;
+		bool escaped = false;
+		for (; position < array.size(); ++position) {
+			if (escaped) escaped = false;
+			else if (array[position] == '\\') escaped = true;
+			else if (array[position] == '"') { ++position; break; }
+		}
+	}
+	return result;
+}
+
 int extractIntField(const std::string & json, const std::string & key) {
 	const std::string quoted = "\"" + key + "\"";
 	const std::size_t keyPosition = json.find(quoted);
@@ -131,6 +189,31 @@ void applyResponseFailure(const HttpResponse & response, bool & cancelled,
 	RequestFailure & failure) {
 	cancelled = response.cancelled;
 	failure = response.cancelled ? RequestFailure::Cancelled : response.failure;
+}
+
+MediaJob mediaFailure(MediaKind kind, std::string message,
+	RequestFailure failure = RequestFailure::InvalidResponse, int httpStatus = 0,
+	std::string rawResponse = {}) {
+	MediaJob result;
+	result.kind = kind;
+	result.failure = failure;
+	result.httpStatus = httpStatus;
+	result.error = std::move(message);
+	result.rawResponse = std::move(rawResponse);
+	return result;
+}
+
+bool contains(const std::vector<std::string> & values, const std::string & value) {
+	return std::find(values.begin(), values.end(), value) != values.end();
+}
+
+std::string preferredVideoFormat(const std::vector<std::string> & formats) {
+	// MJPG AVI is decoded by the stock Windows Media Foundation player. WebM is
+	// preferred only when AVI is unavailable because sd-server may be built
+	// without its optional WebM encoder.
+	for (const char * preferred : { "avi", "webm", "webp" })
+		if (contains(formats, preferred)) return preferred;
+	return {};
 }
 
 } // namespace
@@ -200,14 +283,65 @@ MediaJob MediaClient::submit(const MediaJobRequest & request, RequestControl con
 		result.error = "media prompt is empty";
 		return result;
 	}
+	MediaJobRequest effectiveRequest = request;
+	if (request.kind == MediaKind::Video) {
+		HttpRequest capabilitiesRequest;
+		capabilitiesRequest.method = HttpMethod::Get;
+		capabilitiesRequest.url = "/sdcpp/v1/capabilities";
+		capabilitiesRequest.accept = "application/json";
+		capabilitiesRequest.useBearerToken = false;
+		applyControl(capabilitiesRequest, control, 30);
+		const HttpResponse capabilities = endpoint.perform(std::move(capabilitiesRequest));
+		if (!capabilities.started) {
+			return mediaFailure(request.kind,
+				capabilities.error.empty()
+					? "could not inspect sd-server video capabilities"
+					: capabilities.error,
+				capabilities.failure == RequestFailure::None
+					? RequestFailure::Transport : capabilities.failure,
+				capabilities.status, capabilities.body);
+		}
+		if (capabilities.status < 200 || capabilities.status >= 300) {
+			return mediaFailure(request.kind,
+				"sd-server capability endpoint returned HTTP " +
+					std::to_string(capabilities.status), RequestFailure::Provider,
+				capabilities.status, capabilities.body);
+		}
+		const std::vector<std::string> modes = extractStringArrayField(
+			capabilities.body, "supported_modes");
+		const std::string model = extractStringField(capabilities.body, "name");
+		if (!contains(modes, "vid_gen")) {
+			return mediaFailure(request.kind,
+				"loaded sd-server model" + (model.empty() ? std::string{} : " " + model) +
+				" does not support video generation; select a WAN, LTX-Video, "
+				"AnimateDiff, or another vid_gen-capable model and restart sd-server");
+		}
+		const std::size_t formatsObject = capabilities.body.find(
+			"\"output_formats_by_mode\"");
+		const std::vector<std::string> formats = formatsObject == std::string::npos
+			? std::vector<std::string>{}
+			: extractStringArrayField(capabilities.body, "vid_gen", formatsObject);
+		if (effectiveRequest.outputFormat.empty()) {
+			effectiveRequest.outputFormat = preferredVideoFormat(formats);
+			if (effectiveRequest.outputFormat.empty()) {
+				return mediaFailure(request.kind,
+					"sd-server reports video support but no compatible AVI, WebM, or WebP output format");
+			}
+		} else if (!contains(formats, effectiveRequest.outputFormat)) {
+			return mediaFailure(request.kind,
+				"sd-server does not support requested video format " +
+				effectiveRequest.outputFormat);
+		}
+	}
 	HttpRequest httpRequest;
 	httpRequest.method = HttpMethod::Post;
-	httpRequest.url = request.kind == MediaKind::Video
+	httpRequest.url = effectiveRequest.kind == MediaKind::Video
 		? "/sdcpp/v1/vid_gen"
 		: "/sdcpp/v1/img_gen";
-	httpRequest.body = buildJobBody(request);
+	httpRequest.body = buildJobBody(effectiveRequest);
+	httpRequest.useBearerToken = false;
 	applyControl(httpRequest, std::move(control), 180);
-	return parseJob(endpoint.perform(std::move(httpRequest)), request.kind);
+	return parseJob(endpoint.perform(std::move(httpRequest)), effectiveRequest.kind);
 }
 
 MediaJob MediaClient::poll(const MediaJob & job, RequestControl control) const {
@@ -333,7 +467,10 @@ MediaJob MediaClient::parseJob(
 	if (response.status < 200 || response.status >= 300) {
 		result.failure = RequestFailure::Provider;
 		result.error = "media endpoint returned HTTP " + std::to_string(response.status);
-		if (!response.error.empty()) result.error += ": " + response.error;
+		std::string detail = extractStringField(response.body, "message");
+		if (detail.empty()) detail = extractStringField(response.body, "error");
+		if (detail.empty()) detail = response.error;
+		if (!detail.empty()) result.error += ": " + detail;
 		return result;
 	}
 	result.id = extractStringField(response.body, "id");

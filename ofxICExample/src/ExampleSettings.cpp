@@ -12,7 +12,7 @@
 namespace ofxICExample {
 namespace {
 
-constexpr int settingsVersion = 2;
+constexpr int settingsVersion = 3;
 
 bool parseString(const std::string & value, std::string & destination) {
 	if (value.empty() || value.front() != '"') return false;
@@ -140,11 +140,15 @@ bool validSettings(const ExampleSettings & settings) {
 		settings.musicOutputFormat >= 0 && settings.musicOutputFormat <= 1 &&
 		validText(settings.aceStepServerPath, 1024) &&
 		validText(settings.aceStepServerArguments, 2048) &&
+		validText(settings.aceStepModelDirectory, 1024) &&
 		validText(settings.whisperServerPath, 1024) &&
 		validText(settings.whisperModelPath, 1024) &&
 		validText(settings.whisperServerArguments, 2048) &&
 		validText(settings.samBridgeExecutablePath, 1024) &&
-		validText(settings.samBridgeArguments, 2048);
+		validText(settings.samBridgeArguments, 2048) &&
+		validText(settings.samRunnerPath, 1024) &&
+		validText(settings.samModelPath, 1024) &&
+		settings.samCuda >= 0 && settings.samCuda <= 1;
 }
 
 std::string normalizedUrl(std::string url) {
@@ -327,6 +331,8 @@ SettingsLoadStatus loadSettings(const std::string & path, ExampleSettings & sett
 			valid = parseString(value, parsed.aceStepServerPath);
 		} else if (key == "ace_step_server_arguments") {
 			valid = parseString(value, parsed.aceStepServerArguments);
+		} else if (key == "ace_step_model_directory") {
+			valid = parseString(value, parsed.aceStepModelDirectory);
 		} else if (key == "whisper_server_path") {
 			valid = parseString(value, parsed.whisperServerPath);
 		} else if (key == "whisper_model_path") {
@@ -337,6 +343,12 @@ SettingsLoadStatus loadSettings(const std::string & path, ExampleSettings & sett
 			valid = parseString(value, parsed.samBridgeExecutablePath);
 		} else if (key == "sam_bridge_arguments") {
 			valid = parseString(value, parsed.samBridgeArguments);
+		} else if (key == "sam_runner_path") {
+			valid = parseString(value, parsed.samRunnerPath);
+		} else if (key == "sam_model_path") {
+			valid = parseString(value, parsed.samModelPath);
+		} else if (key == "sam_cuda") {
+			valid = parseInt(value, parsed.samCuda);
 		}
 		if (!valid) return SettingsLoadStatus::Invalid;
 	}
@@ -402,11 +414,15 @@ bool saveSettings(const std::string & path, const ExampleSettings & settings) {
 		<< "music_output_format=" << settings.musicOutputFormat << '\n'
 		<< "ace_step_server_path=" << std::quoted(settings.aceStepServerPath) << '\n'
 		<< "ace_step_server_arguments=" << std::quoted(settings.aceStepServerArguments) << '\n'
+		<< "ace_step_model_directory=" << std::quoted(settings.aceStepModelDirectory) << '\n'
 		<< "whisper_server_path=" << std::quoted(settings.whisperServerPath) << '\n'
 		<< "whisper_model_path=" << std::quoted(settings.whisperModelPath) << '\n'
 		<< "whisper_server_arguments=" << std::quoted(settings.whisperServerArguments) << '\n'
 		<< "sam_bridge_executable_path=" << std::quoted(settings.samBridgeExecutablePath) << '\n'
-		<< "sam_bridge_arguments=" << std::quoted(settings.samBridgeArguments) << '\n';
+		<< "sam_bridge_arguments=" << std::quoted(settings.samBridgeArguments) << '\n'
+		<< "sam_runner_path=" << std::quoted(settings.samRunnerPath) << '\n'
+		<< "sam_model_path=" << std::quoted(settings.samModelPath) << '\n'
+		<< "sam_cuda=" << settings.samCuda << '\n';
 	return output && writeTextFileAtomically(path, output.str());
 }
 
@@ -485,7 +501,7 @@ void applyEnvironmentOverrides(
 			? "https://api.openai.com/v1"
 			: (settings.mediaBackend == 1
 				? "https://router.huggingface.co"
-				: "http://127.0.0.1:8080");
+				: "http://127.0.0.1:8081");
 		if (settings.mediaBackend == 0) settings.mediaImageModel = "gpt-image-2";
 		if (settings.mediaBackend == 1) {
 			settings.mediaImageModel = "black-forest-labs/FLUX.1-dev";

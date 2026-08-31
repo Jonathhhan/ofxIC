@@ -16,13 +16,16 @@ constexpr std::size_t maxAudioResponseBytes = 256U * 1024U * 1024U;
 AceStepMusicJob failure(std::string message, int httpStatus = 0,
 	std::string rawResponse = {},
 	RequestFailure requestFailure = RequestFailure::InvalidResponse,
-	bool cancelled = false) {
+	bool cancelled = false,
+	AceStepMusicProtocol protocol = AceStepMusicProtocol::Official15,
+	AceStepMusicJobPhase phase = AceStepMusicJobPhase::Synthesis) {
 	AceStepMusicJob result;
 	result.cancelled = cancelled;
 	result.failure = requestFailure;
 	result.httpStatus = httpStatus;
 	result.state = AceStepMusicJobState::Failed;
-	result.phase = AceStepMusicJobPhase::Synthesis;
+	result.phase = phase;
+	result.protocol = protocol;
 	result.error = std::move(message);
 	result.rawResponse = std::move(rawResponse);
 	return result;
@@ -118,7 +121,7 @@ bool extractIntegerField(const std::string & json, const std::string & key,
 	return true;
 }
 
-std::string requestBody(const AceStepMusicRequest & request) {
+std::string officialRequestBody(const AceStepMusicRequest & request) {
 	const std::string lyrics = request.instrumentalOnly ? "" : request.lyrics;
 	std::string body = "{\"prompt\":\"" + escapeJson(request.caption) +
 		"\",\"lyrics\":\"" + escapeJson(lyrics) +
@@ -140,6 +143,29 @@ std::string requestBody(const AceStepMusicRequest & request) {
 	return body + "}";
 }
 
+std::string nativeRequestBody(const AceStepMusicRequest & request) {
+	const std::string lyrics = request.instrumentalOnly ? "[Instrumental]" : request.lyrics;
+	const std::string nativeFormat = request.outputFormat == "wav" ? "wav16" : "mp3";
+	std::string body = "{\"caption\":\"" + escapeJson(request.caption) +
+		"\",\"lyrics\":\"" + escapeJson(lyrics) +
+		"\",\"task_type\":\"text2music\"" +
+		",\"duration\":" + std::to_string(request.durationSeconds) +
+		",\"lm_batch_size\":1,\"synth_batch_size\":1" +
+		",\"output_format\":\"" + nativeFormat + "\"" +
+		",\"lm_mode\":\"generate\"" +
+		",\"use_cot_caption\":" + (request.thinking ? "true" : "false") +
+		",\"vocal_language\":\"" + escapeJson(request.vocalLanguage) + "\"" +
+		",\"inference_steps\":" + std::to_string(request.inferenceSteps);
+	if (!request.nativeSynthModel.empty())
+		body += ",\"synth_model\":\"" + escapeJson(request.nativeSynthModel) + "\"";
+	if (request.seed >= 0) body += ",\"seed\":" + std::to_string(request.seed);
+	if (request.bpm > 0) body += ",\"bpm\":" + std::to_string(request.bpm);
+	if (!request.keyScale.empty()) body += ",\"keyscale\":\"" + escapeJson(request.keyScale) + "\"";
+	if (!request.timeSignature.empty()) body += ",\"timesignature\":\"" + escapeJson(request.timeSignature) + "\"";
+	if (!request.negativePrompt.empty()) body += ",\"lm_negative_prompt\":\"" + escapeJson(request.negativePrompt) + "\"";
+	return body + "}";
+}
+
 std::string validate(const AceStepMusicRequest & request) {
 	if (trimCopy(request.caption).empty()) return "music caption is empty";
 	if (request.caption.size() > 10000U) return "music caption exceeds the 10000-byte limit";
@@ -148,6 +174,7 @@ std::string validate(const AceStepMusicRequest & request) {
 	if (request.bpm < 0 || request.bpm > 400) return "bpm must be between 0 and 400";
 	if (request.inferenceSteps < 1 || request.inferenceSteps > 200) return "inference steps must be between 1 and 200";
 	if (request.model.empty() || request.model.size() > 256U) return "ACE-Step model id is invalid";
+	if (request.nativeSynthModel.size() > 256U) return "acestep.cpp synth model id is invalid";
 	if (request.vocalLanguage.empty() || request.vocalLanguage.size() > 32U) return "vocal language is invalid";
 	if (request.timeSignature.size() > 16U || request.keyScale.size() > 64U) return "music key or time signature is too long";
 	if (request.outputFormat != "mp3" && request.outputFormat != "wav") return "output format must be mp3 or wav";
@@ -182,16 +209,59 @@ bool hasExpectedAudioSignature(const std::string & bytes, const std::string & fo
 }
 
 AceStepMusicJob submittedJob(const std::string & id, const std::string & format,
-	int status, const std::string & rawResponse) {
+	int status, const std::string & rawResponse,
+	AceStepMusicProtocol protocol = AceStepMusicProtocol::Official15,
+	AceStepMusicJobPhase phase = AceStepMusicJobPhase::Synthesis) {
 	AceStepMusicJob result;
 	result.success = true;
 	result.httpStatus = status;
 	result.state = AceStepMusicJobState::Submitted;
-	result.phase = AceStepMusicJobPhase::Synthesis;
+	result.phase = phase;
+	result.protocol = protocol;
 	result.id = id;
 	result.outputFormat = format;
 	result.mimeType = format == "wav" ? "audio/wav" : "audio/mpeg";
 	result.rawResponse = rawResponse;
+	return result;
+}
+
+std::string nativeAudioBytes(const std::string & body, const std::string & format) {
+	if (hasExpectedAudioSignature(body, format)) return body;
+	if (body.size() < 8U || body.compare(0, 2, "--") != 0) return {};
+	const std::size_t firstLineEnd = body.find("\r\n");
+	if (firstLineEnd == std::string::npos || firstLineEnd > 200U) return {};
+	const std::string boundary = body.substr(0, firstLineEnd);
+	std::size_t part = 0;
+	while ((part = body.find(boundary, part)) != std::string::npos) {
+		const std::size_t headersStart = part + boundary.size();
+		const std::size_t headersEnd = body.find("\r\n\r\n", headersStart);
+		if (headersEnd == std::string::npos) return {};
+		const std::size_t payloadStart = headersEnd + 4U;
+		const std::size_t next = body.find("\r\n" + boundary, payloadStart);
+		if (next == std::string::npos) return {};
+		const std::string payload = body.substr(payloadStart, next - payloadStart);
+		if (hasExpectedAudioSignature(payload, format)) return payload;
+		part = next + 2U;
+	}
+	return {};
+}
+
+AceStepMusicJob completedNativeJob(const AceStepMusicJob & job,
+	const HttpResponse & response) {
+	const std::string audio = nativeAudioBytes(response.body, job.outputFormat);
+	if (audio.empty()) return failure("acestep.cpp completed without valid " +
+		job.outputFormat + " audio", response.status, response.body,
+		RequestFailure::InvalidResponse, false, AceStepMusicProtocol::NativeCpp,
+		AceStepMusicJobPhase::Synthesis);
+	AceStepMusicJob result = job;
+	result.success = true;
+	result.httpStatus = response.status;
+	result.state = AceStepMusicJobState::Completed;
+	result.phase = AceStepMusicJobPhase::Synthesis;
+	result.protocol = AceStepMusicProtocol::NativeCpp;
+	result.mimeType = job.outputFormat == "wav" ? "audio/wav" : "audio/mpeg";
+	result.audioBytes = audio;
+	result.error.clear();
 	return result;
 }
 
@@ -204,10 +274,67 @@ AceStepMusicJob AceStepMusicClient::submit(const AceStepMusicRequest & request,
 	if (control.timeoutSeconds < 0) return failure("request timeout cannot be negative");
 	const std::string validationError = validate(request);
 	if (!validationError.empty()) return failure(validationError);
+	if (request.protocol == AceStepMusicProtocol::NativeCpp) {
+		const AceStepMusicJobPhase phase = request.instrumentalOnly
+			? AceStepMusicJobPhase::Synthesis : AceStepMusicJobPhase::LanguageModel;
+		HttpRequest nativeRequest;
+		nativeRequest.method = HttpMethod::Post;
+		nativeRequest.url = phase == AceStepMusicJobPhase::Synthesis ? "/synth" : "/lm";
+		nativeRequest.body = nativeRequestBody(request);
+		nativeRequest.contentType = "application/json";
+		nativeRequest.accept = phase == AceStepMusicJobPhase::Synthesis ? "*/*" : "application/json";
+		nativeRequest.timeoutSeconds = control.timeoutSeconds > 0 ? control.timeoutSeconds : 240;
+		nativeRequest.shouldCancel = control.shouldCancel;
+		nativeRequest.maxResponseBytes = phase == AceStepMusicJobPhase::Synthesis
+			? maxAudioResponseBytes : maxJsonResponseBytes;
+		nativeRequest.useBearerToken = false;
+		const HttpResponse nativeResponse = endpoint.perform(std::move(nativeRequest));
+		if (nativeResponse.status < 200 || nativeResponse.status >= 300)
+			return failure(responseFailure(nativeResponse, phase == AceStepMusicJobPhase::Synthesis
+				? "acestep.cpp /synth" : "acestep.cpp /lm"), nativeResponse.status,
+				nativeResponse.body, responseFailureKind(nativeResponse), nativeResponse.cancelled,
+				AceStepMusicProtocol::NativeCpp, phase);
+		const std::string id = extractStringField(nativeResponse.body, "id");
+		if (validJobId(id)) return submittedJob(id, request.outputFormat,
+			nativeResponse.status, nativeResponse.body, AceStepMusicProtocol::NativeCpp, phase);
+		if (phase == AceStepMusicJobPhase::Synthesis) {
+			AceStepMusicJob immediate = submittedJob({}, request.outputFormat,
+				nativeResponse.status, nativeResponse.body, AceStepMusicProtocol::NativeCpp, phase);
+			return completedNativeJob(immediate, nativeResponse);
+		}
+		const std::string lmResult = trimCopy(nativeResponse.body);
+		if (lmResult.empty() || (lmResult.front() != '[' && lmResult.front() != '{'))
+			return failure("acestep.cpp /lm returned neither a job id nor enriched JSON",
+				nativeResponse.status, nativeResponse.body, RequestFailure::InvalidResponse,
+				false, AceStepMusicProtocol::NativeCpp, phase);
+		HttpRequest synth;
+		synth.method = HttpMethod::Post;
+		synth.url = "/synth";
+		synth.body = lmResult;
+		synth.contentType = "application/json";
+		synth.accept = "*/*";
+		synth.timeoutSeconds = control.timeoutSeconds > 0 ? control.timeoutSeconds : 300;
+		synth.shouldCancel = std::move(control.shouldCancel);
+		synth.maxResponseBytes = maxAudioResponseBytes;
+		synth.useBearerToken = false;
+		const HttpResponse synthResponse = endpoint.perform(std::move(synth));
+		if (synthResponse.status < 200 || synthResponse.status >= 300)
+			return failure(responseFailure(synthResponse, "acestep.cpp /synth"), synthResponse.status,
+				synthResponse.body, responseFailureKind(synthResponse), synthResponse.cancelled,
+				AceStepMusicProtocol::NativeCpp, AceStepMusicJobPhase::Synthesis);
+		const std::string synthId = extractStringField(synthResponse.body, "id");
+		if (validJobId(synthId)) return submittedJob(synthId, request.outputFormat,
+			synthResponse.status, synthResponse.body, AceStepMusicProtocol::NativeCpp,
+			AceStepMusicJobPhase::Synthesis);
+		AceStepMusicJob immediate = submittedJob({}, request.outputFormat,
+			synthResponse.status, synthResponse.body, AceStepMusicProtocol::NativeCpp,
+			AceStepMusicJobPhase::Synthesis);
+		return completedNativeJob(immediate, synthResponse);
+	}
 	HttpRequest httpRequest;
 	httpRequest.method = HttpMethod::Post;
 	httpRequest.url = "/release_task";
-	httpRequest.body = requestBody(request);
+	httpRequest.body = officialRequestBody(request);
 	httpRequest.contentType = "application/json";
 	httpRequest.accept = "application/json";
 	httpRequest.timeoutSeconds = control.timeoutSeconds > 0 ? control.timeoutSeconds : 240;
@@ -234,6 +361,92 @@ AceStepMusicJob AceStepMusicClient::poll(const AceStepMusicJob & job,
 	if (control.timeoutSeconds < 0) return failure("request timeout cannot be negative");
 	if (!validJobId(job.id)) return failure("ACE-Step music job id is invalid");
 	if (job.outputFormat != "mp3" && job.outputFormat != "wav") return failure("ACE-Step music job output format must be mp3 or wav");
+	if (job.protocol == AceStepMusicProtocol::NativeCpp) {
+		HttpRequest statusRequest;
+		statusRequest.method = HttpMethod::Get;
+		statusRequest.url = "/job?id=" + job.id;
+		statusRequest.accept = "application/json";
+		statusRequest.timeoutSeconds = control.timeoutSeconds > 0 ? control.timeoutSeconds : 30;
+		statusRequest.shouldCancel = control.shouldCancel;
+		statusRequest.maxResponseBytes = maxJsonResponseBytes;
+		statusRequest.useBearerToken = false;
+		const HttpResponse statusResponse = endpoint.perform(std::move(statusRequest));
+		if (statusResponse.status < 200 || statusResponse.status >= 300) {
+			AceStepMusicJob result = failure(responseFailure(statusResponse, "acestep.cpp /job"),
+				statusResponse.status, statusResponse.body, responseFailureKind(statusResponse),
+				statusResponse.cancelled, AceStepMusicProtocol::NativeCpp, job.phase);
+			result.id = job.id;
+			result.outputFormat = job.outputFormat;
+			return result;
+		}
+		const std::string status = extractStringField(statusResponse.body, "status");
+		if (status == "running" || status == "queued") {
+			AceStepMusicJob result = job;
+			result.success = true;
+			result.httpStatus = statusResponse.status;
+			result.state = AceStepMusicJobState::Generating;
+			result.rawResponse = statusResponse.body;
+			return result;
+		}
+		if (status == "failed" || status == "cancelled") {
+			std::string detail = extractStringField(statusResponse.body, "error");
+			if (detail.empty()) detail = extractStringField(statusResponse.body, "message");
+			AceStepMusicJob result = failure("acestep.cpp job " + status +
+				(detail.empty() ? std::string{} : ": " + detail), statusResponse.status,
+				statusResponse.body, status == "cancelled" ? RequestFailure::Cancelled : RequestFailure::Provider,
+				status == "cancelled", AceStepMusicProtocol::NativeCpp, job.phase);
+			result.id = job.id;
+			result.outputFormat = job.outputFormat;
+			return result;
+		}
+		if (status != "done") return failure("acestep.cpp /job returned unsupported status " + status,
+			statusResponse.status, statusResponse.body, RequestFailure::InvalidResponse,
+			false, AceStepMusicProtocol::NativeCpp, job.phase);
+		HttpRequest resultRequest;
+		resultRequest.method = HttpMethod::Get;
+		resultRequest.url = "/job?id=" + job.id + "&result=1";
+		resultRequest.accept = job.phase == AceStepMusicJobPhase::LanguageModel ? "application/json" : "*/*";
+		resultRequest.timeoutSeconds = control.timeoutSeconds > 0 ? control.timeoutSeconds : 300;
+		resultRequest.shouldCancel = control.shouldCancel;
+		resultRequest.maxResponseBytes = job.phase == AceStepMusicJobPhase::LanguageModel
+			? maxJsonResponseBytes : maxAudioResponseBytes;
+		resultRequest.useBearerToken = false;
+		const HttpResponse resultResponse = endpoint.perform(std::move(resultRequest));
+		if (resultResponse.status < 200 || resultResponse.status >= 300)
+			return failure(responseFailure(resultResponse, "acestep.cpp job result"), resultResponse.status,
+				resultResponse.body, responseFailureKind(resultResponse), resultResponse.cancelled,
+				AceStepMusicProtocol::NativeCpp, job.phase);
+		if (job.phase == AceStepMusicJobPhase::Synthesis)
+			return completedNativeJob(job, resultResponse);
+		const std::string lmResult = trimCopy(resultResponse.body);
+		if (lmResult.empty() || (lmResult.front() != '[' && lmResult.front() != '{'))
+			return failure("acestep.cpp LM job returned invalid enriched JSON", resultResponse.status,
+				resultResponse.body, RequestFailure::InvalidResponse, false,
+				AceStepMusicProtocol::NativeCpp, AceStepMusicJobPhase::LanguageModel);
+		HttpRequest synth;
+		synth.method = HttpMethod::Post;
+		synth.url = "/synth";
+		synth.body = lmResult;
+		synth.contentType = "application/json";
+		synth.accept = "application/json";
+		synth.timeoutSeconds = control.timeoutSeconds > 0 ? control.timeoutSeconds : 240;
+		synth.shouldCancel = std::move(control.shouldCancel);
+		synth.maxResponseBytes = maxJsonResponseBytes;
+		synth.useBearerToken = false;
+		const HttpResponse synthResponse = endpoint.perform(std::move(synth));
+		if (synthResponse.status < 200 || synthResponse.status >= 300)
+			return failure(responseFailure(synthResponse, "acestep.cpp /synth"), synthResponse.status,
+				synthResponse.body, responseFailureKind(synthResponse), synthResponse.cancelled,
+				AceStepMusicProtocol::NativeCpp, AceStepMusicJobPhase::Synthesis);
+		const std::string synthId = extractStringField(synthResponse.body, "id");
+		if (validJobId(synthId)) return submittedJob(synthId, job.outputFormat,
+			synthResponse.status, synthResponse.body, AceStepMusicProtocol::NativeCpp,
+			AceStepMusicJobPhase::Synthesis);
+		AceStepMusicJob immediate = job;
+		immediate.id.clear();
+		immediate.phase = AceStepMusicJobPhase::Synthesis;
+		return completedNativeJob(immediate, synthResponse);
+	}
 	HttpRequest query;
 	query.method = HttpMethod::Post;
 	query.url = "/query_result";

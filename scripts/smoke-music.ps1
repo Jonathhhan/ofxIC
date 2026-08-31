@@ -2,7 +2,9 @@ param(
 	[string] $Executable = (Join-Path $PSScriptRoot "..\ofxICExample\bin\ofxICExample.exe"),
 	[int] $Port = 18086,
 	[switch] $Live,
-	[string] $Endpoint = "http://127.0.0.1:8085"
+	[string] $Endpoint = "http://127.0.0.1:8085",
+	[string] $AceStepServer = "",
+	[string] $ModelDirectory = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -11,6 +13,8 @@ $executablePath = [System.IO.Path]::GetFullPath($Executable)
 $fixtureServer = Join-Path $repository "tests\acestep_endpoint_fixture.py"
 $temporary = Join-Path ([System.IO.Path]::GetTempPath()) ("ofxIC-music-" + [guid]::NewGuid())
 $resultPath = Join-Path $temporary "result.txt"
+$stdoutPath = Join-Path $temporary "workbench.stdout.log"
+$stderrPath = Join-Path $temporary "workbench.stderr.log"
 $generatedPath = $null
 
 if (-not (Test-Path -LiteralPath $executablePath)) {
@@ -30,11 +34,38 @@ $previous = @{
 	Format = $env:OFXIC_MUSIC_OUTPUT_FORMAT
 	Result = $env:OFXIC_MUSIC_RESULT_PATH
 	Settings = $env:OFXIC_SETTINGS_PATH
+	AceStepServer = $env:OFXIC_ACESTEP_SERVER
+	AceStepArguments = $env:OFXIC_ACESTEP_SERVER_ARGS
+	AceStepModels = $env:OFXIC_ACESTEP_MODELS
 }
 $server = $null
 $example = $null
 try {
 	New-Item -ItemType Directory -Path $temporary | Out-Null
+	if ($Live) {
+		if ([string]::IsNullOrWhiteSpace($AceStepServer)) {
+			$serverRoot = Join-Path $env:LOCALAPPDATA "ofxIC\servers"
+			$AceStepServer = Get-ChildItem -LiteralPath $serverRoot -Directory -ErrorAction SilentlyContinue |
+				Where-Object Name -Like "acestep.cpp-*" |
+				ForEach-Object { Get-Item -LiteralPath (Join-Path $_.FullName "ace-server.exe") -ErrorAction SilentlyContinue } |
+				Sort-Object LastWriteTime -Descending |
+				Select-Object -First 1 -ExpandProperty FullName
+		}
+		if ([string]::IsNullOrWhiteSpace($AceStepServer) -or
+			-not (Test-Path -LiteralPath $AceStepServer -PathType Leaf)) {
+			throw "Native ACE-Step server not found. Run scripts\install-acestep-server.ps1."
+		}
+		if ([string]::IsNullOrWhiteSpace($ModelDirectory)) {
+			$ModelDirectory = if (Test-Path -LiteralPath "G:\Models" -PathType Container) {
+				"G:\Models"
+			} else {
+				Join-Path $env:LOCALAPPDATA "ofxIC\models\acestep.cpp"
+			}
+		}
+		if (-not (Test-Path -LiteralPath $ModelDirectory -PathType Container)) {
+			throw "ACE-Step model directory not found: $ModelDirectory"
+		}
+	}
 	if (-not $Live) {
 		$quotedFixture = '"' + $fixtureServer + '"'
 		$server = Start-Process -FilePath "python.exe" -ArgumentList @(
@@ -66,12 +97,19 @@ try {
 	} else {
 		"deterministic timestamp music"
 	}
-	$env:OFXIC_MUSIC_DURATION = if ($Live) { "4" } else { "1" }
+	$env:OFXIC_MUSIC_DURATION = if ($Live) { "10" } else { "1" }
 	$env:OFXIC_MUSIC_OUTPUT_FORMAT = "wav"
 	$env:OFXIC_MUSIC_RESULT_PATH = $resultPath
 	$env:OFXIC_SETTINGS_PATH = (Join-Path $temporary "settings")
+	if ($Live) {
+		$env:OFXIC_ACESTEP_SERVER = $AceStepServer
+		$env:OFXIC_ACESTEP_MODELS = $ModelDirectory
+		$env:OFXIC_ACESTEP_SERVER_ARGS =
+			'--models "' + $ModelDirectory + '" --host 127.0.0.1 --port 8085'
+	}
 	$example = Start-Process -FilePath $executablePath `
-		-WorkingDirectory (Split-Path $executablePath) -WindowStyle Hidden -PassThru
+		-WorkingDirectory (Split-Path $executablePath) -WindowStyle Hidden `
+		-RedirectStandardOutput $stdoutPath -RedirectStandardError $stderrPath -PassThru
 
 	$timeoutSeconds = if ($Live) { 1200 } else { 20 }
 	$deadline = [DateTime]::UtcNow.AddSeconds($timeoutSeconds)
@@ -87,7 +125,14 @@ try {
 		$result,
 		'(?m)^Saved(?: and playing|, but playback could not load): (.+\.wav)\r?$')
 	if ($result -notmatch "completed" -or -not $pathMatch.Success) {
-		throw "Unexpected music GUI evidence: $result"
+		$logTail = @()
+		if (Test-Path -LiteralPath $stdoutPath) {
+			$logTail += Get-Content -LiteralPath $stdoutPath -Tail 120
+		}
+		if (Test-Path -LiteralPath $stderrPath) {
+			$logTail += Get-Content -LiteralPath $stderrPath -Tail 120
+		}
+		throw "Unexpected music GUI evidence: $result`nWorkbench/server log tail:`n$($logTail -join "`n")"
 	}
 	$generatedPath = $pathMatch.Groups[1].Value
 	if (-not (Test-Path -LiteralPath $generatedPath)) {
@@ -109,7 +154,7 @@ try {
 	if ($server -and -not $server.HasExited) {
 		Stop-Process -Id $server.Id -Force -ErrorAction SilentlyContinue
 	}
-	if ($generatedPath -and (Test-Path -LiteralPath $generatedPath)) {
+	if (-not $Live -and $generatedPath -and (Test-Path -LiteralPath $generatedPath)) {
 		Remove-Item -LiteralPath $generatedPath -Force
 	}
 	$env:OFXIC_ENDPOINT_URL = $previous.Endpoint
@@ -121,6 +166,9 @@ try {
 	$env:OFXIC_MUSIC_OUTPUT_FORMAT = $previous.Format
 	$env:OFXIC_MUSIC_RESULT_PATH = $previous.Result
 	$env:OFXIC_SETTINGS_PATH = $previous.Settings
+	$env:OFXIC_ACESTEP_SERVER = $previous.AceStepServer
+	$env:OFXIC_ACESTEP_SERVER_ARGS = $previous.AceStepArguments
+	$env:OFXIC_ACESTEP_MODELS = $previous.AceStepModels
 	if (Test-Path -LiteralPath $temporary) {
 		Remove-Item -LiteralPath $temporary -Recurse -Force
 	}

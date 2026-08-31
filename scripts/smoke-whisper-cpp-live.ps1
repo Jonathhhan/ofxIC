@@ -7,7 +7,8 @@ param(
 	[string] $Audio,
 	[string] $Executable = (Join-Path $PSScriptRoot "..\ofxICExample\bin\ofxICExample.exe"),
 	[int] $Port = 18084,
-	[int] $TimeoutSeconds = 90
+	[int] $TimeoutSeconds = 90,
+	[switch] $Cpu
 )
 
 $ErrorActionPreference = "Stop"
@@ -15,6 +16,9 @@ $serverPath = [System.IO.Path]::GetFullPath($Server)
 $modelPath = [System.IO.Path]::GetFullPath($Model)
 $audioPath = [System.IO.Path]::GetFullPath($Audio)
 $executablePath = [System.IO.Path]::GetFullPath($Executable)
+if ($env:OFXIC_RUN_LIVE_WHISPER -ne "1") {
+	throw "Set OFXIC_RUN_LIVE_WHISPER=1 to allow the real model-backed Whisper smoke"
+}
 foreach ($required in @($serverPath, $modelPath, $audioPath, $executablePath)) {
 	if (-not (Test-Path -LiteralPath $required -PathType Leaf)) {
 		throw "Required live-smoke input is missing: $required"
@@ -38,7 +42,8 @@ $example = $null
 try {
 	New-Item -ItemType Directory -Path $temporary | Out-Null
 	$arguments = @('-m', ('"' + $modelPath + '"'), '--host', '127.0.0.1',
-		'--port', $Port, '--no-gpu', '--no-timestamps')
+		'--port', $Port, '--no-timestamps')
+	if ($Cpu) { $arguments += '--no-gpu' }
 	$serverProcess = Start-Process -FilePath $serverPath -ArgumentList $arguments `
 		-WorkingDirectory (Split-Path $serverPath) -WindowStyle Hidden -PassThru `
 		-RedirectStandardOutput $serverOut -RedirectStandardError $serverErr
@@ -79,11 +84,14 @@ try {
 	$lines = Get-Content -LiteralPath $resultPath
 	$status = $lines | Select-Object -First 1
 	$transcript = ($lines | Select-Object -Skip 1) -join "`n"
-	if ($status -ne "Transcription completed" -or $transcript.Trim().Length -lt 20) {
+	$evidence = $transcript.Trim()
+	if ($status -ne "Transcription completed" -or $evidence.Length -lt 2 -or
+		$evidence -match '(?i)fixture|mock transcript') {
 		throw "Unexpected live transcription evidence: $status`n$transcript"
 	}
 	Write-Output "Live whisper.cpp GUI smoke passed"
-	Write-Output $transcript.Trim()
+	Write-Output "Backend: $(if ($Cpu) { 'CPU' } else { 'CUDA' })"
+	Write-Output $evidence
 } finally {
 	if ($example -and -not $example.HasExited) {
 		$example.CloseMainWindow() | Out-Null
@@ -93,6 +101,7 @@ try {
 	}
 	if ($serverProcess -and -not $serverProcess.HasExited) {
 		Stop-Process -Id $serverProcess.Id -Force -ErrorAction SilentlyContinue
+		$serverProcess.WaitForExit(5000) | Out-Null
 	}
 	$env:OFXIC_ENDPOINT_URL = $previous.Endpoint
 	$env:OFXIC_TRANSCRIPTION_ENDPOINT_URL = $previous.TranscriptionEndpoint

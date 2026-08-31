@@ -35,45 +35,47 @@ class Handler(BaseHTTPRequestHandler):
         except (UnicodeDecodeError, json.JSONDecodeError):
             self.send_json(400, {"error": "expected JSON request"})
             return
-        if self.path == "/lm":
+        if self.path == "/release_task":
             valid = (
-                request.get("caption") == "deterministic timestamp music"
-                and request.get("duration") == 1
-                and request.get("output_format") == "wav16"
+                request.get("prompt") == "deterministic timestamp music"
+                and request.get("audio_duration") == 10
+                and request.get("audio_format") == "wav"
+                and request.get("task_type") == "text2music"
                 and self.headers.get("Authorization") is None
             )
             self.send_json(200 if valid else 400,
-                           {"id": "lm_fixture_1"} if valid else
-                           {"error": "fixture rejected language-model request"})
+                           {"data": {"task_id": "music-fixture-1",
+                                     "status": "queued"},
+                            "code": 200, "error": None} if valid else
+                           {"code": 400,
+                            "error": "fixture rejected release_task request"})
             return
-        if self.path == "/synth":
+        if self.path == "/query_result":
             valid = (
-                request.get("caption") == "enriched deterministic music"
-                and request.get("output_format") == "wav16"
+                request.get("task_id_list") == ["music-fixture-1"]
                 and self.headers.get("Authorization") is None
             )
-            self.send_json(202 if valid else 400,
-                           {"id": "synth_fixture_1"} if valid else
-                           {"error": "fixture rejected synthesis request"})
+            self.send_json(200 if valid else 400,
+                           {"data": [{"task_id": "music-fixture-1",
+                                      "status": 1,
+                                      "result": "[{\"file\":\"/v1/audio?path=%2Ftmp%2Fmusic.wav\"}]"}],
+                            "code": 200, "error": None} if valid else
+                           {"code": 400,
+                            "error": "fixture rejected query_result request"})
             return
         self.send_error(404)
 
     def do_GET(self):
         parsed = urllib.parse.urlparse(self.path)
-        if parsed.path != "/job":
+        if parsed.path != "/v1/audio":
             self.send_error(404)
             return
         query = urllib.parse.parse_qs(parsed.query)
-        job_id = query.get("id", [""])[0]
-        wants_result = query.get("result", [""])[0] == "1"
-        if job_id not in ("lm_fixture_1", "synth_fixture_1"):
-            self.send_json(404, {"error": "unknown fixture job"})
-        elif not wants_result:
-            self.send_json(200, {"status": "done"})
-        elif job_id == "lm_fixture_1":
-            self.send_json(200, {"caption": "enriched deterministic music"})
-        else:
-            self.send_payload(200, "audio/wav", fixture_wav())
+        if query.get("path", [""])[0] != "/tmp/music.wav" or \
+                self.headers.get("Authorization") is not None:
+            self.send_json(404, {"error": "unknown fixture audio"})
+            return
+        self.send_payload(200, "audio/wav", fixture_wav())
 
     def log_message(self, *_):
         pass

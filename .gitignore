@@ -33,3 +33,10 @@ ofxICExample/icon.rc
 ofxICExample/*.sln
 ofxICExample/*.vcxproj
 ofxICExample/*.vcxproj.filters
+
+example-*/bin/
+example-*/config.make
+example-*/icon.rc
+example-*/*.sln
+example-*/*.vcxproj
+example-*/*.vcxproj.filters

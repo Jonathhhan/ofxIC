@@ -1,63 +1,107 @@
 [CmdletBinding()]
 param(
 	[string] $InstallRoot = (Join-Path $env:LOCALAPPDATA "ofxIC\servers"),
+	[string] $ModelDirectory = $(if (Test-Path -LiteralPath "G:\Models" -PathType Container) { "G:\Models" } else { Join-Path $env:LOCALAPPDATA "ofxIC\models\acestep.cpp" }),
 	[switch] $Force,
 	[switch] $Plan
 )
 
 $ErrorActionPreference = "Stop"
-$release = "v0.1.8"
-$expectedCommitPrefix = "dce6214"
-$installDirectory = Join-Path $InstallRoot "ACE-Step-1.5-$release-cuda"
-$python = Join-Path $installDirectory ".venv\Scripts\python.exe"
+$commit = "9761469d95fc204b5468623c68a1a2203e50b1f9"
+$commitPrefix = $commit.Substring(0, 7)
+$installDirectory = Join-Path $InstallRoot "acestep.cpp-$commitPrefix-cuda-13"
+$sourceDirectory = Join-Path $installDirectory "source"
+$buildDirectory = Join-Path $installDirectory "build"
+$server = Join-Path $installDirectory "ace-server.exe"
+
+function Find-AceServer([string] $Root) {
+	Get-ChildItem -LiteralPath $Root -Recurse -File -Filter "ace-server.exe" -ErrorAction SilentlyContinue |
+		Select-Object -First 1 -ExpandProperty FullName
+}
+
+function Test-ModelSet([string] $Root) {
+	if (-not (Test-Path -LiteralPath $Root -PathType Container)) { return $false }
+	$names = Get-ChildItem -LiteralPath $Root -File -Filter "*.gguf" | ForEach-Object { $_.Name.ToLowerInvariant() }
+	$hasLm = @($names | Where-Object { $_ -like "acestep-5hz-lm-*.gguf" }).Count -gt 0
+	$hasEmbedding = @($names | Where-Object { $_ -like "qwen3-embedding-*.gguf" }).Count -gt 0
+	$hasDit = @($names | Where-Object { $_ -like "acestep-v15-*.gguf" }).Count -gt 0
+	$hasVae = @($names | Where-Object { $_ -like "vae-*.gguf" }).Count -gt 0
+	return $hasLm -and $hasEmbedding -and $hasDit -and $hasVae
+}
 
 if ($Plan) {
-	Write-Output "ACE-Step release: $release ($expectedCommitPrefix)"
-	Write-Output "Backend: CUDA through the official Python environment"
-	Write-Output "Python: uv-managed 3.12"
+	Write-Output "ACE-Step runtime: acestep.cpp commit $commit"
+	Write-Output "Backend: native CUDA, built locally with the installed CUDA toolkit"
 	Write-Output "Install directory: $installDirectory"
-	Write-Output "Source: https://github.com/ACE-Step/ACE-Step-1.5.git"
-	Write-Output "Models are downloaded by ACE-Step on first start and remain outside Git."
+	Write-Output "Server: $server"
+	Write-Output "Model directory: $ModelDirectory"
+	Write-Output "Model set complete: $(Test-ModelSet $ModelDirectory)"
+	Write-Output "Source: https://github.com/ServeurpersoCom/acestep.cpp.git"
 	return
 }
+
 if ($env:PROCESSOR_ARCHITECTURE -ne "AMD64") {
-	throw "The ACE-Step setup requires 64-bit Windows on x64."
+	throw "The acestep.cpp setup requires 64-bit Windows on x64."
 }
 $git = (Get-Command git.exe -ErrorAction SilentlyContinue).Source
-$uv = (Get-Command uv.exe -ErrorAction SilentlyContinue).Source
+$cmake = (Get-Command cmake.exe -ErrorAction SilentlyContinue).Source
+$nvcc = (Get-Command nvcc.exe -ErrorAction SilentlyContinue).Source
 if (-not $git) { throw "git.exe was not found on PATH." }
-if (-not $uv) { throw "uv.exe was not found on PATH. Install uv from https://docs.astral.sh/uv/." }
-if ((Test-Path -LiteralPath $python -PathType Leaf) -and -not $Force) {
-	Write-Output "ACE-Step server environment is already installed: $python"
+if (-not $cmake) { throw "cmake.exe was not found on PATH." }
+if (-not $nvcc) { throw "nvcc.exe was not found on PATH. Install the CUDA toolkit first." }
+
+if ((Test-Path -LiteralPath $server -PathType Leaf) -and -not $Force) {
+	Write-Output "Native ACE-Step server is already installed: $server"
+	Write-Output "Model directory: $ModelDirectory (complete: $(Test-ModelSet $ModelDirectory))"
 	return
 }
 if (Test-Path -LiteralPath $installDirectory) {
 	if (-not $Force) { throw "Install directory already exists but is incomplete: $installDirectory" }
 	Remove-Item -LiteralPath $installDirectory -Recurse -Force
 }
-New-Item -ItemType Directory -Path $InstallRoot -Force | Out-Null
-& $git clone --branch $release --depth 1 https://github.com/ACE-Step/ACE-Step-1.5.git $installDirectory
-if ($LASTEXITCODE -ne 0) { throw "git clone failed with exit code $LASTEXITCODE" }
+New-Item -ItemType Directory -Path $installDirectory -Force | Out-Null
+
 try {
-	$commit = (& $git -C $installDirectory rev-parse HEAD).Trim()
-	if (-not $commit.StartsWith($expectedCommitPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
-		throw "ACE-Step tag $release resolved to unexpected commit $commit"
+	& $git clone --recurse-submodules https://github.com/ServeurpersoCom/acestep.cpp.git $sourceDirectory
+	if ($LASTEXITCODE -ne 0) { throw "git clone failed with exit code $LASTEXITCODE" }
+	& $git -C $sourceDirectory checkout --detach $commit
+	if ($LASTEXITCODE -ne 0) { throw "git checkout failed with exit code $LASTEXITCODE" }
+	& $git -C $sourceDirectory submodule update --init --recursive
+	if ($LASTEXITCODE -ne 0) { throw "git submodule update failed with exit code $LASTEXITCODE" }
+	$resolvedCommit = (& $git -C $sourceDirectory rev-parse HEAD).Trim()
+	if ($resolvedCommit -ne $commit) { throw "Expected commit $commit but checked out $resolvedCommit" }
+
+	& $cmake -S $sourceDirectory -B $buildDirectory -DGGML_CUDA=ON -DGGML_NATIVE=OFF
+	if ($LASTEXITCODE -ne 0) { throw "CMake configure failed with exit code $LASTEXITCODE" }
+	& $cmake --build $buildDirectory --config Release --target ace-server --parallel
+	if ($LASTEXITCODE -ne 0) { throw "ACE-Step CUDA build failed with exit code $LASTEXITCODE" }
+
+	$builtServer = Find-AceServer $buildDirectory
+	if (-not $builtServer) { throw "The build completed without producing ace-server.exe" }
+	$runtimeDirectory = Split-Path -Parent $builtServer
+	Get-ChildItem -LiteralPath $runtimeDirectory -File | Where-Object {
+		$_.Extension -in ".exe", ".dll"
+	} | Copy-Item -Destination $installDirectory -Force
+	if (-not (Test-Path -LiteralPath $server -PathType Leaf)) {
+		throw "The runtime copy did not produce $server"
 	}
-	& $uv python install 3.12
-	if ($LASTEXITCODE -ne 0) { throw "uv could not install Python 3.12." }
-	& $uv sync --directory $installDirectory --python 3.12 --frozen
-	if ($LASTEXITCODE -ne 0) { throw "uv sync failed with exit code $LASTEXITCODE" }
-	if (-not (Test-Path -LiteralPath $python -PathType Leaf)) {
-		throw "ACE-Step setup did not produce $python"
-	}
+
 	[ordered]@{
-		product = "ACE-Step 1.5 API server"; release = $release; commit = $commit
-		backend = "cuda"; python = "3.12"; source = "https://github.com/ACE-Step/ACE-Step-1.5"
+		product = "acestep.cpp native API server"
+		commit = $resolvedCommit
+		backend = "cuda"
+		cudaCompiler = (& $nvcc --version | Select-Object -Last 1)
+		source = "https://github.com/ServeurpersoCom/acestep.cpp"
+		modelDirectory = $ModelDirectory
+		modelSetComplete = (Test-ModelSet $ModelDirectory)
 		installedAtUtc = [DateTime]::UtcNow.ToString("o")
 	} | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $installDirectory "ofxIC-install.json") -Encoding utf8
-	Write-Output "Installed ACE-Step server environment: $python"
+	Write-Output "Installed native ACE-Step server: $server"
+	Write-Output "Model directory: $ModelDirectory (complete: $(Test-ModelSet $ModelDirectory))"
 } catch {
-	Write-Warning "ACE-Step installation failed; removing incomplete environment."
-	if (Test-Path -LiteralPath $installDirectory) { Remove-Item -LiteralPath $installDirectory -Recurse -Force }
+	Write-Warning "ACE-Step installation failed; removing incomplete native runtime."
+	if (Test-Path -LiteralPath $installDirectory) {
+		Remove-Item -LiteralPath $installDirectory -Recurse -Force
+	}
 	throw
 }

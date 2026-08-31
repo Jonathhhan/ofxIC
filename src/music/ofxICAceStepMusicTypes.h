@@ -15,6 +15,11 @@ enum class AceStepMusicJobState {
 	Failed
 };
 
+enum class AceStepMusicProtocol {
+	Official15,
+	NativeCpp
+};
+
 enum class AceStepMusicJobPhase {
 	LanguageModel,
 	Synthesis
@@ -24,6 +29,9 @@ struct AceStepMusicRequest {
 	std::string caption;
 	std::string lyrics;
 	std::string model = "acestep-v15-turbo";
+	// Exact filename from acestep.cpp /props models.dit. Empty lets the
+	// native server select its first registered DiT model.
+	std::string nativeSynthModel;
 	std::string vocalLanguage = "en";
 	int bpm = 0;
 	int durationSeconds = 30;
@@ -36,6 +44,7 @@ struct AceStepMusicRequest {
 	bool thinking = false;
 	bool useFormat = false;
 	std::string outputFormat = "wav";
+	AceStepMusicProtocol protocol = AceStepMusicProtocol::Official15;
 };
 
 struct AceStepMusicJob {
@@ -44,7 +53,8 @@ struct AceStepMusicJob {
 	RequestFailure failure = RequestFailure::None;
 	int httpStatus = 0;
 	AceStepMusicJobState state = AceStepMusicJobState::Unknown;
-	AceStepMusicJobPhase phase = AceStepMusicJobPhase::LanguageModel;
+	AceStepMusicJobPhase phase = AceStepMusicJobPhase::Synthesis;
+	AceStepMusicProtocol protocol = AceStepMusicProtocol::Official15;
 	std::string id;
 	std::string outputFormat;
 	std::string mimeType;

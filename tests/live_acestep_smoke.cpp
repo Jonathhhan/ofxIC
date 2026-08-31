@@ -9,14 +9,22 @@
 int main(int argc, char ** argv) {
 	const std::string endpointUrl = argc > 1 ? argv[1] : "http://127.0.0.1:8085";
 	const std::string outputPath = argc > 2 ? argv[2] : "ofxIC-acestep-live.wav";
+	const std::string protocol = argc > 3 ? argv[3] : "official-1.5";
 
 	ofxIC::Endpoint endpoint(endpointUrl);
 	ofxIC::AceStepMusicClient music(endpoint);
 	ofxIC::AceStepMusicRequest request;
 	request.caption = "short warm ambient electronic pulse, sparse and clean";
-	request.durationSeconds = 4;
+	request.durationSeconds = 10;
 	request.seed = 42;
 	request.outputFormat = "wav";
+	if (protocol == "native-cpp") {
+		request.protocol = ofxIC::AceStepMusicProtocol::NativeCpp;
+	} else if (protocol != "official-1.5") {
+		std::cerr << "Unknown ACE-Step protocol: " << protocol
+			<< " (expected official-1.5 or native-cpp)\n";
+		return 4;
+	}
 
 	ofxIC::AceStepMusicJob job = music.submit(request);
 	const auto deadline = std::chrono::steady_clock::now() + std::chrono::minutes(20);
@@ -38,7 +46,8 @@ int main(int argc, char ** argv) {
 		std::cerr << "Could not write live smoke audio to " << outputPath << '\n';
 		return 3;
 	}
-	std::cout << "ACE-Step live smoke passed: " << job.audioBytes.size()
+	std::cout << "ACE-Step live smoke passed (" << protocol << "): "
+		<< job.audioBytes.size()
 		<< " WAV bytes -> " << outputPath << '\n';
 	return 0;
 }

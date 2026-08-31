@@ -11,7 +11,7 @@ openFrameworks app
   -> audio: TranscriptionClient -> explicit OpenAI or whisper.cpp route
   -> segmentation: SegmentationClient -> explicit SAM bridge v1
   -> media: MediaClient -> image response or async media job
-  -> music: AceStepMusicClient -> local /lm, /synth, optional /job
+  -> music: AceStepMusicClient -> official ACE-Step 1.5 or native acestep.cpp API
          or StabilityAudioClient -> hosted async Stability Audio 3 job
   -> ofxIC::Endpoint
   -> external llama-server, whisper.cpp, SAM runner, stable-diffusion.cpp,
@@ -44,10 +44,11 @@ addon.
   maps the documented Stable Audio 3 multipart submit/result protocol onto a
   separately configured Stability AI endpoint, validates job IDs and controls,
   bounds downloads, and accepts only matching MP3 or WAV containers.
-- `AceStepMusicClient` owns no ACE-Step runtime. It maps the existing local
-  server's `/lm`, `/synth`, and optional `/job` state transitions onto explicit
-  request/job values, never forwards bearer credentials to the local server,
-  bounds responses, and validates completed WAV or MP3 bytes.
+- `AceStepMusicClient` owns no ACE-Step runtime. It maps both the official 1.5
+  task API and native `acestep.cpp` two-stage `/lm`, `/synth`, `/job` jobs onto
+  explicit request/job values. It never forwards bearer credentials to a local
+  server, bounds responses, extracts multipart audio, and validates completed
+  WAV or MP3 bytes.
 - `DocumentIndex` chunks explicitly loaded text and performs deterministic
   lexical search. It does not watch directories or accept model-selected paths.
   Per-document, document-count, and total-chunk limits are checked before an
@@ -101,6 +102,17 @@ addon.
   of an exercised inference request.
 - HTTP responses are bounded before parsing: inspection and chat use tighter
   JSON limits, while explicit binary media downloads opt into a larger bound.
+
+## Examples
+
+- `example-chat` is the focused OF-style integration. It uses ImGui but has no
+  local runtime dependency, keeps blocking HTTP off the update/draw thread, forwards
+  cancellation, and joins its worker during `exit()`.
+- `example-documents` adds the allowlisted grounded-document path without adding
+  process management, credential persistence, or model-selected filesystem access.
+- `ofxICExample` is the full integration workbench. It exercises every public
+  client and keeps credential storage, settings, installers, process control,
+  previews, and support diagnostics outside the addon core.
 
 ## Deliberately absent
 

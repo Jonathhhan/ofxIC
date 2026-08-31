@@ -53,11 +53,15 @@ struct ExampleSettings {
 	int musicOutputFormat = 0;
 	std::string aceStepServerPath;
 	std::string aceStepServerArguments;
+	std::string aceStepModelDirectory;
 	std::string whisperServerPath;
 	std::string whisperModelPath;
 	std::string whisperServerArguments;
 	std::string samBridgeExecutablePath;
 	std::string samBridgeArguments;
+	std::string samRunnerPath;
+	std::string samModelPath;
+	int samCuda = 1;
 };
 
 enum class SettingsLoadStatus {

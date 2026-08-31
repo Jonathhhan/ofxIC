@@ -20,27 +20,43 @@ Clone the repository into the openFrameworks addons directory:
 ```sh
 cd path/to/openFrameworks/addons
 git clone https://github.com/Jonathhhan/ofxIC.git
+```
+
+Open `example-chat` with the openFrameworks Project Generator for the minimal
+OF lifecycle example. It uses `ofxIC` and `ofxImGui`. Add `ofxIC` to an existing
+project in the usual `addons.make` form. No model runtime or model file is
+installed with the addon.
+
+Open `example-documents` for the complete grounded-document path: explicitly
+load a text file, expose only `search_documents`, and require cited source
+identifiers without blocking the openFrameworks frame thread.
+
+The complete `ofxICExample` endpoint workbench additionally uses a pinned
+`ofxImGui` revision:
+
+```sh
+cd path/to/openFrameworks/addons
 git clone https://github.com/jvcleave/ofxImGui.git
 git -C ofxImGui checkout 4b5d04a3e73bbae34d564c9b78143e021f67377a
 ```
 
-Open `ofxICExample` with the openFrameworks Project Generator, or add
-`ofxIC` to an existing project. No model runtime or model file is installed
-with the addon.
-
 ### Optional Windows CUDA server
 
 The addon remains an HTTP client, but these scripts can install pinned,
-external CUDA builds of `llama-server` and `sd-server` into
+external CUDA runtimes into
 `%LOCALAPPDATA%\ofxIC\servers`.
 Executables, CUDA runtime files, logs, and models remain outside the repository.
-Downloads are accepted only when both official SHA-256 digests match.
+Pinned prebuilt archives are accepted only when their recorded digest matches;
+source-based environments pin their upstream release or commit.
 
 ```powershell
 .\scripts\install-llama-server.ps1
 .\scripts\start-llama-server.ps1 -Model C:\models\model.gguf -FlashAttention
 .\scripts\install-stable-diffusion-server.ps1
 .\scripts\start-stable-diffusion-server.ps1 -DiffusionModel C:\models\image-model.gguf -FlashAttention
+.\scripts\install-whisper-server.ps1
+.\scripts\install-acestep-server.ps1
+.\scripts\install-sam-server.ps1 -ExistingModel G:\Models\sam_vit_b_01ec64.pth
 ```
 
 Use `-Plan` to inspect downloads or launch arguments without installing or
@@ -49,10 +65,18 @@ CUDA 13.3. Other backends may be added later; models remain a separate choice.
 The official stable-diffusion.cpp Windows package currently targets CUDA 12;
 its bundled runtime works with a compatible newer NVIDIA driver. Its server
 defaults to port `8081`, so it can run beside llama-server on port `8080`.
+The ACE-Step installer builds a pinned native `acestep.cpp` CUDA server and
+uses an existing complete GGUF set such as `G:\Models`; it does not copy model
+weights into the addon.
 The Windows example discovers versioned installations below that directory at
 runtime, lets a manually selected executable take precedence, and starts the
 external process from the GUI. Detection is version-independent and belongs to
 the example application; no runtime is linked into the addon.
+The Overview tab can run the Whisper, ACE-Step, and SAM installers without a
+separate terminal. Whisper installs a verified `base-q5_1` model by default;
+ACE-Step uses a separately selected complete GGUF model directory; the SAM
+installer can reuse a selected Meta `sam_vit_b`, `vit_l`, or `vit_h` checkpoint
+and creates an isolated PyTorch CUDA 13 environment.
 
 The addon does not override the C++ language standard selected by the generated
 openFrameworks project. Its standalone deterministic CMake tests require C++20;
@@ -75,10 +99,19 @@ generated project and performs a real Release/x64 `Rebuild` by default, then
 prints the exact EXE path, write time, and size. `-Incremental` is an explicit
 faster opt-in. Use `-UpdateProject` only when source files were added and the
 local openFrameworks Project Generator needs to refresh the solution. The
-validation script runs deterministic CMake tests, rebuilds the canonical
-example, and then executes the model-free GUI lifecycle smoke. Current
-development builds expose the version string `0.2.1-dev` through
+validation script runs deterministic CMake tests, rebuilds both focused
+examples and the complete workbench, and then executes the model-free GUI
+lifecycle smoke plus a no-start plan of all five local runtime configurations.
+Current development builds expose the version string `0.2.1-dev` through
 `ofxIC::versionString`.
+
+The default target is the full `ofxICExample`. The same verified path builds the
+minimal example after generating its ignored platform project once:
+
+```powershell
+.\scripts\build-example.ps1 -Example example-chat -UpdateProject
+.\scripts\build-example.ps1 -Example example-documents -UpdateProject
+```
 
 ## Current API
 
@@ -220,6 +253,14 @@ auto job = media.submit(video);
 job = media.poll(job);
 ```
 
+Before submitting local video, `MediaClient` reads
+`/sdcpp/v1/capabilities`. Submission stops with an actionable error when the
+model currently loaded by `sd-server` does not advertise `vid_gen`; common
+image models such as SD-Turbo cannot generate video. Start the server with a
+video-capable model such as a compatible WAN, LTX-Video, or AnimateDiff model.
+When no output format is requested explicitly, the client selects a format
+advertised by that server, preferring AVI for broad Windows playback support.
+
 Hugging Face media deliberately uses its task protocol instead of pretending
 that the chat router implements OpenAI image/video routes. The first compact
 adapter supports fal-ai for both image and video:
@@ -243,8 +284,7 @@ on router requests, and downloads the returned media bytes without forwarding
 that token to the output CDN.
 
 Music generation is intentionally provider-specific rather than another value
-in `MediaKind`. The local path targets the ACE-Step server contract already used
-by `ofxGgmlMusic`; the model runtime stays in that separate process:
+in `MediaKind`. The model runtime stays in a separate process:
 
 ```cpp
 ofxIC::Endpoint aceStep("http://127.0.0.1:8085");
@@ -254,15 +294,18 @@ ofxIC::AceStepMusicRequest request;
 request.caption = "Warm modular synthesizer, instrumental, no vocals";
 request.durationSeconds = 30;
 request.outputFormat = "wav";
+request.protocol = ofxIC::AceStepMusicProtocol::NativeCpp;
 
 auto job = music.submit(request);
 // Direct servers may complete immediately; async servers use /job polling.
 if (!job.terminal()) job = music.poll(job);
 ```
 
-The client drives `/lm`, `/synth`, and optional asynchronous `/job` responses,
-bounds JSON/audio responses, validates job IDs, and verifies the returned WAV
-or MP3 container. It never sends a configured bearer token to this local route.
+The client supports both the official ACE-Step 1.5 `/release_task`,
+`/query_result`, `/v1/audio` flow and native `acestep.cpp` `/lm`, `/synth`,
+`/job` jobs. It bounds responses, validates task IDs, extracts native multipart
+audio, and verifies the returned WAV or MP3 container. It never sends a
+configured bearer token to either local route.
 
 Stability Audio 3 has its own asynchronous API and credential:
 
@@ -329,7 +372,9 @@ client and bridge require `X-ofxIC-SAM-Bridge-Version: 1`, accept at most 64
 points, bound request and mask sizes, validate complete PPM/PGM payloads, and
 report stable text error codes. The bridge rejects concurrent model runs and
 supports `--runner-timeout <seconds>` rather than allowing an orphaned request
-to wait indefinitely. Its bounded `GET /health` response reports bridge version,
+to wait indefinitely. `scripts\install-sam-server.ps1` provides one concrete
+external consumer of this contract: an isolated Meta SAM Python runner with a
+CUDA 13 PyTorch environment. Its bounded `GET /health` response reports bridge version,
 fixture/runner mode, and selected backend; the regular example exposes this as
 **Check bridge** before an image needs to be submitted.
 
@@ -344,7 +389,7 @@ Implemented:
 - explicit `/v1/segmentations` SAM bridge v1 point segmentation
 - native `stable-diffusion.cpp` image/video submission and job polling
 - Hugging Face text-to-image and queued text-to-video through fal-ai routing
-- local ACE-Step `/lm`, `/synth`, and `/job` text-to-music generation
+- local ACE-Step 1.5 task-API text-to-music generation
 - Stability Audio 3 text-to-music submission, polling, and MP3/WAV download
 - conversational history
 - optional streaming transport when openFrameworks exposes curl
@@ -400,11 +445,11 @@ protocol assumption.
 | --- | --- | --- | --- |
 | OpenAI | Yes | No | `/v1/images/generations`; video is intentionally not offered |
 | Hugging Face / fal-ai | Yes | Yes | Hosted task routes; provider credit may be required |
-| `stable-diffusion.cpp` | Yes | Yes | External asynchronous image/video jobs |
+| `stable-diffusion.cpp` | Yes | Model-dependent | External asynchronous jobs; the loaded model must advertise `vid_gen` for video |
 
 | Music backend | Local | Behavior |
 | --- | --- | --- |
-| ACE-Step | Yes | External server on `http://127.0.0.1:8085`; `/lm`, `/synth`, optional `/job` |
+| ACE-Step | Yes | External server on `http://127.0.0.1:8085`; native `acestep.cpp` jobs or the official 1.5 task API |
 | Stability Audio 3 | No | Hosted asynchronous provider API; token and credit required |
 
 The GUI shows these capabilities and does not allow unsupported combinations.
@@ -430,12 +475,35 @@ cannot be used as an `ofxIC` endpoint.
   the original chat, inspection, transcription, SAM, image/video, or music task
   automatically. The queued task remains visible and cancellable in **Overview**.
 - The **Overview** tab supervises all five local processes in one table. Each
-  task tab shows a colored `stopped`, `starting`, `ready`, `exited`, or `failed`
-  state and a bounded live stdout/stderr view. Server output is also mirrored to
-  the openFrameworks console. A listening expected port is adopted as an
+  row shows installation/configuration readiness independently from the colored
+  `stopped`, `starting`, `ready`, `exited`, or `failed` process state. The tab
+  also prints the exact workbench executable and build timestamp, making a stale
+  example binary immediately visible. Each task tab provides a bounded live
+  stdout/stderr view, and server output is mirrored to the openFrameworks
+  console. A listening expected port is adopted as an
   externally managed runtime and is never terminated by the example; otherwise
   launch uses the executable directory as the child working directory and
   preserves exact Windows process-creation errors.
+- Windows script-install discovery first uses portable filesystem traversal and
+  falls back to native Win32 enumeration under
+  `%LOCALAPPDATA%\ofxIC\servers`. If a start still cannot resolve an executable,
+  the console reports the configured path, startup snapshot, root state,
+  matching runtime directories/files, and native fallback result.
+- Externally attached Llama and stable-diffusion servers also follow the
+  canonical `%LOCALAPPDATA%\ofxIC\logs\<server>-<port>.stdout|stderr.log`
+  files produced by the bundled start scripts. The GUI labels the exact sources,
+  shows their update age, tails replacements safely, and retains only the most
+  recent 64 KiB. **Clear view** clears only the in-memory display; the GUI never
+  edits or removes externally owned logs.
+- **Install missing runtimes** in Overview installs Whisper, ACE-Step, or SAM
+  asynchronously, shows bounded live installer output, and refreshes detected
+  paths on success. Every launched process tree is assigned to a Windows job so
+  cancellation and application shutdown do not leave installer descendants.
+- For a GUI-owned `sd-server`, the example distinguishes the selected model
+  from the checkpoint actually loaded by the running process. Changing from
+  SD-Turbo to WAN causes a controlled restart on the next generation and
+  selects a matching WAN VAE and UMT5 encoder when found. An externally managed
+  server is never restarted implicitly.
 - **Export diagnostics...** in Overview writes a bounded, privacy-aware support
   snapshot with addon/build identity, configured endpoint hosts, task state, and
   runtime lifecycle metadata. It deliberately omits credentials, prompts,
@@ -455,13 +523,29 @@ cannot be used as an `ofxIC` endpoint.
   never-ready runtime timeout without models or provider credit. The production
   startup timeout is 900 seconds; deterministic automation may override it with
   `OFXIC_RUNTIME_START_TIMEOUT_SECONDS` (valid range: 1–3600 seconds).
+- Run `scripts\smoke-local-runtime-matrix.ps1` to launch the real workbench five
+  times in plan mode and report the executable/model configuration selected for
+  Llama, stable-diffusion.cpp, ACE-Step, Whisper, and SAM without starting a
+  server. For explicit local-live lifecycle evidence, set
+  `OFXIC_RUN_LIVE_RUNTIME_MATRIX=1` and add `-Live`. The script starts the five
+  runtimes sequentially through the same code paths as the GUI buttons, requires
+  GUI ownership and port readiness, exits the workbench to stop its complete
+  child process tree, and verifies that the port was released. This proves
+  discovery, launch, readiness, and shutdown—not model inference; the separate
+  marker-gated inference smokes remain the evidence for generated content.
 - Local `stable-diffusion.cpp`, Hugging Face/fal-ai media, ACE-Step, and
   Stability Audio jobs are polled automatically. Completed image, video, and
   audio payloads are saved and loaded into their preview/player without a
   separate **Poll job** action; manual polling is retained only as a timeout or
   diagnostic fallback.
-- Start the separate ACE-Step server (the `ofxGgmlMusic` default is
-  `http://127.0.0.1:8085`), then select **ACE-Step local**. For a headless,
+- `scripts\smoke-video-live.ps1` exercises the regular Release GUI against an
+  already running video-capable `sd-server`. It first rejects an image-only
+  loaded model, then verifies the asynchronous job and saved WebM/WebP/AVI
+  output. Real inference is deliberately gated: set
+  `OFXIC_RUN_LIVE_SDCPP_VIDEO=1` before running it. The default 512x512,
+  17-frame test is intended as a small WAN validation, not a quality preset.
+- Start the separate ACE-Step server (the default is `http://127.0.0.1:8085`),
+  then select **ACE-Step local**. For a headless,
   explicitly opt-in model-backed check, set `OFXIC_RUN_LIVE_ACESTEP=1` and run
   `scripts/smoke-acestep-live.ps1`; generated audio remains under the ignored
   `tests/build/live` directory.
@@ -504,9 +588,10 @@ cannot be used as an `ofxIC` endpoint.
   that a real speech model ran.
 - `scripts\smoke-whisper-cpp-live.ps1 -Server <whisper-server.exe> -Model
   <ggml-model.bin> -Audio <speech.wav>` is the separate marker-gated live proof.
-  It starts the external runtime, exercises the regular GUI, requires a nonempty
-  model-produced transcript, and keeps binaries, models, audio, and output out
-  of Git.
+  Set `OFXIC_RUN_LIVE_WHISPER=1` before running it. It starts the external
+  runtime with CUDA by default (`-Cpu` is an explicit fallback), exercises the
+  regular GUI, requires a nonempty model-produced transcript, and keeps
+  binaries, models, audio, and output out of Git.
 - `scripts\smoke-llama-server-live.ps1 -Server <llama-server.exe> -Model
   <model.gguf> -Document <source.md>` is the marker-gated local proof for the
   core endpoint path. Set `OFXIC_RUN_LIVE_LLAMA_SERVER=1` explicitly before
@@ -518,13 +603,15 @@ cannot be used as an `ofxIC` endpoint.
   the llama.cpp tool-call protocol. The script never downloads a model. The
   complete path was verified with Qwen3.6-27B on 2026-08-27.
 - `scripts\smoke-segmentation.ps1` is the deterministic SAM bridge fixture and
-  performs no inference. `scripts\smoke-sam-live.ps1 -Runner <sam-runner.exe>
-  -Model <model.ggml> -Image <input.ppm>` is the separate model-backed proof. It
+  performs no inference. Set `OFXIC_RUN_LIVE_SAM=1`, then run
+  `scripts\smoke-sam-live.ps1 -Python <installed-python.exe> -Runner <sam-runner.py>
+  -Model <sam_vit_*.pth> -Image <input.png>` as the separate model-backed proof. It
   exercises the external runner through the bridge and regular GUI, requires a
   returned PGM mask, and keeps the runner, model, inputs, and output out of Git.
-- Before using SAM interactively, run `scripts\start-sam-bridge.ps1 -Runner
-  <sam-runner.exe> -Model <model.ggml> -Backend cuda` in a separate terminal and
-  leave it open. The GUI's SAM URL remains `http://127.0.0.1:18085`.
+- For interactive use, select the installed Python, `sam-python-runner.py`, and
+  Meta SAM `.pth` checkpoint in the SAM tab; the GUI starts the bundled bridge
+  on `http://127.0.0.1:18085`. `scripts\start-sam-bridge.ps1` remains available
+  for explicitly external runners.
 - `OFXIC_SEGMENTATION_ENDPOINT_URL` selects the SAM bridge independently.
   `OFXIC_SEGMENTATION_NEGATIVE_POINT_X` and
   `OFXIC_SEGMENTATION_NEGATIVE_POINT_Y` add a negative prompt to GUI automation.
@@ -540,6 +627,16 @@ cannot be used as an `ofxIC` endpoint.
   `OFXIC_MUSIC_OUTPUT_FORMAT=mp3|wav` override saved Stability Audio choices.
   `OFXIC_MUSIC_API_KEY` overrides `STABILITY_API_KEY`; both remain outside the
   settings file and the Windows example can store `STABILITY_API_KEY` securely.
+- `OFXIC_ACESTEP_SERVER`, `OFXIC_ACESTEP_SERVER_ARGS`, and
+  `OFXIC_ACESTEP_MODELS` override the native server executable, advanced
+  arguments, and GGUF model directory without moving model files.
+- `OFXIC_LLAMA_SERVER`, `OFXIC_LLAMA_MODEL`, `OFXIC_LLAMA_MODELS`,
+  `OFXIC_SD_SERVER`, `OFXIC_SD_MODEL`, `OFXIC_SD_MODELS`, and
+  `OFXIC_WHISPER_SERVER`, `OFXIC_WHISPER_MODEL` provide the same explicit,
+  non-persistent path overrides for reproducible local lifecycle checks. SD
+  component overrides additionally accept `OFXIC_SD_VAE`,
+  `OFXIC_SD_TEXT_ENCODER`, `OFXIC_SD_CLIP_L`, and `OFXIC_SD_CLIP_G`;
+  `OFXIC_SD_COMPLETE_CHECKPOINT=1` selects the complete-checkpoint launch form.
 - `F1` and `F2` remain shortcuts for inspect and clear.
 
 ### Testing without a local GPU

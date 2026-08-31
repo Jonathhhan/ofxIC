@@ -11,6 +11,7 @@
 #include <cstring>
 #include <fstream>
 #include <filesystem>
+#include <functional>
 #include <map>
 #include <sstream>
 #include <utility>
@@ -53,7 +54,7 @@ constexpr std::array<MediaBackendProfile, 3> mediaBackends{{
 	{ "Hugging Face / fal-ai", "https://router.huggingface.co", "HF_TOKEN",
 		true, true, "Hosted image and queued video; provider credit may be required." },
 	{ "stable-diffusion.cpp", "http://127.0.0.1:8081", "OFXIC_API_KEY",
-		true, true, "External native image and video jobs." },
+		true, true, "Video support and container format are checked from the loaded model before submission." },
 }};
 
 struct MusicBackendProfile {
@@ -163,20 +164,161 @@ std::filesystem::path localAppDataDirectory() {
 	return candidates.empty() ? std::filesystem::path() : candidates.front();
 }
 
+std::vector<std::string> localServerLogFiles(const std::string & server, int port) {
+	const std::filesystem::path root = localAppDataDirectory() / "ofxIC" / "logs";
+	const std::string prefix = server + "-" + std::to_string(port);
+	return {
+		(root / (prefix + ".stdout.log")).string(),
+		(root / (prefix + ".stderr.log")).string(),
+	};
+}
+
+std::string logFileAge(const std::string & path) {
+	std::error_code error;
+	const auto modified = std::filesystem::last_write_time(path, error);
+	if (error) return "not found yet";
+	auto seconds = std::chrono::duration_cast<std::chrono::seconds>(
+		std::filesystem::file_time_type::clock::now() - modified).count();
+	seconds = std::max<std::int64_t>(0, seconds);
+	if (seconds < 60) return "updated " + std::to_string(seconds) + " s ago";
+	if (seconds < 3600) return "updated " + std::to_string(seconds / 60) + " min ago";
+	return "updated " + std::to_string(seconds / 3600) + " h ago";
+}
+
+std::string installedServerRoot();
+
 std::string installedServerExecutable(const std::string & familyPrefix,
 	const std::string & executableName) {
-	const std::filesystem::path localAppData = localAppDataDirectory();
-	if (localAppData.empty()) return {};
-	const std::filesystem::path root = localAppData / "ofxIC" / "servers";
+	const std::filesystem::path root(installedServerRoot());
+	if (root.empty()) return {};
+	// These are the stable locations produced by the pinned Windows installers.
+	// Load them directly instead of making GUI startup depend on a recursive
+	// LocalAppData traversal. The generic search remains available for older or
+	// manually installed runtime layouts.
+	std::filesystem::path installed;
+	if (familyPrefix == "llama.cpp-" && executableName == "llama-server.exe")
+		installed = root / "llama.cpp-b10516-cuda-13.3" / executableName;
+	else if (familyPrefix == "stable-diffusion.cpp-" && executableName == "sd-server.exe")
+		installed = root / "stable-diffusion.cpp-master-829-0a565f2-cuda12" / executableName;
+	else if (familyPrefix == "whisper.cpp-" && executableName == "whisper-server.exe")
+		installed = root / "whisper.cpp-b4938-cuda-12.4" / executableName;
+	else if (familyPrefix == "acestep.cpp-" && executableName == "ace-server.exe")
+		installed = root / "acestep.cpp-9761469-cuda-13" / executableName;
+	else if (familyPrefix == "ACE-Step-1.5-" && executableName == "python.exe")
+		installed = root / "ACE-Step-1.5-v0.1.8-cuda" / ".venv" / "Scripts" / executableName;
+	else if (familyPrefix == "sam-python-" && executableName == "python.exe")
+		installed = root / "sam-python-1-cuda-13" / ".venv" / "Scripts" / executableName;
+	else if (familyPrefix == "sam-python-" && executableName == "sam-python-runner.py")
+		installed = root / "sam-python-1-cuda-13" / executableName;
+	if (!installed.empty()) return installed.lexically_normal().string();
 	return ofxICExample::findInstalledExecutable(
 		root.string(), familyPrefix, executableName);
 }
 
+bool isNativeAceStepServer(const std::string & path) {
+	return ofToLower(std::filesystem::path(path).filename().string()) == "ace-server.exe";
+}
+
+std::string installedAceStepServer() {
+	const std::string native = installedServerExecutable("acestep.cpp-", "ace-server.exe");
+	return native.empty()
+		? installedServerExecutable("ACE-Step-1.5-", "python.exe")
+		: native;
+}
+
+bool managedAceStepArguments(const std::string & arguments) {
+	return arguments.empty() || arguments.rfind("--models ", 0) == 0 ||
+		arguments == "-m acestep.api_server --host 127.0.0.1 --port 8085";
+}
+
+std::string defaultAceStepArguments(const std::string & executable,
+	const std::string & modelDirectory) {
+	if (!isNativeAceStepServer(executable))
+		return "-m acestep.api_server --host 127.0.0.1 --port 8085";
+	return "--models \"" + modelDirectory + "\" --host 127.0.0.1 --port 8085";
+}
+
+bool hasNativeAceStepModels(const std::string & directory) {
+	std::error_code error;
+	if (!std::filesystem::is_directory(directory, error)) return false;
+	bool lm = false;
+	bool embedding = false;
+	bool dit = false;
+	bool vae = false;
+	const auto gguf = [](const std::string & name) {
+		return name.size() >= 5U && name.compare(name.size() - 5U, 5U, ".gguf") == 0;
+	};
+	for (const auto & entry : std::filesystem::directory_iterator(directory, error)) {
+		if (error) return false;
+		if (!entry.is_regular_file(error)) continue;
+		const std::string name = ofToLower(entry.path().filename().string());
+		if (name.rfind("acestep-5hz-lm-", 0) == 0 && gguf(name)) lm = true;
+		else if (name.rfind("qwen3-embedding-", 0) == 0 && gguf(name)) embedding = true;
+		else if (name.rfind("acestep-v15-", 0) == 0 && gguf(name)) dit = true;
+		else if (name.rfind("vae-", 0) == 0 && gguf(name)) vae = true;
+	}
+	return lm && embedding && dit && vae;
+}
+
+bool configuredPath(const char * path) {
+	return path && path[0] != '\0';
+}
+
+bool configuredRuntime(const char * configured,
+	const std::string & startupDetected) {
+	// Runtime paths under LocalAppData can be launchable through the Windows
+	// shell even when a managed GUI process cannot stat them. Configuration is
+	// therefore based on the selected/detected absolute path; ManagedProcess is
+	// responsible for reporting the real Windows launch error.
+	return configuredPath(configured) || !startupDetected.empty();
+}
+
+std::string preferredNativeAceStepSynthModel(const std::string & directory) {
+	std::vector<std::string> turbo;
+	std::vector<std::string> fallback;
+	std::error_code error;
+	if (!std::filesystem::is_directory(directory, error)) return {};
+	for (const auto & entry : std::filesystem::directory_iterator(directory, error)) {
+		if (error) return {};
+		std::error_code entryError;
+		if (!entry.is_regular_file(entryError) || entryError) continue;
+		const std::string filename = entry.path().filename().string();
+		const std::string lower = ofToLower(filename);
+		if (lower.rfind("acestep-v15-", 0) != 0 ||
+			lower.size() < 5U || lower.compare(lower.size() - 5U, 5U, ".gguf") != 0)
+			continue;
+		(lower.find("turbo") != std::string::npos ? turbo : fallback).push_back(filename);
+	}
+	auto choose = [](std::vector<std::string> & models) {
+		std::sort(models.begin(), models.end());
+		return models.empty() ? std::string{} : models.front();
+	};
+	std::string selected = choose(turbo);
+	return selected.empty() ? choose(fallback) : selected;
+}
+
 std::string installedServerRoot() {
+	const std::filesystem::path localRuntime =
+		std::filesystem::path(ofFilePath::getCurrentExeDir()) / "runtime" / "servers";
+	std::error_code localError;
+	if (std::filesystem::is_directory(localRuntime, localError))
+		return localRuntime.lexically_normal().string();
 	const std::filesystem::path localAppData = localAppDataDirectory();
 	return localAppData.empty()
 		? std::string()
 		: (localAppData / "ofxIC" / "servers").string();
+}
+
+std::string runtimeExecutableFailureDiagnostic(const std::string & configured,
+	const std::string & startupDetected, const std::string & familyPrefix,
+	const std::string & executableName) {
+	const auto state = [](const std::string & path) {
+		return path.empty() ? std::string("empty") :
+			(ofxICExample::executableFileExists(path) ? "file:" + path : "missing:" + path);
+	};
+	return "configured=" + state(configured) + "; startup=" + state(startupDetected) +
+		"; " + ofxICExample::installedExecutableSearchDiagnostic(
+			installedServerRoot(), familyPrefix, executableName);
 }
 
 std::vector<std::string> nonEmptyLines(const std::string & value) {
@@ -191,24 +333,19 @@ std::vector<std::string> nonEmptyLines(const std::string & value) {
 }
 
 std::string installedLlamaModel() {
+	const std::filesystem::path localModel =
+		std::filesystem::path(ofFilePath::getCurrentExeDir()) / "runtime" / "models" /
+		"llama.cpp" / "qwen2.5-1.5b-instruct-q4_k_m.gguf";
+	std::error_code localError;
+	if (std::filesystem::is_regular_file(localModel, localError))
+		return localModel.lexically_normal().string();
 	const std::filesystem::path localAppData = localAppDataDirectory();
 	if (localAppData.empty()) return {};
 	const std::string root = (localAppData / "ofxIC" / "models" / "llama.cpp").string();
-	const std::string preferred = ofFilePath::join(root,
-		"qwen2.5-1.5b-instruct-q4_k_m.gguf");
-	if (ofFile::doesFileExist(preferred)) return preferred;
-	ofDirectory models;
-	models.openFromCWD(root);
-	if (!models.exists()) return {};
-	models.allowExt("gguf");
-	models.listDir();
-	models.sort();
-	for (const ofFile & model : models.getFiles()) {
-		const std::string name = ofToLower(model.getFileName());
-		if (name.rfind("mmproj-", 0) != 0 && name.find("vocab") == std::string::npos)
-			return model.getAbsolutePath();
-	}
-	return {};
+	// This is the stable destination produced by the pinned model installer.
+	// Return it directly: a managed GUI process can be unable to stat LocalAppData
+	// even though the external runtime launched by the shell can read the file.
+	return ofFilePath::join(root, "qwen2.5-1.5b-instruct-q4_k_m.gguf");
 }
 
 std::vector<std::string> detectedLlamaModelPaths(const std::string & additionalRoot) {
@@ -236,6 +373,7 @@ void scanStableDiffusionModels(const std::string & root,
 	std::vector<std::string> & diffusion, std::vector<std::string> & vae,
 	std::vector<std::string> & encoders) {
 	diffusion.clear(); vae.clear(); encoders.clear();
+	if (root.empty()) return;
 	ofDirectory models; models.openFromCWD(root);
 	if (!models.exists()) return;
 	models.allowExt("gguf"); models.listDir(); models.sort();
@@ -254,6 +392,17 @@ void scanStableDiffusionModels(const std::string & root,
 	}
 }
 
+std::string preferredModelComponent(const std::vector<std::string> & candidates,
+	const std::vector<std::string> & preferredNames) {
+	for (const std::string & preferred : preferredNames) {
+		for (const std::string & candidate : candidates) {
+			if (ofToLower(ofFilePath::getFileName(candidate)).find(preferred) != std::string::npos)
+				return candidate;
+		}
+	}
+	return candidates.empty() ? std::string{} : candidates.front();
+}
+
 std::string bundledAddonSdTurboCheckpoint() {
 	std::filesystem::path directory(ofFilePath::getCurrentExeDir());
 	for (int level = 0; level < 6 && !directory.empty(); ++level) {
@@ -268,12 +417,12 @@ std::string bundledAddonSdTurboCheckpoint() {
 	return {};
 }
 
-std::string bundledSamBridgeScript() {
+std::string bundledScript(const std::string & filename) {
 	std::filesystem::path directory(ofFilePath::getCurrentExeDir());
 	for (int level = 0; level < 8 && !directory.empty(); ++level) {
 		for (const auto & relative : {
-			std::filesystem::path("scripts") / "sam-bridge-server.py",
-			std::filesystem::path("addons") / "ofxIC" / "scripts" / "sam-bridge-server.py" }) {
+			std::filesystem::path("scripts") / filename,
+			std::filesystem::path("addons") / "ofxIC" / "scripts" / filename }) {
 			const auto candidate = directory / relative;
 			std::error_code error;
 			if (std::filesystem::is_regular_file(candidate, error))
@@ -282,6 +431,61 @@ std::string bundledSamBridgeScript() {
 		directory = directory.parent_path();
 	}
 	return {};
+}
+
+std::string bundledSamBridgeScript() {
+	return bundledScript("sam-bridge-server.py");
+}
+
+std::string firstModelFile(const std::vector<std::filesystem::path> & roots,
+	const std::function<bool(const std::filesystem::path &)> & accepts) {
+	std::vector<std::filesystem::path> candidates;
+	for (const auto & root : roots) {
+		std::error_code error;
+		if (!std::filesystem::is_directory(root, error)) continue;
+		for (std::filesystem::recursive_directory_iterator iterator(root,
+			std::filesystem::directory_options::skip_permission_denied, error), end;
+			iterator != end; iterator.increment(error)) {
+			if (error) { error.clear(); continue; }
+			std::error_code entryError;
+			if (iterator->is_regular_file(entryError) && accepts(iterator->path()))
+				candidates.push_back(iterator->path());
+		}
+	}
+	if (candidates.empty()) return {};
+	std::sort(candidates.begin(), candidates.end());
+	return candidates.front().lexically_normal().string();
+}
+
+std::string detectedWhisperModel() {
+	const auto localRuntime = std::filesystem::path(ofFilePath::getCurrentExeDir()) /
+		"runtime" / "models" / "whisper.cpp" / "ggml-base-q5_1.bin";
+	std::error_code runtimeError;
+	if (std::filesystem::is_regular_file(localRuntime, runtimeError))
+		return localRuntime.lexically_normal().string();
+	const auto local = localAppDataDirectory();
+	if (!local.empty()) {
+		return (local / "ofxIC" / "models" / "whisper.cpp" /
+			"ggml-base-q5_1.bin").lexically_normal().string();
+	}
+	std::vector<std::filesystem::path> roots;
+	roots.emplace_back("G:/Models");
+	return firstModelFile(roots, [](const std::filesystem::path & path) {
+		const std::string name = ofToLower(path.filename().string());
+		return path.extension() == ".bin" &&
+			(name.rfind("ggml-", 0) == 0 || name.find("whisper") != std::string::npos);
+	});
+}
+
+std::string detectedSamModel() {
+	std::vector<std::filesystem::path> roots;
+	const auto local = localAppDataDirectory();
+	if (!local.empty()) roots.push_back(local / "ofxIC" / "models" / "sam");
+	roots.emplace_back("G:/Models");
+	return firstModelFile(roots, [](const std::filesystem::path & path) {
+		const std::string name = ofToLower(path.filename().string());
+		return path.extension() == ".pth" && name.rfind("sam_vit_", 0) == 0;
+	});
 }
 
 #if defined(_WIN32)
@@ -548,10 +752,12 @@ void ofApp::applyLocalRuntimeDefaults() {
 		llamaServerStatus = "Script-installed llama-server detected.";
 		ofLogNotice("ofxIC servers") << "llama-server: " << installedLlamaServer;
 	} else {
-		ofLogWarning("ofxIC servers") << "llama-server not found";
+		ofLogWarning("ofxIC servers") << "llama-server not found\n" <<
+			ofxICExample::installedExecutableSearchDiagnostic(installedServerRoot(),
+				"llama.cpp-", "llama-server.exe");
 	}
 	const std::string defaultLlamaModel = installedLlamaModel();
-	if (!ofFile::doesFileExist(llamaModelPath.data()) && !defaultLlamaModel.empty()) {
+	if (!configuredPath(llamaModelPath.data()) && !defaultLlamaModel.empty()) {
 		setTextBuffer(llamaModelPath, defaultLlamaModel);
 		llamaServerStatus = "Script-installed llama-server and local GGUF model detected.";
 	}
@@ -569,39 +775,85 @@ void ofApp::applyLocalRuntimeDefaults() {
 		stableDiffusionServerStatus = "Script-installed sd-server detected.";
 		ofLogNotice("ofxIC servers") << "sd-server: " << installedSdServer;
 	} else {
-		ofLogWarning("ofxIC servers") << "sd-server not found";
+		ofLogWarning("ofxIC servers") << "sd-server not found\n" <<
+			ofxICExample::installedExecutableSearchDiagnostic(installedServerRoot(),
+				"stable-diffusion.cpp-", "sd-server.exe");
 	}
-	const std::string installedAceStep = installedServerExecutable(
-		"ACE-Step-1.5-", "python.exe");
+	if (!aceStepModelDirectory[0] && externalModels.exists())
+		setTextBuffer(aceStepModelDirectory, "G:/Models");
+	const std::string installedAceStep = installedAceStepServer();
 	if (!installedAceStep.empty()) {
-		if (!ofxICExample::executableFileExists(aceStepServerPath.data()))
+		detectedAceStepServerPath = installedAceStep;
+		const bool oldManagedPython = !isNativeAceStepServer(aceStepServerPath.data()) &&
+			managedAceStepArguments(aceStepServerArguments.data());
+		if (!ofxICExample::executableFileExists(aceStepServerPath.data()) ||
+			(isNativeAceStepServer(installedAceStep) && oldManagedPython))
 			setTextBuffer(aceStepServerPath, installedAceStep);
-		if (!aceStepServerArguments[0]) setTextBuffer(aceStepServerArguments,
-			"-m acestep.api_server --host 127.0.0.1 --port 8085");
-		aceStepServerStatus = "Script-installed ACE-Step 1.5 environment detected.";
+		if (managedAceStepArguments(aceStepServerArguments.data()))
+			setTextBuffer(aceStepServerArguments, defaultAceStepArguments(
+				aceStepServerPath.data(), aceStepModelDirectory.data()));
+		aceStepServerStatus = isNativeAceStepServer(aceStepServerPath.data())
+			? (hasNativeAceStepModels(aceStepModelDirectory.data())
+				? "Native acestep.cpp server and complete GGUF model set detected."
+				: "Native acestep.cpp server detected; choose a folder with LM, embedding, DiT and VAE GGUFs.")
+			: "Script-installed ACE-Step 1.5 Python environment detected.";
 		ofLogNotice("ofxIC servers") << "ACE-Step: " << installedAceStep;
 	} else {
-		ofLogWarning("ofxIC servers") << "ACE-Step 1.5 environment not found; run scripts\\install-acestep-server.ps1";
+		ofLogWarning("ofxIC servers") <<
+			"ACE-Step server not found; run scripts\\install-acestep-server.ps1\nNative: " <<
+			ofxICExample::installedExecutableSearchDiagnostic(installedServerRoot(),
+				"acestep.cpp-", "ace-server.exe") << "\nPython fallback: " <<
+			ofxICExample::installedExecutableSearchDiagnostic(installedServerRoot(),
+				"ACE-Step-1.5-", "python.exe");
 	}
 	const std::string installedWhisper = installedServerExecutable(
 		"whisper.cpp-", "whisper-server.exe");
 	if (!installedWhisper.empty()) {
+		detectedWhisperServerPath = installedWhisper;
 		if (!ofxICExample::executableFileExists(whisperServerPath.data()))
 			setTextBuffer(whisperServerPath, installedWhisper);
 		whisperServerStatus = "Script-installed whisper-server detected; select a model.";
 		ofLogNotice("ofxIC servers") << "whisper-server: " << installedWhisper;
 	} else {
-		ofLogWarning("ofxIC servers") << "whisper-server not found; run scripts\\install-whisper-server.ps1";
+		ofLogWarning("ofxIC servers") <<
+			"whisper-server not found; run scripts\\install-whisper-server.ps1\n" <<
+			ofxICExample::installedExecutableSearchDiagnostic(installedServerRoot(),
+				"whisper.cpp-", "whisper-server.exe");
+	}
+	const std::string whisperModel = detectedWhisperModel();
+	if (!configuredPath(whisperModelPath.data()) && !whisperModel.empty()) {
+		setTextBuffer(whisperModelPath, whisperModel);
+		whisperServerStatus = installedWhisper.empty()
+			? "Whisper model detected; install whisper-server to start."
+			: "Script-installed whisper-server and model detected.";
 	}
 	const std::string samBridge = bundledSamBridgeScript();
 #if defined(_WIN32)
-	const std::string python = executableOnPath("python.exe");
+	const std::string installedSamPython = installedServerExecutable(
+		"sam-python-", "python.exe");
+	const std::string installedSamRunner = installedServerExecutable(
+		"sam-python-", "sam-python-runner.py");
+	detectedSamPythonPath = installedSamPython;
+	detectedSamRunnerPath = installedSamRunner;
+	const std::string python = installedSamPython.empty()
+		? executableOnPath("python.exe") : installedSamPython;
 	if (!python.empty() && !samBridge.empty() &&
-		!ofxICExample::executableFileExists(samBridgeExecutablePath.data())) {
+		!ofxICExample::executableFileExists(samBridgeExecutablePath.data()))
 		setTextBuffer(samBridgeExecutablePath, python);
-		if (!samBridgeArguments[0])
-			setTextBuffer(samBridgeArguments, "\"" + samBridge + "\" --port 18085");
-		samBridgeProcessStatus = "SAM bridge is available; add --adapter and --model to start real inference.";
+	if (!installedSamRunner.empty() &&
+		!ofFile::doesFileExist(samRunnerPath.data()))
+		setTextBuffer(samRunnerPath, installedSamRunner);
+	const std::string samModel = detectedSamModel();
+	if (!samModel.empty() && !ofFile::doesFileExist(samModelPath.data()))
+		setTextBuffer(samModelPath, samModel);
+	if (!installedSamPython.empty() && !installedSamRunner.empty()) {
+		samBridgeProcessStatus = samModelPath[0]
+			? "Script-installed CUDA SAM runtime and checkpoint detected."
+			: "Script-installed CUDA SAM runtime detected; select a checkpoint.";
+		ofLogNotice("ofxIC servers") << "SAM Python: " << installedSamPython;
+		ofLogNotice("ofxIC servers") << "SAM runner: " << installedSamRunner;
+	} else if (!python.empty() && !samBridge.empty()) {
+		samBridgeProcessStatus = "SAM bridge found, but its inference runtime is missing. Run scripts\\install-sam-server.ps1.";
 	}
 #endif
 	const std::string addonSdTurbo = bundledAddonSdTurboCheckpoint();
@@ -625,12 +877,28 @@ void ofApp::applyLocalRuntimeDefaults() {
 		const std::string value = environmentValue(name);
 		if (!value.empty()) setTextBuffer(destination, value);
 	};
+	applyNonEmptyEnvironment("OFXIC_LLAMA_SERVER", llamaServerPath);
+	applyNonEmptyEnvironment("OFXIC_LLAMA_MODEL", llamaModelPath);
+	applyNonEmptyEnvironment("OFXIC_LLAMA_MODELS", llamaModelDirectory);
+	applyNonEmptyEnvironment("OFXIC_SD_SERVER", stableDiffusionServerPath);
+	applyNonEmptyEnvironment("OFXIC_SD_MODEL", stableDiffusionModelPath);
+	applyNonEmptyEnvironment("OFXIC_SD_MODELS", stableDiffusionModelDirectory);
+	applyNonEmptyEnvironment("OFXIC_SD_VAE", stableDiffusionVaePath);
+	applyNonEmptyEnvironment("OFXIC_SD_TEXT_ENCODER", stableDiffusionTextEncoderPath);
+	applyNonEmptyEnvironment("OFXIC_SD_CLIP_L", stableDiffusionClipLPath);
+	applyNonEmptyEnvironment("OFXIC_SD_CLIP_G", stableDiffusionClipGPath);
+	const std::string completeCheckpoint = environmentValue("OFXIC_SD_COMPLETE_CHECKPOINT");
+	if (!completeCheckpoint.empty()) stableDiffusionCompleteCheckpoint = completeCheckpoint == "1";
 	applyNonEmptyEnvironment("OFXIC_ACESTEP_SERVER", aceStepServerPath);
 	applyNonEmptyEnvironment("OFXIC_ACESTEP_SERVER_ARGS", aceStepServerArguments);
+	applyNonEmptyEnvironment("OFXIC_ACESTEP_MODELS", aceStepModelDirectory);
 	applyNonEmptyEnvironment("OFXIC_WHISPER_SERVER", whisperServerPath);
+	applyNonEmptyEnvironment("OFXIC_WHISPER_MODEL", whisperModelPath);
 	applyNonEmptyEnvironment("OFXIC_WHISPER_SERVER_ARGS", whisperServerArguments);
 	applyNonEmptyEnvironment("OFXIC_SAM_BRIDGE_EXECUTABLE", samBridgeExecutablePath);
 	applyNonEmptyEnvironment("OFXIC_SAM_BRIDGE_ARGS", samBridgeArguments);
+	applyNonEmptyEnvironment("OFXIC_SAM_RUNNER", samRunnerPath);
+	applyNonEmptyEnvironment("OFXIC_SAM_MODEL", samModelPath);
 }
 
 const char * musicJobStateLabel(ofxIC::StabilityAudioJobState state) {
@@ -675,6 +943,9 @@ void ofApp::setup() {
 	ofDisableArbTex();
 	ofSetWindowTitle("ofxIC Endpoint Workbench");
 	ofSetBackgroundColor(20);
+	ofLogNotice("ofxIC build") << "Workbench compiled " << __DATE__ << " " <<
+		__TIME__ << "; executable=" <<
+		(std::filesystem::path(ofFilePath::getCurrentExeDir()) / "ofxICExample.exe").string();
 	gui.setup(nullptr, true);
 	streamChat = environmentValue("OFXIC_CHAT_STREAM") == "1";
 	chat.setSystemPrompt(chatSystemPrompt.data());
@@ -774,6 +1045,7 @@ void ofApp::setup() {
 	}
 	const std::string diagnosticsPath = environmentValue("OFXIC_DIAGNOSTICS_PATH");
 	if (!diagnosticsPath.empty()) exportDiagnostics(diagnosticsPath);
+	configureRuntimeAutomation();
 }
 
 void ofApp::update() {
@@ -782,6 +1054,8 @@ void ofApp::update() {
 	updateManagedProcess(aceStepProcess, aceStepServerStatus, "ACE-Step server");
 	updateManagedProcess(whisperProcess, whisperServerStatus, "whisper.cpp server");
 	updateManagedProcess(samBridgeProcess, samBridgeProcessStatus, "SAM bridge");
+	updateRuntimeAutomation();
+	updateRuntimeInstaller();
 	continueDeferredTask();
 	if (pendingInspectAutorun && !busy) {
 		pendingInspectAutorun = false;
@@ -875,9 +1149,12 @@ void ofApp::update() {
 				if (isVideo) {
 					generatedImage.clear();
 					generatedVideo.close();
-					generatedVideo.load(path);
-					generatedVideo.setLoopState(OF_LOOP_NORMAL);
-					generatedVideo.play();
+					if (generatedVideo.load(path)) {
+						generatedVideo.setLoopState(OF_LOOP_NORMAL);
+						generatedVideo.play();
+					} else {
+						mediaOutput += "\nThe video was generated and saved, but the local player could not decode this container.";
+					}
 				} else {
 					generatedVideo.close();
 					generatedImage.load(path);
@@ -976,6 +1253,7 @@ void ofApp::draw() {
 	bool startSdServerRequested = false;
 	bool stopSdServerRequested = false;
 	bool chooseAceStepServerRequested = false;
+	bool chooseAceStepModelDirectoryRequested = false;
 	bool startAceStepServerRequested = false;
 	bool stopAceStepServerRequested = false;
 	bool chooseWhisperServerRequested = false;
@@ -983,8 +1261,15 @@ void ofApp::draw() {
 	bool startWhisperServerRequested = false;
 	bool stopWhisperServerRequested = false;
 	bool chooseSamBridgeRequested = false;
+	bool chooseSamRunnerRequested = false;
+	bool chooseSamModelRequested = false;
 	bool startSamBridgeRequested = false;
 	bool stopSamBridgeRequested = false;
+	bool installAceStepRequested = false;
+	bool installWhisperRequested = false;
+	bool installSamRequested = false;
+	bool cancelInstallerRequested = false;
+	bool rescanInstalledRuntimesRequested = false;
 
 	gui.begin();
 	ImGui::SetNextWindowPos(ImVec2(16, 16), ImGuiCond_FirstUseEver);
@@ -999,7 +1284,7 @@ void ofApp::draw() {
 			maximumPreviewHeight / height));
 		return ImVec2(width * scale, height * scale);
 	};
-	const auto drawRuntimeStatus = [](const ofxICExample::ManagedProcess & process,
+	const auto drawRuntimeStatus = [](ofxICExample::ManagedProcess & process,
 		const std::string & statusText, const char * id) {
 		ImVec4 color(0.60f, 0.63f, 0.68f, 1.0f);
 		switch (process.state()) {
@@ -1017,6 +1302,15 @@ void ofApp::draw() {
 		ImGui::TextColored(color, "[%s]",
 			ofxICExample::managedProcessStateLabel(process.state()));
 		ImGui::TextWrapped("%s", statusText.c_str());
+		const auto & followedFiles = process.followedOutputFiles();
+		if (!followedFiles.empty()) {
+			ImGui::TextDisabled("External log source%s:", followedFiles.size() == 1 ? "" : "s");
+			for (const std::string & path : followedFiles) {
+				ImGui::TextWrapped("%s", path.c_str());
+				ImGui::SameLine();
+				ImGui::TextDisabled("(%s)", logFileAge(path).c_str());
+			}
+		}
 		const std::string & log = process.recentOutput();
 		if (log.empty()) return;
 		const std::string header = std::string("Server output##") + id;
@@ -1024,6 +1318,8 @@ void ofApp::draw() {
 			process.state() == ofxICExample::ManagedProcessState::Exited)
 			ImGui::SetNextItemOpen(true, ImGuiCond_Appearing);
 		if (ImGui::CollapsingHeader(header.c_str())) {
+			const std::string clear = std::string("Clear view##server-output-clear-") + id;
+			if (ImGui::Button(clear.c_str())) process.clearRecentOutput();
 			const std::string child = std::string("server-output-child##") + id;
 			ImGui::BeginChild(child.c_str(), ImVec2(-1, 120), true,
 				ImGuiWindowFlags_HorizontalScrollbar);
@@ -1038,20 +1334,37 @@ void ofApp::draw() {
 		ImGui::SameLine();
 		if (ImGui::Button("Export diagnostics...")) exportDiagnosticsRequested = true;
 		ImGui::TextDisabled("%s", diagnosticsStatus.c_str());
+		ImGui::TextDisabled("Workbench build: %s %s | %s", __DATE__, __TIME__,
+			(std::filesystem::path(ofFilePath::getCurrentExeDir()) /
+				"ofxICExample.exe").string().c_str());
 		ImGui::SeparatorText("Local runtime supervisor");
 		ImGui::TextWrapped(
 			"External runtimes stay separate from ofxIC. Configure models and paths in "
 			"their task tabs; supervise all owned processes here.");
-		if (ImGui::BeginTable("runtime-dashboard", 4,
+		rescanInstalledRuntimesRequested = ImGui::Button("Rescan installed runtimes");
+		ImGui::SameLine();
+		ImGui::TextDisabled("%s", installedServerRoot().c_str());
+		if (ImGui::BeginTable("runtime-dashboard", 5,
 			ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingStretchProp)) {
 			ImGui::TableSetupColumn("Runtime");
 			ImGui::TableSetupColumn("State");
+			ImGui::TableSetupColumn("Configuration");
 			ImGui::TableSetupColumn("Endpoint");
 			ImGui::TableSetupColumn("Action");
 			ImGui::TableHeadersRow();
+			const auto configuration = [](bool executable, bool model,
+				const char * modelLabel = "model") {
+				if (executable && model) return std::string("ready");
+				if (!executable && !model)
+					return std::string("missing executable + ") + modelLabel;
+				return executable ? std::string("missing ") + modelLabel
+					: std::string("missing executable");
+			};
 			const auto row = [](const char * name, const char * endpoint,
 				const char * id, const ofxICExample::ManagedProcess & process,
+				const std::string & configurationState,
 				bool & startRequested, bool & stopRequested) {
+				const bool configured = configurationState == "ready";
 				ImGui::TableNextRow();
 				ImGui::TableSetColumnIndex(0); ImGui::TextUnformatted(name);
 				ImGui::TableSetColumnIndex(1);
@@ -1066,8 +1379,13 @@ void ofApp::draw() {
 					color = ImVec4(0.95f, 0.52f, 0.22f, 1.0f);
 				ImGui::TextColored(color, "%s",
 					ofxICExample::managedProcessStateLabel(process.state()));
-				ImGui::TableSetColumnIndex(2); ImGui::TextUnformatted(endpoint);
-				ImGui::TableSetColumnIndex(3);
+				ImGui::TableSetColumnIndex(2);
+				ImGui::TextColored(configured
+					? ImVec4(0.24f, 0.82f, 0.45f, 1.0f)
+					: ImVec4(0.95f, 0.28f, 0.28f, 1.0f),
+					"%s", configurationState.c_str());
+				ImGui::TableSetColumnIndex(3); ImGui::TextUnformatted(endpoint);
+				ImGui::TableSetColumnIndex(4);
 				const std::string action = process.running()
 					? (process.ownsProcess() ? "Stop##" : "Disconnect##") : "Start##";
 				const std::string button = action + id;
@@ -1077,19 +1395,48 @@ void ofApp::draw() {
 				}
 			};
 			row("llama-server", "127.0.0.1:8080", "overview-llama", llamaProcess,
+				configuration(configuredRuntime(llamaServerPath.data(), detectedLlamaServerPath),
+					configuredPath(llamaModelPath.data()), "GGUF model"),
 				startLlamaServerRequested, stopLlamaServerRequested);
 			row("sd-server", "127.0.0.1:8081", "overview-sd", stableDiffusionProcess,
+				configuration(configuredRuntime(stableDiffusionServerPath.data(),
+					detectedStableDiffusionServerPath),
+					configuredPath(stableDiffusionModelPath.data()), "diffusion model"),
 				startSdServerRequested, stopSdServerRequested);
 			row("whisper.cpp", "127.0.0.1:8082", "overview-whisper", whisperProcess,
+				configuration(configuredRuntime(whisperServerPath.data(), detectedWhisperServerPath),
+					configuredPath(whisperModelPath.data()), "Whisper model"),
 				startWhisperServerRequested, stopWhisperServerRequested);
 			row("ACE-Step", "127.0.0.1:8085", "overview-acestep", aceStepProcess,
+				configuration(configuredRuntime(aceStepServerPath.data(), detectedAceStepServerPath),
+					(!isNativeAceStepServer(aceStepServerPath.data()) ||
+						configuredPath(aceStepModelDirectory.data())), "GGUF folder"),
 				startAceStepServerRequested, stopAceStepServerRequested);
 			row("SAM bridge", "127.0.0.1:18085", "overview-sam", samBridgeProcess,
+				configuration(configuredRuntime(samBridgeExecutablePath.data(), detectedSamPythonPath),
+					(configuredPath(samRunnerPath.data()) || !detectedSamRunnerPath.empty()) &&
+					configuredPath(samModelPath.data()), "runner/checkpoint"),
 				startSamBridgeRequested, stopSamBridgeRequested);
 			ImGui::EndTable();
 		}
 		ImGui::TextDisabled(
 			"Failed starts remain actionable: open the matching task tab for the exact status and server output.");
+		ImGui::SeparatorText("Install missing runtimes");
+		ImGui::TextWrapped(
+			"Installers place external CUDA runtimes under %%LOCALAPPDATA%%\\ofxIC\\servers. "
+			"They remain separate processes and are detected automatically when installation completes.");
+		ImGui::BeginDisabled(installerProcess.running());
+		installWhisperRequested = ImGui::Button("Install Whisper + base model");
+		ImGui::SameLine();
+		installAceStepRequested = ImGui::Button("Install ACE-Step native CUDA");
+		ImGui::SameLine();
+		installSamRequested = ImGui::Button("Install SAM CUDA 13");
+		ImGui::EndDisabled();
+		if (installerProcess.running()) {
+			ImGui::SameLine();
+			cancelInstallerRequested = ImGui::Button("Cancel installation");
+		}
+		drawRuntimeStatus(installerProcess, installerStatus, "installer");
 		if (deferredTask != DeferredTask::None) {
 			ImGui::SeparatorText("Queued task");
 			ImGui::TextColored(ImVec4(0.95f, 0.72f, 0.22f, 1.0f), "%s is waiting for its runtime.",
@@ -1316,6 +1663,7 @@ void ofApp::draw() {
 				if (ImGui::Button("Detect installed##whisper")) {
 					const std::string detected = installedServerExecutable("whisper.cpp-", "whisper-server.exe");
 					if (!detected.empty()) {
+						detectedWhisperServerPath = detected;
 						setTextBuffer(whisperServerPath, detected);
 						whisperServerStatus = "Script-installed whisper-server selected.";
 					} else whisperServerStatus = "No script-installed whisper-server found. Run scripts\\install-whisper-server.ps1.";
@@ -1383,6 +1731,15 @@ void ofApp::draw() {
 		ImGui::SameLine(); rescanSdModelsRequested = ImGui::Button("Rescan models##sd");
 		ImGui::InputText("Diffusion model", stableDiffusionModelPath.data(), stableDiffusionModelPath.size());
 		ImGui::SameLine(); chooseSdModelRequested = ImGui::Button("Choose model##sd");
+		if (stableDiffusionProcess.running()) {
+			ImGui::TextDisabled("Loaded by running server: %s",
+				stableDiffusionActiveModelPath.empty() ? "externally managed / unknown"
+					: ofFilePath::getFileName(stableDiffusionActiveModelPath).c_str());
+			if (!stableDiffusionActiveModelPath.empty() &&
+				stableDiffusionActiveModelPath != stableDiffusionModelPath.data())
+				ImGui::TextColored(ImVec4(0.95f, 0.72f, 0.22f, 1.0f),
+					"Selection changed; the next generation restarts sd-server.");
+		}
 		const std::string addonsSdTurbo = bundledAddonSdTurboCheckpoint();
 		if (!addonsSdTurbo.empty() && stableDiffusionModelPath.data() != addonsSdTurbo) {
 			if (ImGui::Button("Use Addons SD-Turbo")) {
@@ -1400,6 +1757,13 @@ void ofApp::draw() {
 			for (const auto & path : detectedDiffusionModels) if (ImGui::Selectable(ofFilePath::getFileName(path).c_str(), path == stableDiffusionModelPath.data())) {
 				setTextBuffer(stableDiffusionModelPath, path);
 				stableDiffusionCompleteCheckpoint = ofToLower(ofFilePath::getFileExt(path)) != "gguf";
+				const std::string name = ofToLower(ofFilePath::getFileName(path));
+				if (name.find("wan") != std::string::npos) {
+					setTextBuffer(stableDiffusionVaePath, preferredModelComponent(detectedVaeModels,
+						{ name.find("2.2") != std::string::npos ? "wan2.2" : "wan2.1", "wan" }));
+					setTextBuffer(stableDiffusionTextEncoderPath,
+						preferredModelComponent(detectedTextEncoders, { "umt5", "t5" }));
+				}
 			}
 			ImGui::EndCombo();
 		}
@@ -1432,10 +1796,10 @@ void ofApp::draw() {
 		stopSdServerRequested = ImGui::Button("Stop sd-server"); ImGui::EndDisabled();
 		drawRuntimeStatus(stableDiffusionProcess, stableDiffusionServerStatus, "sd");
 	}
-	ImGui::TextDisabled(
-		"Capabilities: Image: %s | Video: %s",
+	ImGui::TextDisabled("Capabilities: Image: %s | Video: %s",
 		mediaProfile.supportsImage ? "yes" : "no",
-		mediaProfile.supportsVideo ? "yes" : "no");
+		selectedMediaBackend == 2 ? "checked from loaded model" :
+			(mediaProfile.supportsVideo ? "yes" : "no"));
 	ImGui::TextWrapped("%s", mediaProfile.capabilityNote);
 	if (mediaProfile.supportsImage && mediaProfile.supportsVideo) {
 		ImGui::Combo("Kind", &selectedMediaKind, mediaKinds, 2);
@@ -1521,6 +1885,14 @@ void ofApp::draw() {
 		ImGui::Image(
 			(ImTextureID)(uintptr_t)generatedVideo.getTexture().getTextureData().textureID,
 			fitMediaPreview(generatedVideo.getWidth(), generatedVideo.getHeight()));
+		if (ImGui::Button(generatedVideo.isPaused() ? "Resume video" : "Pause video"))
+			generatedVideo.setPaused(!generatedVideo.isPaused());
+		ImGui::SameLine();
+		if (ImGui::Button("Restart video")) {
+			generatedVideo.setPosition(0.0f);
+			generatedVideo.setPaused(false);
+			generatedVideo.play();
+		}
 	}
 		ImGui::EndTabItem();
 	}
@@ -1538,18 +1910,29 @@ void ofApp::draw() {
 	}
 	ImGui::TextDisabled("%s", musicBackends[selectedMusicBackend].capabilityNote);
 	if (selectedMusicBackend == 0 && ImGui::CollapsingHeader("Local ACE-Step 1.5 server", ImGuiTreeNodeFlags_DefaultOpen)) {
-		ImGui::InputText("ACE-Step Python", aceStepServerPath.data(), aceStepServerPath.size());
+		ImGui::InputText("ACE-Step server", aceStepServerPath.data(), aceStepServerPath.size());
 		ImGui::SameLine(); chooseAceStepServerRequested = ImGui::Button("Choose server##ace");
 		ImGui::SameLine();
 		if (ImGui::Button("Detect installed##ace")) {
-			const std::string detected = installedServerExecutable("ACE-Step-1.5-", "python.exe");
+			const std::string detected = installedAceStepServer();
 			if (!detected.empty()) {
+				detectedAceStepServerPath = detected;
 				setTextBuffer(aceStepServerPath, detected);
-				if (!aceStepServerArguments[0]) setTextBuffer(aceStepServerArguments,
-					"-m acestep.api_server --host 127.0.0.1 --port 8085");
-				aceStepServerStatus = "Script-installed ACE-Step 1.5 environment selected.";
-			} else aceStepServerStatus = "No ACE-Step environment found. Run scripts\\install-acestep-server.ps1.";
+				if (managedAceStepArguments(aceStepServerArguments.data()))
+					setTextBuffer(aceStepServerArguments, defaultAceStepArguments(
+						aceStepServerPath.data(), aceStepModelDirectory.data()));
+				aceStepServerStatus = isNativeAceStepServer(detected)
+					? "Script-installed native acestep.cpp server selected."
+					: "Script-installed ACE-Step 1.5 Python environment selected.";
+			} else aceStepServerStatus = "No ACE-Step server found. Run scripts\\install-acestep-server.ps1.";
 			ofLogNotice("ofxIC servers") << "Detect ACE-Step: " << (detected.empty() ? "not found" : detected);
+		}
+		ImGui::InputText("Model folder##ace", aceStepModelDirectory.data(), aceStepModelDirectory.size());
+		ImGui::SameLine();
+		chooseAceStepModelDirectoryRequested = ImGui::Button("Choose folder##ace-models");
+		if (isNativeAceStepServer(aceStepServerPath.data())) {
+			ImGui::TextDisabled("GGUF set: %s", hasNativeAceStepModels(aceStepModelDirectory.data())
+				? "LM + embedding + DiT + VAE ready" : "incomplete or not found");
 		}
 		ImGui::InputText("Server arguments", aceStepServerArguments.data(), aceStepServerArguments.size());
 		const bool running = aceStepProcess.running();
@@ -1626,10 +2009,29 @@ void ofApp::draw() {
 	ImGui::TextUnformatted("SAM bridge v1");
 	ImGui::TextDisabled("External endpoint: PPM + normalized points -> PGM mask");
 	if (ImGui::CollapsingHeader("Local SAM bridge process", ImGuiTreeNodeFlags_DefaultOpen)) {
+		if (ImGui::Button("Detect installed SAM runtime")) {
+			const std::string python = installedServerExecutable("sam-python-", "python.exe");
+			const std::string runner = installedServerExecutable("sam-python-", "sam-python-runner.py");
+			const std::string model = detectedSamModel();
+			detectedSamPythonPath = python;
+			detectedSamRunnerPath = runner;
+			if (!python.empty()) setTextBuffer(samBridgeExecutablePath, python);
+			if (!runner.empty()) setTextBuffer(samRunnerPath, runner);
+			if (!model.empty()) setTextBuffer(samModelPath, model);
+			samBridgeProcessStatus = !python.empty() && !runner.empty()
+				? (model.empty() ? "Installed SAM runtime selected; choose a checkpoint."
+					: "Installed SAM runtime and checkpoint selected.")
+				: "No script-installed SAM runtime found. Run scripts\\install-sam-server.ps1.";
+		}
 		ImGui::InputText("Python executable", samBridgeExecutablePath.data(), samBridgeExecutablePath.size());
-		ImGui::SameLine(); chooseSamBridgeRequested = ImGui::Button("Choose executable##sam");
-		ImGui::InputText("Bridge + adapter arguments", samBridgeArguments.data(), samBridgeArguments.size());
-		ImGui::TextDisabled("Real inference requires: sam-bridge-server.py --adapter <runner.exe> --model <model> --backend cuda");
+		ImGui::SameLine(); chooseSamBridgeRequested = ImGui::Button("Choose Python##sam");
+		ImGui::InputText("SAM runner", samRunnerPath.data(), samRunnerPath.size());
+		ImGui::SameLine(); chooseSamRunnerRequested = ImGui::Button("Choose runner##sam");
+		ImGui::InputText("SAM checkpoint", samModelPath.data(), samModelPath.size());
+		ImGui::SameLine(); chooseSamModelRequested = ImGui::Button("Choose checkpoint##sam");
+		ImGui::Checkbox("CUDA 13##sam", &samCuda);
+		ImGui::InputText("Extra bridge arguments", samBridgeArguments.data(), samBridgeArguments.size());
+		ImGui::TextDisabled("The GUI starts the bundled bridge and the selected external SAM runner on port 18085.");
 		const bool running = samBridgeProcess.running();
 		ImGui::BeginDisabled(running);
 		startSamBridgeRequested = ImGui::Button("Start SAM bridge"); ImGui::EndDisabled();
@@ -1747,6 +2149,10 @@ void ofApp::draw() {
 	}
 	ImGui::End();
 	gui.end();
+	if (rescanInstalledRuntimesRequested) {
+		applyLocalRuntimeDefaults();
+		ofLogNotice("ofxIC servers") << "Installed runtime rescan completed.";
+	}
 	if (exportDiagnosticsRequested) {
 		const std::string filename = "ofxIC-diagnostics-" +
 			ofGetTimestampString("%Y%m%d-%H%M%S") + ".txt";
@@ -1807,6 +2213,13 @@ void ofApp::draw() {
 			setTextBuffer(stableDiffusionModelPath, selection.getPath());
 			stableDiffusionCompleteCheckpoint =
 				ofToLower(ofFilePath::getFileExt(selection.getPath())) != "gguf";
+			const std::string name = ofToLower(ofFilePath::getFileName(selection.getPath()));
+			if (name.find("wan") != std::string::npos) {
+				setTextBuffer(stableDiffusionVaePath, preferredModelComponent(detectedVaeModels,
+					{ name.find("2.2") != std::string::npos ? "wan2.2" : "wan2.1", "wan" }));
+				setTextBuffer(stableDiffusionTextEncoderPath,
+					preferredModelComponent(detectedTextEncoders, { "umt5", "t5" }));
+			}
 		}
 	}
 	if (chooseSdVaeRequested) choosePath("Choose VAE", stableDiffusionVaePath);
@@ -1816,6 +2229,19 @@ void ofApp::draw() {
 	if (startSdServerRequested) startLocalStableDiffusionServer();
 	if (stopSdServerRequested) stopLocalStableDiffusionServer();
 	if (chooseAceStepServerRequested) choosePath("Choose ACE-Step server executable", aceStepServerPath);
+	if (chooseAceStepModelDirectoryRequested) {
+		ofFileDialogResult selection = ofSystemLoadDialog(
+			"Choose ACE-Step GGUF model folder", true, aceStepModelDirectory.data());
+		if (selection.bSuccess) {
+			setTextBuffer(aceStepModelDirectory, selection.getPath());
+			if (managedAceStepArguments(aceStepServerArguments.data()))
+				setTextBuffer(aceStepServerArguments, defaultAceStepArguments(
+					aceStepServerPath.data(), aceStepModelDirectory.data()));
+			aceStepServerStatus = hasNativeAceStepModels(aceStepModelDirectory.data())
+				? "Complete ACE-Step GGUF model set selected."
+				: "Selected folder does not contain LM, embedding, DiT and VAE GGUFs.";
+		}
+	}
 	if (startAceStepServerRequested) startLocalAceStepServer();
 	if (stopAceStepServerRequested) stopLocalAceStepServer();
 	if (chooseWhisperServerRequested) choosePath("Choose whisper-server.exe", whisperServerPath);
@@ -1823,8 +2249,27 @@ void ofApp::draw() {
 	if (startWhisperServerRequested) startLocalWhisperServer();
 	if (stopWhisperServerRequested) stopLocalWhisperServer();
 	if (chooseSamBridgeRequested) choosePath("Choose SAM bridge executable", samBridgeExecutablePath);
+	if (chooseSamRunnerRequested) choosePath("Choose SAM runner", samRunnerPath);
+	if (chooseSamModelRequested) choosePath("Choose Meta SAM checkpoint", samModelPath);
 	if (startSamBridgeRequested) startLocalSamBridge();
 	if (stopSamBridgeRequested) stopLocalSamBridge();
+	if (installWhisperRequested)
+		startRuntimeInstaller("Whisper", "install-whisper-server.ps1");
+	if (installAceStepRequested)
+		startRuntimeInstaller("ACE-Step native CUDA", "install-acestep-server.ps1");
+	if (installSamRequested) {
+		std::vector<std::string> arguments;
+		const std::string model = ofFile::doesFileExist(samModelPath.data())
+			? std::string(samModelPath.data()) : detectedSamModel();
+		if (!model.empty()) arguments = { "-ExistingModel", model };
+		else arguments = { "-DownloadModel" };
+		startRuntimeInstaller("SAM CUDA 13", "install-sam-server.ps1", arguments);
+	}
+	if (cancelInstallerRequested) {
+		installerProcess.stop();
+		installerCompletionHandled = true;
+		installerStatus = "Runtime installation cancelled; incomplete installers clean their own staging data when possible.";
+	}
 
 	if (loadDocumentRequested && !taskLocked) {
 		ofFileDialogResult selection = ofSystemLoadDialog("Load a Markdown or text document");
@@ -1946,27 +2391,34 @@ void ofApp::exit() {
 	stopLocalAceStepServer();
 	stopLocalWhisperServer();
 	stopLocalSamBridge();
+	installerProcess.stop();
 }
 
 void ofApp::startLocalLlamaServer() {
 	if (llamaProcess.running()) return;
 	if (llamaProcess.useExisting("llama-server", 8080)) {
+		llamaProcess.followOutputFiles(localServerLogFiles("llama-server", 8080));
 		setTextBuffer(endpointUrl, "http://127.0.0.1:8080");
 		configurationDirty = true;
 		llamaServerStatus = llamaProcess.status();
 		return;
 	}
 	detectedLlamaServerPath = ofxICExample::resolveInstalledExecutable(
-		llamaServerPath.data(), installedServerRoot(), "llama.cpp-", "llama-server.exe");
-	setTextBuffer(llamaServerPath, detectedLlamaServerPath);
+		llamaServerPath.data(), detectedLlamaServerPath, installedServerRoot(),
+		"llama.cpp-", "llama-server.exe");
 	if (detectedLlamaServerPath.empty()) {
-		llamaServerStatus = "llama-server executable not found: " +
-			std::string(llamaServerPath.data());
-		ofLogError("ofxIC servers") << llamaServerStatus;
+		const std::string configured = llamaServerPath.data();
+		llamaServerStatus = configured.empty()
+			? "llama-server executable not found under " + installedServerRoot() + "."
+			: "llama-server executable not found: " + configured;
+		ofLogError("ofxIC servers") << llamaServerStatus << "\n" <<
+			runtimeExecutableFailureDiagnostic(configured, detectedLlamaServerPath,
+				"llama.cpp-", "llama-server.exe");
 		return;
 	}
-	if (!ofFile::doesFileExist(llamaModelPath.data())) {
-		llamaServerStatus = "Selected GGUF model does not exist.";
+	setTextBuffer(llamaServerPath, detectedLlamaServerPath);
+	if (!configuredPath(llamaModelPath.data())) {
+		llamaServerStatus = "Choose a GGUF model before starting llama-server.";
 		return;
 	}
 	ofLogNotice("ofxIC servers") << "Starting llama-server: " << llamaServerPath.data();
@@ -2001,6 +2453,169 @@ void ofApp::updateManagedProcess(ofxICExample::ManagedProcess & process,
 	processStatus = process.status();
 	const std::string output = process.takeNewOutput();
 	if (!output.empty()) ofLogNotice("ofxIC servers") << logName << ":\n" << output;
+}
+
+void ofApp::configureRuntimeAutomation() {
+	runtimeAutomation = ofToLower(environmentValue("OFXIC_RUNTIME_AUTOSTART"));
+	if (runtimeAutomation.empty()) return;
+	runtimeAutomationResultPath = environmentValue("OFXIC_RUNTIME_RESULT_PATH");
+	if (runtimeAutomationResultPath.empty()) {
+		ofLogError("ofxIC runtime matrix") <<
+			"OFXIC_RUNTIME_AUTOSTART requires OFXIC_RUNTIME_RESULT_PATH.";
+		runtimeAutomation.clear();
+		return;
+	}
+	if (runtimeAutomation == "sd") runtimeAutomation = "stable-diffusion";
+	if (runtimeAutomation == "acestep") runtimeAutomation = "ace-step";
+	if (runtimeAutomation != "llama" && runtimeAutomation != "stable-diffusion" &&
+		runtimeAutomation != "ace-step" && runtimeAutomation != "whisper" &&
+		runtimeAutomation != "sam") {
+		finishRuntimeAutomation("failed", "Unknown runtime name: " + runtimeAutomation);
+		return;
+	}
+	const int configuredTimeout = ofToInt(environmentValue("OFXIC_RUNTIME_TIMEOUT_SECONDS"));
+	if (configuredTimeout > 0) {
+		runtimeAutomationTimeoutMillis = static_cast<std::uint64_t>(
+			std::clamp(configuredTimeout, 1, 3600)) * 1000ULL;
+	}
+	runtimeAutomationPlanOnly = environmentValue("OFXIC_RUNTIME_PLAN") == "1";
+	runtimeAutomationStartedAtMillis = ofGetElapsedTimeMillis();
+	if (runtimeAutomationPlanOnly) return;
+
+	ofxICExample::ManagedProcess * process = nullptr;
+	if (runtimeAutomation == "llama") {
+		startLocalLlamaServer();
+		process = &llamaProcess;
+	} else if (runtimeAutomation == "stable-diffusion") {
+		startLocalStableDiffusionServer();
+		process = &stableDiffusionProcess;
+	} else if (runtimeAutomation == "ace-step") {
+		startLocalAceStepServer();
+		process = &aceStepProcess;
+	} else if (runtimeAutomation == "whisper") {
+		startLocalWhisperServer();
+		process = &whisperProcess;
+	} else if (runtimeAutomation == "sam") {
+		startLocalSamBridge();
+		process = &samBridgeProcess;
+	}
+	ofLogNotice("ofxIC runtime matrix") << "GUI start path selected for " <<
+		runtimeAutomation << "; state=" <<
+		ofxICExample::managedProcessStateLabel(process->state());
+}
+
+void ofApp::updateRuntimeAutomation() {
+	if (runtimeAutomation.empty() || runtimeAutomationFinished) return;
+	if (runtimeAutomationPlanOnly) {
+		finishRuntimeAutomation("planned", "Configuration inspected; no process was started.");
+		return;
+	}
+
+	ofxICExample::ManagedProcess * process = nullptr;
+	std::string * processStatus = nullptr;
+	if (runtimeAutomation == "llama") {
+		process = &llamaProcess;
+		processStatus = &llamaServerStatus;
+	} else if (runtimeAutomation == "stable-diffusion") {
+		process = &stableDiffusionProcess;
+		processStatus = &stableDiffusionServerStatus;
+	} else if (runtimeAutomation == "ace-step") {
+		process = &aceStepProcess;
+		processStatus = &aceStepServerStatus;
+	} else if (runtimeAutomation == "whisper") {
+		process = &whisperProcess;
+		processStatus = &whisperServerStatus;
+	} else if (runtimeAutomation == "sam") {
+		process = &samBridgeProcess;
+		processStatus = &samBridgeProcessStatus;
+	}
+	if (!process || !processStatus) {
+		finishRuntimeAutomation("failed", "Runtime automation has no process mapping.");
+		return;
+	}
+
+	using State = ofxICExample::ManagedProcessState;
+	if (process->state() == State::Ready) {
+		finishRuntimeAutomation("ready", *processStatus);
+	} else if (process->state() == State::Failed || process->state() == State::Exited ||
+		process->state() == State::Stopped) {
+		finishRuntimeAutomation("failed", *processStatus);
+	} else if (ofGetElapsedTimeMillis() - runtimeAutomationStartedAtMillis >=
+		runtimeAutomationTimeoutMillis) {
+		finishRuntimeAutomation("timeout", *processStatus);
+	}
+}
+
+void ofApp::finishRuntimeAutomation(const std::string & state,
+	const std::string & statusText) {
+	if (runtimeAutomationFinished || runtimeAutomationResultPath.empty()) return;
+	runtimeAutomationFinished = true;
+
+	const ofxICExample::ManagedProcess * process = nullptr;
+	std::string executable;
+	std::string model;
+	std::string auxiliary;
+	bool configurationReady = false;
+	if (runtimeAutomation == "llama") {
+		process = &llamaProcess;
+		executable = llamaServerPath.data();
+		model = llamaModelPath.data();
+		configurationReady = configuredPath(executable.c_str()) &&
+			configuredPath(model.c_str());
+	} else if (runtimeAutomation == "stable-diffusion") {
+		process = &stableDiffusionProcess;
+		executable = stableDiffusionServerPath.data();
+		model = stableDiffusionModelPath.data();
+		configurationReady = configuredPath(executable.c_str()) &&
+			configuredPath(model.c_str());
+	} else if (runtimeAutomation == "ace-step") {
+		process = &aceStepProcess;
+		executable = aceStepServerPath.data();
+		model = aceStepModelDirectory.data();
+		configurationReady = configuredPath(executable.c_str()) &&
+			(!isNativeAceStepServer(executable) || configuredPath(model.c_str()));
+	} else if (runtimeAutomation == "whisper") {
+		process = &whisperProcess;
+		executable = whisperServerPath.data();
+		model = whisperModelPath.data();
+		configurationReady = configuredPath(executable.c_str()) &&
+			configuredPath(model.c_str());
+	} else if (runtimeAutomation == "sam") {
+		process = &samBridgeProcess;
+		executable = samBridgeExecutablePath.data();
+		model = samModelPath.data();
+		auxiliary = samRunnerPath.data();
+		configurationReady = configuredPath(executable.c_str()) &&
+			configuredPath(model.c_str()) && configuredPath(auxiliary.c_str());
+	}
+
+	const auto oneLine = [](std::string value) {
+		std::replace(value.begin(), value.end(), '\r', ' ');
+		std::replace(value.begin(), value.end(), '\n', ' ');
+		return value;
+	};
+	std::ostringstream result;
+	result << "runtime=" << runtimeAutomation << '\n'
+		<< "state=" << state << '\n'
+		<< "process_state=" << (process
+			? ofxICExample::managedProcessStateLabel(process->state()) : "unmapped") << '\n'
+		<< "ownership=" << (process && process->ownsProcess() ? "owned" :
+			(process && process->state() == ofxICExample::ManagedProcessState::Ready
+				? "external" : "none")) << '\n'
+		<< "pid=" << (process ? process->processId() : 0) << '\n'
+		<< "configuration=" << (configurationReady ? "ready" : "incomplete") << '\n'
+		<< "executable=" << executable << '\n'
+		<< "model=" << model << '\n';
+	if (!auxiliary.empty()) result << "auxiliary=" << auxiliary << '\n';
+	result << "status=" << oneLine(statusText) << '\n';
+	std::string error;
+	if (!ofxICExample::writeTextFileAtomically(
+		runtimeAutomationResultPath, result.str(), &error)) {
+		ofLogError("ofxIC runtime matrix") << "Could not write runtime result: " << error;
+	} else {
+		ofLogNotice("ofxIC runtime matrix") << runtimeAutomation << " result: " << state;
+	}
+	ofExit(state == "ready" || state == "planned" ? 0 : 1);
 }
 
 const char * ofApp::deferredTaskLabel(DeferredTask task) const {
@@ -2204,7 +2819,7 @@ std::string ofApp::diagnosticsReport() const {
 		if (!path || !*path) return std::string("not-configured");
 		std::error_code error;
 		return std::filesystem::is_regular_file(std::filesystem::path(path), error)
-			? std::string("valid") : std::string("missing");
+			? std::string("visible") : std::string("configured-unverified");
 	};
 	std::ostringstream report;
 	report << "ofxIC privacy-aware diagnostics\n"
@@ -2247,6 +2862,7 @@ std::string ofApp::diagnosticsReport() const {
 			(process.ownsProcess() ? "owned" :
 				(process.state() == ofxICExample::ManagedProcessState::Ready ? "external" : "none")) << '\n'
 			<< "runtime." << id << ".pid=" << process.processId() << '\n'
+			<< "runtime." << id << ".launch=" << process.launchMethod() << '\n'
 			<< "runtime." << id << ".executable=" << executableState << '\n'
 			<< "runtime." << id << ".recent_output=" <<
 				(process.recentOutput().empty() ? "no" : "yes") << '\n';
@@ -2257,11 +2873,15 @@ std::string ofApp::diagnosticsReport() const {
 	runtime("stable_diffusion", stableDiffusionProcess,
 		fileState(stableDiffusionServerPath.data()), fileState(stableDiffusionModelPath.data()));
 	runtime("ace_step", aceStepProcess,
-		fileState(aceStepServerPath.data()));
+		fileState(aceStepServerPath.data()), isNativeAceStepServer(aceStepServerPath.data())
+			? (!configuredPath(aceStepModelDirectory.data()) ? "not-configured" :
+				(hasNativeAceStepModels(aceStepModelDirectory.data())
+					? "visible-gguf-set" : "configured-unverified-gguf-set"))
+			: "python-checkpoints");
 	runtime("whisper", whisperProcess,
 		fileState(whisperServerPath.data()), fileState(whisperModelPath.data()));
 	runtime("sam", samBridgeProcess,
-		fileState(samBridgeExecutablePath.data()));
+		fileState(samBridgeExecutablePath.data()), fileState(samModelPath.data()));
 	return report.str();
 }
 
@@ -2282,24 +2902,39 @@ bool ofApp::exportDiagnostics(const std::string & path) {
 }
 
 void ofApp::startLocalStableDiffusionServer() {
-	if (stableDiffusionProcess.running()) return;
+	if (stableDiffusionProcess.running()) {
+		if (!stableDiffusionActiveModelPath.empty() &&
+			stableDiffusionActiveModelPath != stableDiffusionModelPath.data() &&
+			stableDiffusionProcess.ownsProcess()) {
+			stopLocalStableDiffusionServer();
+		} else return;
+	}
 	if (stableDiffusionProcess.useExisting("sd-server", 8081)) {
+		stableDiffusionProcess.followOutputFiles(localServerLogFiles("sd-server", 8081));
+		stableDiffusionActiveModelPath.clear();
 		setTextBuffer(mediaEndpointUrl, "http://127.0.0.1:8081");
 		mediaConfigurationDirty = true;
-		stableDiffusionServerStatus = stableDiffusionProcess.status();
+		stableDiffusionServerStatus = stableDiffusionProcess.status() +
+			" The model selector cannot change this external process.";
 		return;
 	}
 	detectedStableDiffusionServerPath = ofxICExample::resolveInstalledExecutable(
-		stableDiffusionServerPath.data(), installedServerRoot(),
+		stableDiffusionServerPath.data(), detectedStableDiffusionServerPath,
+		installedServerRoot(),
 		"stable-diffusion.cpp-", "sd-server.exe");
-	setTextBuffer(stableDiffusionServerPath, detectedStableDiffusionServerPath);
 	if (detectedStableDiffusionServerPath.empty()) {
-		stableDiffusionServerStatus = "sd-server executable was not found under " +
-			installedServerRoot() + ".";
+		const std::string configured = stableDiffusionServerPath.data();
+		stableDiffusionServerStatus = configured.empty()
+			? "sd-server executable was not found under " + installedServerRoot() + "."
+			: "sd-server executable was not found: " + configured;
+		ofLogError("ofxIC servers") << stableDiffusionServerStatus << "\n" <<
+			runtimeExecutableFailureDiagnostic(configured,
+				detectedStableDiffusionServerPath, "stable-diffusion.cpp-", "sd-server.exe");
 		return;
 	}
-	if (!ofFile::doesFileExist(stableDiffusionModelPath.data())) {
-		stableDiffusionServerStatus = "Selected Stable Diffusion model does not exist.";
+	setTextBuffer(stableDiffusionServerPath, detectedStableDiffusionServerPath);
+	if (!configuredPath(stableDiffusionModelPath.data())) {
+		stableDiffusionServerStatus = "Choose a Stable Diffusion model before starting sd-server.";
 		return;
 	}
 	std::vector<std::string> arguments{ stableDiffusionCompleteCheckpoint ? "--model" : "--diffusion-model",
@@ -2312,6 +2947,7 @@ void ofApp::startLocalStableDiffusionServer() {
 	if (stableDiffusionOffloadToCpu) arguments.push_back("--offload-to-cpu");
 	if (stableDiffusionProcess.start(
 		stableDiffusionServerPath.data(), arguments, "sd-server", 8081)) {
+		stableDiffusionActiveModelPath = stableDiffusionModelPath.data();
 		setTextBuffer(mediaEndpointUrl, "http://127.0.0.1:8081");
 		mediaConfigurationDirty = true;
 	}
@@ -2320,6 +2956,7 @@ void ofApp::startLocalStableDiffusionServer() {
 
 void ofApp::stopLocalStableDiffusionServer() {
 	stableDiffusionProcess.stop();
+	stableDiffusionActiveModelPath.clear();
 	stableDiffusionServerStatus = stableDiffusionProcess.status();
 }
 
@@ -2331,16 +2968,33 @@ void ofApp::startLocalAceStepServer() {
 		aceStepServerStatus = aceStepProcess.status();
 		return;
 	}
-	const std::string resolved = ofxICExample::resolveInstalledExecutable(
-		aceStepServerPath.data(), installedServerRoot(), "ACE-Step-1.5-", "python.exe");
+	std::string resolved = ofxICExample::resolveInstalledExecutable(
+		aceStepServerPath.data(), detectedAceStepServerPath, installedServerRoot(),
+		"acestep.cpp-", "ace-server.exe");
 	if (resolved.empty()) {
-		aceStepServerStatus = "ACE-Step 1.5 environment not found. Run scripts\\install-acestep-server.ps1.";
-		ofLogError("ofxIC servers") << aceStepServerStatus;
+		resolved = ofxICExample::resolveInstalledExecutable(
+			aceStepServerPath.data(), detectedAceStepServerPath, installedServerRoot(),
+			"ACE-Step-1.5-", "python.exe");
+	}
+	if (resolved.empty()) {
+		aceStepServerStatus = "ACE-Step server not found. Run scripts\\install-acestep-server.ps1.";
+		ofLogError("ofxIC servers") << aceStepServerStatus << "\nNative: " <<
+			runtimeExecutableFailureDiagnostic(aceStepServerPath.data(),
+				detectedAceStepServerPath, "acestep.cpp-", "ace-server.exe") <<
+			"\nPython fallback: " << runtimeExecutableFailureDiagnostic(
+				aceStepServerPath.data(), detectedAceStepServerPath,
+				"ACE-Step-1.5-", "python.exe");
 		return;
 	}
 	setTextBuffer(aceStepServerPath, resolved);
-	if (!aceStepServerArguments[0]) setTextBuffer(aceStepServerArguments,
-		"-m acestep.api_server --host 127.0.0.1 --port 8085");
+	if (isNativeAceStepServer(resolved) && !configuredPath(aceStepModelDirectory.data())) {
+		aceStepServerStatus = "Choose the ACE-Step GGUF model folder before starting the server.";
+		ofLogError("ofxIC servers") << aceStepServerStatus;
+		return;
+	}
+	if (managedAceStepArguments(aceStepServerArguments.data()))
+		setTextBuffer(aceStepServerArguments, defaultAceStepArguments(
+			resolved, aceStepModelDirectory.data()));
 #if defined(_WIN32)
 	const auto arguments = splitWindowsArguments(aceStepServerArguments.data());
 #else
@@ -2372,16 +3026,18 @@ void ofApp::startLocalWhisperServer() {
 		return;
 	}
 	const std::string resolved = ofxICExample::resolveInstalledExecutable(
-		whisperServerPath.data(), installedServerRoot(), "whisper.cpp-", "whisper-server.exe");
+		whisperServerPath.data(), detectedWhisperServerPath, installedServerRoot(),
+		"whisper.cpp-", "whisper-server.exe");
 	if (resolved.empty()) {
 		whisperServerStatus = "whisper-server not found. Run scripts\\install-whisper-server.ps1.";
-		ofLogError("ofxIC servers") << whisperServerStatus;
+		ofLogError("ofxIC servers") << whisperServerStatus << "\n" <<
+			runtimeExecutableFailureDiagnostic(whisperServerPath.data(),
+				detectedWhisperServerPath, "whisper.cpp-", "whisper-server.exe");
 		return;
 	}
 	setTextBuffer(whisperServerPath, resolved);
-	if (!ofFile::doesFileExist(whisperModelPath.data())) {
-		whisperServerStatus = "Selected whisper.cpp model does not exist: " +
-			std::string(whisperModelPath.data());
+	if (!configuredPath(whisperModelPath.data())) {
+		whisperServerStatus = "Choose a whisper.cpp model before starting the server.";
 		return;
 	}
 #if defined(_WIN32)
@@ -2409,26 +3065,52 @@ void ofApp::startLocalSamBridge() {
 		samBridgeProcessStatus = samBridgeProcess.status();
 		return;
 	}
-	if (!ofxICExample::executableFileExists(samBridgeExecutablePath.data())) {
-		samBridgeProcessStatus = "Python executable not found for the SAM bridge.";
+	const std::string installedPython = ofxICExample::resolveInstalledExecutable(
+		samBridgeExecutablePath.data(), detectedSamPythonPath, installedServerRoot(),
+		"sam-python-", "python.exe");
+	if (installedPython.empty()) {
+		samBridgeProcessStatus = "SAM Python environment not found. Run scripts\\install-sam-server.ps1.";
+		ofLogError("ofxIC servers") << samBridgeProcessStatus << "\n" <<
+			runtimeExecutableFailureDiagnostic(samBridgeExecutablePath.data(),
+				detectedSamPythonPath, "sam-python-", "python.exe");
+		return;
+	}
+	setTextBuffer(samBridgeExecutablePath, installedPython);
+	const std::string bridge = bundledSamBridgeScript();
+	if (bridge.empty()) {
+		samBridgeProcessStatus = "Bundled scripts\\sam-bridge-server.py was not found.";
 		ofLogError("ofxIC servers") << samBridgeProcessStatus;
 		return;
 	}
-	const std::string rawArguments = samBridgeArguments.data();
-	if (rawArguments.find("--fixture-mask") == std::string::npos &&
-		(rawArguments.find("--adapter") == std::string::npos ||
-		 rawArguments.find("--model") == std::string::npos)) {
-		samBridgeProcessStatus = "SAM needs both --adapter <runner.exe> and --model <model>; the bridge alone is not an inference runtime.";
+	const std::string installedRunner = ofxICExample::resolveInstalledExecutable(
+		samRunnerPath.data(), detectedSamRunnerPath, installedServerRoot(),
+		"sam-python-", "sam-python-runner.py");
+	if (installedRunner.empty()) {
+		samBridgeProcessStatus = "SAM runner not found. Run scripts\\install-sam-server.ps1.";
+		ofLogError("ofxIC servers") << samBridgeProcessStatus << "\n" <<
+			runtimeExecutableFailureDiagnostic(samRunnerPath.data(),
+				detectedSamRunnerPath, "sam-python-", "sam-python-runner.py");
+		return;
+	}
+	setTextBuffer(samRunnerPath, installedRunner);
+	if (!configuredPath(samModelPath.data())) {
+		samBridgeProcessStatus = "Choose a Meta SAM checkpoint before starting the bridge.";
 		ofLogError("ofxIC servers") << samBridgeProcessStatus;
 		return;
 	}
 #if defined(_WIN32)
-	const auto arguments = splitWindowsArguments(samBridgeArguments.data());
+	std::vector<std::string> arguments{
+		bridge, "--host", "127.0.0.1", "--port", "18085",
+		"--adapter", installedRunner, "--model", samModelPath.data(),
+		"--backend", samCuda ? "cuda" : "cpu" };
+	const auto extras = splitWindowsArguments(samBridgeArguments.data());
+	arguments.insert(arguments.end(), extras.begin(), extras.end());
 #else
 	const std::vector<std::string> arguments;
 #endif
 	if (samBridgeProcess.start(
-		samBridgeExecutablePath.data(), arguments, "SAM bridge", 18085)) {
+		installedPython, arguments, "SAM bridge", 18085,
+		std::filesystem::path(bridge).parent_path().string())) {
 		setTextBuffer(segmentationEndpointUrl, "http://127.0.0.1:18085");
 	}
 	samBridgeProcessStatus = samBridgeProcess.status();
@@ -2437,6 +3119,57 @@ void ofApp::startLocalSamBridge() {
 void ofApp::stopLocalSamBridge() {
 	samBridgeProcess.stop();
 	samBridgeProcessStatus = samBridgeProcess.status();
+}
+
+void ofApp::startRuntimeInstaller(const std::string & runtime,
+	const std::string & scriptName, const std::vector<std::string> & extraArguments) {
+#if defined(_WIN32)
+	if (installerProcess.running()) {
+		installerStatus = "Wait for the active " + installerTarget + " installation or cancel it.";
+		return;
+	}
+	const std::string powershell = executableOnPath("powershell.exe");
+	const std::string script = bundledScript(scriptName);
+	if (powershell.empty() || script.empty()) {
+		installerStatus = powershell.empty()
+			? "powershell.exe was not found."
+			: "Installer script was not found: " + scriptName;
+		return;
+	}
+	std::vector<std::string> arguments{
+		"-NoProfile", "-ExecutionPolicy", "Bypass", "-File", script };
+	arguments.insert(arguments.end(), extraArguments.begin(), extraArguments.end());
+	installerTarget = runtime;
+	installerCompletionHandled = false;
+	if (installerProcess.start(powershell, arguments,
+		"Install " + runtime, 0, std::filesystem::path(script).parent_path().string())) {
+		installerStatus = installerProcess.status();
+		ofLogNotice("ofxIC installer") << "Started " << script;
+	} else installerStatus = installerProcess.status();
+#else
+	(void)runtime; (void)scriptName; (void)extraArguments;
+	installerStatus = "Runtime installation from the GUI is currently implemented for Windows.";
+#endif
+}
+
+void ofApp::updateRuntimeInstaller() {
+	if (installerProcess.running()) installerProcess.update();
+	const std::string output = installerProcess.takeNewOutput();
+	if (!output.empty()) ofLogNotice("ofxIC installer") << installerTarget << ":\n" << output;
+	if (installerProcess.running()) {
+		installerStatus = installerProcess.status();
+		return;
+	}
+	if (installerCompletionHandled || installerTarget.empty()) return;
+	installerCompletionHandled = true;
+	if (installerProcess.state() == ofxICExample::ManagedProcessState::Exited &&
+		installerProcess.exitCode() == 0) {
+		installerStatus = installerTarget + " installation completed; runtime paths were detected.";
+		applyLocalRuntimeDefaults();
+	} else {
+		installerStatus = installerProcess.status() +
+			" Expand installer output below for the exact failure.";
+	}
 }
 
 bool ofApp::loadDocument(const std::string & path) {
@@ -2514,11 +3247,15 @@ void ofApp::applySettingsToUi(const ofxICExample::ExampleSettings & settings) {
 	musicOutputFormat = settings.musicOutputFormat;
 	setTextBuffer(aceStepServerPath, settings.aceStepServerPath);
 	setTextBuffer(aceStepServerArguments, settings.aceStepServerArguments);
+	setTextBuffer(aceStepModelDirectory, settings.aceStepModelDirectory);
 	setTextBuffer(whisperServerPath, settings.whisperServerPath);
 	setTextBuffer(whisperModelPath, settings.whisperModelPath);
 	setTextBuffer(whisperServerArguments, settings.whisperServerArguments);
 	setTextBuffer(samBridgeExecutablePath, settings.samBridgeExecutablePath);
 	setTextBuffer(samBridgeArguments, settings.samBridgeArguments);
+	setTextBuffer(samRunnerPath, settings.samRunnerPath);
+	setTextBuffer(samModelPath, settings.samModelPath);
+	samCuda = settings.samCuda != 0;
 	configurationDirty = false;
 	mediaConfigurationDirty = false;
 	musicConfigurationDirty = false;
@@ -2570,11 +3307,15 @@ ofxICExample::ExampleSettings ofApp::settingsFromUi() const {
 	settings.musicOutputFormat = musicOutputFormat;
 	settings.aceStepServerPath = aceStepServerPath.data();
 	settings.aceStepServerArguments = aceStepServerArguments.data();
+	settings.aceStepModelDirectory = aceStepModelDirectory.data();
 	settings.whisperServerPath = whisperServerPath.data();
 	settings.whisperModelPath = whisperModelPath.data();
 	settings.whisperServerArguments = whisperServerArguments.data();
 	settings.samBridgeExecutablePath = samBridgeExecutablePath.data();
 	settings.samBridgeArguments = samBridgeArguments.data();
+	settings.samRunnerPath = samRunnerPath.data();
+	settings.samModelPath = samModelPath.data();
+	settings.samCuda = samCuda ? 1 : 0;
 	return settings;
 }
 
@@ -3225,6 +3966,18 @@ void ofApp::generateMedia() {
 			mediaStatus);
 		return;
 	}
+	if (selectedMediaBackend == 2 && stableDiffusionProcess.running() &&
+		!stableDiffusionActiveModelPath.empty() &&
+		stableDiffusionActiveModelPath != stableDiffusionModelPath.data()) {
+		if (!stableDiffusionProcess.ownsProcess()) {
+			mediaStatus = "The external sd-server still owns its loaded model. Restart it with the selected checkpoint.";
+			mediaOutput.clear();
+			return;
+		}
+		mediaStatus = "Model changed; restarting sd-server with " +
+			ofFilePath::getFileName(stableDiffusionModelPath.data()) + "...";
+		stopLocalStableDiffusionServer();
+	}
 	if (selectedMediaBackend == 2 && deferUntilRuntimeReady(DeferredTask::Media)) return;
 	if (mediaBusy.exchange(true)) return;
 	activeMediaTaskKind = selectedMediaKind == 1 ? "video-generation" : "image-generation";
@@ -3384,6 +4137,12 @@ void ofApp::generateMusic() {
 			request.caption = prompt;
 			request.durationSeconds = duration;
 			request.outputFormat = format;
+			request.protocol = isNativeAceStepServer(aceStepServerPath.data())
+				? ofxIC::AceStepMusicProtocol::NativeCpp
+				: ofxIC::AceStepMusicProtocol::Official15;
+			if (request.protocol == ofxIC::AceStepMusicProtocol::NativeCpp)
+				request.nativeSynthModel = preferredNativeAceStepSynthModel(
+					aceStepModelDirectory.data());
 			nextAceStepJob = aceStepMusic.submit(request, control);
 			const auto deadline = std::chrono::steady_clock::now() + std::chrono::minutes(20);
 			while (autoPoll && nextAceStepJob && !nextAceStepJob.terminal() &&

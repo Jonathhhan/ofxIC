@@ -59,11 +59,15 @@ OFXIC_TEST(example_settings_round_trip_non_secret_values) {
 	saved.musicOutputFormat = 1;
 	saved.aceStepServerPath = "C:/runtimes/acestep.exe";
 	saved.aceStepServerArguments = "--port 8085";
+	saved.aceStepModelDirectory = "G:/Models";
 	saved.whisperServerPath = "C:/runtimes/whisper-server.exe";
 	saved.whisperModelPath = "G:/Models/whisper.bin";
 	saved.whisperServerArguments = "--port 8082";
 	saved.samBridgeExecutablePath = "C:/Python/python.exe";
 	saved.samBridgeArguments = "sam-bridge-server.py --port 18085";
+	saved.samRunnerPath = "C:/runtimes/sam-python-runner.py";
+	saved.samModelPath = "G:/Models/sam_vit_b_01ec64.pth";
+	saved.samCuda = 0;
 
 	OFXIC_REQUIRE(ofxICExample::saveSettings(settingsPath, saved));
 	ofxICExample::ExampleSettings loaded;
@@ -114,11 +118,15 @@ OFXIC_TEST(example_settings_round_trip_non_secret_values) {
 	OFXIC_REQUIRE(loaded.musicOutputFormat == saved.musicOutputFormat);
 	OFXIC_REQUIRE(loaded.aceStepServerPath == saved.aceStepServerPath);
 	OFXIC_REQUIRE(loaded.aceStepServerArguments == saved.aceStepServerArguments);
+	OFXIC_REQUIRE(loaded.aceStepModelDirectory == saved.aceStepModelDirectory);
 	OFXIC_REQUIRE(loaded.whisperServerPath == saved.whisperServerPath);
 	OFXIC_REQUIRE(loaded.whisperModelPath == saved.whisperModelPath);
 	OFXIC_REQUIRE(loaded.whisperServerArguments == saved.whisperServerArguments);
 	OFXIC_REQUIRE(loaded.samBridgeExecutablePath == saved.samBridgeExecutablePath);
 	OFXIC_REQUIRE(loaded.samBridgeArguments == saved.samBridgeArguments);
+	OFXIC_REQUIRE(loaded.samRunnerPath == saved.samRunnerPath);
+	OFXIC_REQUIRE(loaded.samModelPath == saved.samModelPath);
+	OFXIC_REQUIRE(loaded.samCuda == saved.samCuda);
 
 	std::ifstream input(settingsPath, std::ios::binary);
 	const std::string serialized(
@@ -326,6 +334,16 @@ OFXIC_TEST(example_environment_overrides_saved_settings_predictably) {
 	OFXIC_REQUIRE(serialized.find("must-never-be-persisted") == std::string::npos);
 	input.close();
 	OFXIC_REQUIRE(ofxICExample::removeSettings(settingsPath));
+}
+
+OFXIC_TEST(example_sdcpp_environment_backend_uses_media_server_port) {
+	ofxICExample::ExampleSettings settings;
+	settings.mediaEndpointUrl = "http://stored-media.test";
+	ofxICExample::applyEnvironmentOverrides(settings, {
+		{ "OFXIC_MEDIA_BACKEND", "sdcpp" },
+	});
+	OFXIC_REQUIRE(settings.mediaBackend == 2);
+	OFXIC_REQUIRE(settings.mediaEndpointUrl == "http://127.0.0.1:8081");
 }
 
 OFXIC_TEST(example_general_endpoint_override_remains_a_legacy_task_default) {

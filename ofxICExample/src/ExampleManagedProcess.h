@@ -30,6 +30,8 @@ public:
 		unsigned short readinessPort,
 		const std::string & workingDirectory = {});
 	bool useExisting(const std::string & name, unsigned short readinessPort);
+	void followOutputFiles(const std::vector<std::string> & paths);
+	void clearRecentOutput();
 	void update();
 	void stop();
 
@@ -39,7 +41,9 @@ public:
 	unsigned long processId() const;
 	int exitCode() const;
 	const std::string & status() const;
+	const std::string & launchMethod() const;
 	const std::string & recentOutput() const;
+	const std::vector<std::string> & followedOutputFiles() const;
 	std::string takeNewOutput();
 
 private:

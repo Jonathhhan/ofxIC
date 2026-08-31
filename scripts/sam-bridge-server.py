@@ -4,6 +4,7 @@ import argparse
 import json
 import math
 import subprocess
+import sys
 import tempfile
 import threading
 
@@ -64,7 +65,10 @@ def validate_pgm(data):
 
 
 def adapter_command(adapter, model, image_path, mask_path, points, backend=None):
-    command = [str(adapter), "--model", str(model),
+    adapter = Path(adapter)
+    command = ([sys.executable, str(adapter)] if adapter.suffix.lower() == ".py"
+               else [str(adapter)])
+    command += ["--model", str(model),
                "--image", str(image_path), "--output", str(mask_path)]
     if backend:
         command += ["--backend", backend]
@@ -217,7 +221,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
     if not args.fixture_mask:
         if not args.adapter or not args.adapter.is_file():
-            parser.error("--adapter must name an existing sam-runner executable")
+            parser.error("--adapter must name an existing SAM runner executable or Python script")
         if not args.model or not args.model.is_file():
             parser.error("--model must name an existing SAM model")
     Handler.adapter = args.adapter

@@ -2,19 +2,8 @@ meta:
 	ADDON_NAME = ofxIC
 	ADDON_DESCRIPTION = Inference connector for local and hosted model endpoints in openFrameworks
 	ADDON_AUTHOR = Jonathan Frank
-	ADDON_TAGS = "ai,inference,endpoints,llm,chat,tools,openai"
+	ADDON_TAGS = "ai" "inference"
 	ADDON_URL = https://github.com/Jonathhhan/ofxIC
 
 common:
 	ADDON_INCLUDES = src
-	ADDON_SOURCES = src/audio/ofxICTranscriptionClient.cpp
-	ADDON_SOURCES += src/segmentation/ofxICSegmentationClient.cpp
-	ADDON_SOURCES += src/endpoint/ofxICEndpoint.cpp
-	ADDON_SOURCES += src/chat/ofxICChatSession.cpp
-	ADDON_SOURCES += src/media/ofxICMediaClient.cpp
-	ADDON_SOURCES += src/media/ofxICMediaClientHuggingFaceFal.cpp
-	ADDON_SOURCES += src/music/ofxICAceStepMusicClient.cpp
-	ADDON_SOURCES += src/music/ofxICStabilityAudioClient.cpp
-	ADDON_SOURCES += src/documents/ofxICDocumentIndex.cpp
-	ADDON_SOURCES += src/tools/ofxICToolRegistry.cpp
-	ADDON_SOURCES += src/tools/ofxICToolLoop.cpp

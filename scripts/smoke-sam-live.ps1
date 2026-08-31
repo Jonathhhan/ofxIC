@@ -3,6 +3,7 @@ param(
 	[Parameter(Mandatory = $true)] [string] $Model,
 	[Parameter(Mandatory = $true)] [string] $Image,
 	[string] $Executable = (Join-Path $PSScriptRoot "..\ofxICExample\bin\ofxICExample.exe"),
+	[string] $Python = "python.exe",
 	[ValidateSet("cpu", "cuda")] [string] $Backend = "cuda",
 	[int] $Port = 18086
 )
@@ -13,6 +14,9 @@ $runnerPath = [System.IO.Path]::GetFullPath($Runner)
 $modelPath = [System.IO.Path]::GetFullPath($Model)
 $imagePath = [System.IO.Path]::GetFullPath($Image)
 $executablePath = [System.IO.Path]::GetFullPath($Executable)
+$pythonCommand = Get-Command $Python -ErrorAction SilentlyContinue
+if (-not $pythonCommand) { throw "Python executable was not found: $Python" }
+$pythonPath = $pythonCommand.Source
 $bridge = Join-Path $repository "scripts\sam-bridge-server.py"
 $temporary = Join-Path ([System.IO.Path]::GetTempPath()) ("ofxIC-sam-live-" + [guid]::NewGuid())
 $resultPath = Join-Path $temporary "result.txt"
@@ -27,11 +31,14 @@ $previous = @{
 $server = $null
 $example = $null
 try {
+	if ($env:OFXIC_RUN_LIVE_SAM -ne "1") {
+		throw "Set OFXIC_RUN_LIVE_SAM=1 to allow the real model-backed SAM smoke"
+	}
 	foreach ($path in @($runnerPath, $modelPath, $imagePath, $executablePath, $bridge)) {
 		if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { throw "Required file not found: $path" }
 	}
 	New-Item -ItemType Directory -Path $temporary | Out-Null
-	$server = Start-Process python.exe -ArgumentList @(
+	$server = Start-Process $pythonPath -ArgumentList @(
 		('"' + $bridge + '"'), '--port', $Port,
 		'--adapter', ('"' + $runnerPath + '"'), '--model', ('"' + $modelPath + '"'),
 		'--backend', $Backend) `
@@ -68,8 +75,14 @@ try {
 	}
 	Write-Output 'SAM live GUI smoke passed (external model-backed runner via bridge)'
 } finally {
-	if ($example -and -not $example.HasExited) { Stop-Process $example.Id -Force -ErrorAction SilentlyContinue }
-	if ($server -and -not $server.HasExited) { Stop-Process $server.Id -Force -ErrorAction SilentlyContinue }
+	if ($example -and -not $example.HasExited) {
+		Stop-Process $example.Id -Force -ErrorAction SilentlyContinue
+		$example.WaitForExit(5000) | Out-Null
+	}
+	if ($server -and -not $server.HasExited) {
+		Stop-Process $server.Id -Force -ErrorAction SilentlyContinue
+		$server.WaitForExit(5000) | Out-Null
+	}
 	$env:OFXIC_ENDPOINT_URL=$previous.Endpoint; $env:OFXIC_SEGMENTATION_ENDPOINT_URL=$previous.SegmentationEndpoint
 	$env:OFXIC_SEGMENTATION_AUTORUN=$previous.Autorun
 	$env:OFXIC_SEGMENTATION_IMAGE=$previous.Image; $env:OFXIC_SEGMENTATION_POINT_X=$previous.X

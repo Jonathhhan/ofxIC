@@ -1,7 +1,9 @@
 param(
 	[string]$EndpointUrl = "http://127.0.0.1:8085",
 	[string]$BuildDir = "tests/build",
-	[string]$OutputPath = ""
+	[string]$OutputPath = "",
+	[ValidateSet("official-1.5", "native-cpp")]
+	[string]$Protocol = "native-cpp"
 )
 
 $ErrorActionPreference = "Stop"
@@ -30,5 +32,5 @@ $executable = Join-Path $resolvedBuildDir "Debug/ofxIC_acestep_live_smoke.exe"
 if (!(Test-Path -LiteralPath $executable -PathType Leaf)) {
 	$executable = Join-Path $resolvedBuildDir "ofxIC_acestep_live_smoke"
 }
-& $executable $EndpointUrl $resolvedOutputPath
+& $executable $EndpointUrl $resolvedOutputPath $Protocol
 if ($LASTEXITCODE -ne 0) { throw "ACE-Step live smoke failed with exit code $LASTEXITCODE" }

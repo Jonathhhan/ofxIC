@@ -2,25 +2,64 @@
 
 ## Unreleased
 
+- Hardened local runtime starts with immutable startup-detection fallbacks, so
+  an empty or stale editable GUI path can no longer hide an installation that
+  was successfully discovered at startup. On Windows, executable discovery now
+  uses native Win32 enumeration before `std::filesystem`, including when the
+  latter reports `ERROR_PATH_NOT_FOUND` for an existing
+  `%LOCALAPPDATA%\ofxIC\servers` tree. Failed starts report the configured path,
+  startup snapshot, root state, matching family directories/files, and native
+  resolver result instead of only saying `not found`.
+- The Overview now exposes the exact workbench executable/build identity and a
+  separate configuration-ready state for every local runtime. This makes stale
+  example binaries and missing executable/model configuration visible before a
+  Start button is pressed.
+- Added native `acestep.cpp` DiT selection by exact GGUF registry filename,
+  retained official ACE-Step model aliases separately, and verified the full
+  GUI-managed CUDA path with a real 10-second 48 kHz stereo WAV generation.
+- Added one sequential local-runtime matrix that drives the regular GUI start
+  paths for Llama, stable-diffusion.cpp, ACE-Step, Whisper, and SAM, captures
+  structured ownership/readiness evidence, and verifies owned-tree shutdown and
+  port release. Its default plan mode starts no server; real starts require an
+  explicit marker and remain distinct from model-inference evidence.
+
+- Local ACE-Step now prefers a pinned native `acestep.cpp` CUDA server, exposes
+  the external GGUF model directory in the GUI, detects complete LM + embedding
+  + DiT + VAE sets, and supports native asynchronous `/lm`, `/synth`, `/job`
+  generation alongside the official ACE-Step 1.5 task API.
+
 ### Added
 
+- `example-chat` provides a focused `ofBaseApp` integration using `ofxIC` and
+  `ofxImGui`; it keeps blocking HTTP off the frame thread,
+  forwards cancellation, and joins its worker during shutdown;
+- Linux example CI and Windows validation build focused chat and document
+  examples plus the complete endpoint workbench;
 - public `ofxIC::versionMajor`, `versionMinor`, `versionPatch`, and
   `versionString` metadata identify the current `0.2.1-dev` build;
 - `scripts/build-example.ps1` verifies generated-project source membership and
   performs a Windows Release/x64 rebuild, with project regeneration available
-  explicitly; `scripts/validate-windows.ps1` combines the deterministic suite,
+  explicitly; its `-Example` parameter applies the same validation to minimal
+  or full examples. `scripts/validate-windows.ps1` combines the deterministic suite,
   canonical example rebuild, and model-free GUI smoke;
+- `scripts/smoke-local-runtime-matrix.ps1` reports the five selected local
+  executable/model configurations in no-start plan mode and can explicitly run
+  the GUI-owned lifecycle matrix; Windows validation includes the safe plan;
 - the Overview tab exports a privacy-aware diagnostic snapshot containing
   sanitized endpoint, task, and runtime lifecycle metadata without credentials,
   prompts, documents, payloads, server output, or exact runtime/model paths;
 - the Windows example now discovers versioned script-installed `llama-server`
   and `sd-server` executables without hard-coded build-directory names; the
   resolver is deterministically tested and remains outside the addon core;
-- example settings schema v2 persists non-secret local runtime paths, model
-  paths, and launch parameters while continuing to load version 1 files.
+- example settings schema v3 persists non-secret local runtime paths, model
+  paths, launch parameters, and explicit SAM runner/checkpoint/backend fields
+  while continuing to load versions 1 and 2;
 - the canonical example has a central runtime Overview and one internal process
   supervisor for llama-server, sd-server, ACE-Step, whisper.cpp, and SAM, with
   explicit lifecycle states and bounded live stdout/stderr display.
+- a focused `example-chat` follows the standard openFrameworks project layout,
+  uses ofxIC with ofxImGui, keeps blocking requests off the render thread, and
+  demonstrates cancellation and shutdown independently of the full workbench;
 - local task actions now start or attach to their external runtime, wait for
   readiness without blocking the GUI, and automatically continue the original
   chat/inspection, media, transcription, music, or SAM task;
@@ -31,8 +70,22 @@
   startup, automatic task continuation, History privacy, owned-child shutdown,
   a bounded never-ready runtime failure, and diagnostics privacy through the
   regular Release example.
+- an explicit marker-gated WAN video smoke validates the real Release GUI,
+  loaded `sd-server` capabilities, asynchronous polling, and the saved video
+  artifact without mixing model-backed evidence into deterministic tests;
+- the Overview can install missing Whisper, ACE-Step 1.5, and Meta SAM external
+  runtimes asynchronously; Whisper includes a verified compact default model,
+  while SAM uses an isolated CUDA 13 PyTorch environment and can reuse an
+  existing checkpoint;
 
 ### Changed
+
+- runtime-matrix cleanup now waits for both workbench exit and redirected-stream
+  drain, fixing the first Windows plan run where the final temporary log was
+  still locked after the process had already reported exit;
+- `addon_config.mk` now uses conventional recursive `src` discovery instead of
+  maintaining a duplicate source list, and installation documents `ofxImGui`
+  as an optional workbench-only dependency;
 
 - example settings, private task History, and privacy-aware diagnostics now use
   one crash-safe atomic writer with unique same-directory temporary files;
@@ -47,12 +100,38 @@
   explicitly external process, uses the executable directory as its working
   directory when launching, mirrors captured output to the console, and stops
   only processes owned by the example.
+- externally attached Llama and stable-diffusion runtimes now tail the bounded
+  stdout/stderr files produced by the bundled start scripts, show their exact
+  source paths and update age, handle truncation or replacement, and mirror new
+  lines to the console without taking ownership of either the process or log
+  files; clearing the view never truncates the source.
 - deferred runtime-start failures now reach the same automation result channel
   as completed tasks and use stable History task identifiers; startup waiting
   defaults to 900 seconds and has a bounded test override.
 
 ### Fixed
 
+- changing the selected stable-diffusion.cpp checkpoint no longer leaves a
+  GUI-owned server silently running the previous SD-Turbo model; generation
+  restarts the owned process with the new checkpoint, distinguishes external
+  processes, and pairs detected WAN models with a suitable VAE and UMT5;
+- native `stable-diffusion.cpp` video submission now checks the loaded server
+  model's `vid_gen` capability, negotiates an advertised AVI/WebM/WebP output
+  format, and surfaces server-provided HTTP error details; the example no
+  longer presents an image-only model such as SD-Turbo as video-capable and
+  provides pause, resume, and restart controls for completed video previews;
+- the `sdcpp` environment preset now targets the same dedicated media port
+  `8081` as the GUI profile instead of the llama-server default port `8080`;
+- the Whisper installer uses retrying `curl.exe` downloads with a temporary
+  partial file before the existing cryptographic verification, avoiding a
+  Windows PowerShell `Invoke-WebRequest` transfer that can remain at zero bytes;
+- the real Whisper GUI smoke now uses the installed CUDA backend by default,
+  exposes `-Cpu` only as an explicit fallback, and enforces its documented live
+  inference marker; it also waits for the stopped server to release redirected
+  log files before removing temporary evidence on Windows;
+- the model-backed SAM smoke now requires its explicit live marker, accepts the
+  installed Python executable so `.py` adapters use the CUDA environment, and
+  waits for bridge and GUI process handles before cleaning temporary evidence;
 - stale or missing GUI executable paths are repaired from the current external
   installation before launch instead of producing an opaque Windows error 3;
 - local server start buttons remain actionable and report missing model or
@@ -134,8 +213,9 @@
   extraction, provenance formatting, and safe output replacement behavior;
 - a provider-specific Stability Audio 3 client for asynchronous text-to-music
   submission, polling, and bounded MP3/WAV retrieval;
-- a separate local ACE-Step music client for `/lm`, `/synth`, and optional
-  asynchronous `/job` responses, with bounded payloads and MP3/WAV validation;
+- a separate local ACE-Step music client for the 1.5 `/release_task`,
+  `/query_result`, and `/v1/audio` flow, with bounded payloads and MP3/WAV
+  validation;
 - regular-example music controls with a separate endpoint, non-secret saved
   backend selection, ACE-Step localhost defaults, migration of older Stability
   settings, optional Windows Credential Manager storage for `STABILITY_API_KEY`,

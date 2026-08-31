@@ -1,6 +1,7 @@
 import importlib.util
 import pathlib
 import json
+import sys
 import threading
 import unittest
 import urllib.request
@@ -37,6 +38,12 @@ class SamBridgeTests(unittest.TestCase):
         command = sam_bridge.adapter_command(
             "sam-runner", "model.ggml", "input.ppm", "mask.pgm", [], None)
         self.assertNotIn("--backend", command)
+
+    def test_python_adapter_uses_bridge_environment_interpreter(self):
+        command = sam_bridge.adapter_command(
+            pathlib.Path("sam-python-runner.py"), "model.pth", "input.ppm",
+            "mask.pgm", [("0.5", "0.5", "positive")], "cuda")
+        self.assertEqual(command[:2], [sys.executable, "sam-python-runner.py"])
 
     def test_adapter_command_rejects_invalid_points(self):
         with self.assertRaises(ValueError):

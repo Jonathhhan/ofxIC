@@ -194,6 +194,59 @@ Deterministic tests exercise initial creation, complete replacement, destination
 preservation, error reporting, and temporary-file cleanup. The helper remains
 outside the public addon surface and does not introduce a storage framework.
 
+#### M3.6 — Conventional openFrameworks package surface
+
+Status: completed after treating the original all-in-one GUI as an integration
+workbench rather than the only onboarding example.
+
+The addon now relies on normal recursive `src` discovery from `addon_config.mk`
+and provides `example-chat` as a focused Project-Generator-compatible example
+using `ofxIC` with `ofxImGui`. Blocking inference stays off the
+openFrameworks frame thread, cancellation is operation-scoped, and the worker
+is joined during `exit()`. The existing `ofxICExample` remains the complete
+workbench for every public client, installers, independently managed runtimes,
+logs, and diagnostics. CI and Windows release validation build all examples
+against the same pinned `ofxImGui` revision.
+
+#### M3.7 — Whole-workbench local runtime lifecycle evidence
+
+Status: completed after individually working installations repeatedly appeared
+missing or could not be started from their GUI controls.
+
+The regular workbench now exposes one automation-only lifecycle probe that uses
+the exact same resolver, launch arguments, process supervisor, and shutdown path
+as its runtime buttons. `scripts/smoke-local-runtime-matrix.ps1` runs Llama,
+stable-diffusion.cpp, ACE-Step, Whisper, and SAM sequentially so CUDA memory is
+not contested. Its default plan mode starts no server and reports the selected
+configuration; the explicitly marker-gated live mode requires each process to
+be GUI-owned, reach its declared localhost port, terminate with the workbench,
+and release that port. Exact paths and server logs remain temporary evidence.
+
+Windows discovery also has a native directory-enumeration fallback and emits a
+structured search diagnostic on failure. The Overview displays the running
+workbench build/executable and keeps installation/configuration readiness
+separate from process state, so a stale binary or incomplete model selection is
+distinguishable from a process launch failure.
+
+This closes discovery/start/stop reproducibility without treating an open port
+as proof of inference. Model-backed chat, media, transcription, music, and SAM
+claims continue to require their separate request/output smokes. No runtime is
+linked into the addon and no generic runtime API is added.
+
+#### M3.8 — Grounded-document onboarding example
+
+Status: completed after the minimal chat example exposed only the first half of
+the addon's supported core path.
+
+`example-documents` is now a Project-Generator-compatible example dedicated to
+explicit local document loading, allowlisted `search_documents` execution,
+source-identifier citations, cancellation, and non-blocking frame-thread use.
+It uses only the public `ofxIC` surface and treats retrieved document text as
+untrusted evidence. Windows release validation and Linux nightly CI build it
+alongside `example-chat` and the complete workbench, so both core onboarding
+paths remain reproducible without turning the workbench into introductory API
+documentation.
+
 Completion evidence for each patch:
 
 - the first meaningful failure is retained in an issue, test, or release note;

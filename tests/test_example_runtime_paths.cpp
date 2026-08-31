@@ -63,6 +63,18 @@ OFXIC_TEST(example_runtime_paths_discovers_the_newest_matching_installation) {
 	OFXIC_REQUIRE(std::filesystem::equivalent(resolved, newest));
 }
 
+OFXIC_TEST(example_runtime_paths_prefers_installed_root_over_build_artifacts) {
+	RuntimeFixture fixture;
+	const auto now = std::filesystem::file_time_type::clock::now();
+	const auto installed = fixture.add(
+		"acestep.cpp-release", "ace-server.exe", now - std::chrono::hours(2));
+	fixture.add("acestep.cpp-release/build/Release", "ace-server.exe", now);
+
+	const auto resolved = ofxICExample::findInstalledExecutable(
+		fixture.root.string(), "acestep.cpp-", "ace-server.exe");
+	OFXIC_REQUIRE(std::filesystem::equivalent(resolved, installed));
+}
+
 OFXIC_TEST(example_runtime_paths_returns_empty_for_missing_family) {
 	RuntimeFixture fixture;
 	fixture.add("other-runtime", "llama-server.exe",
@@ -70,3 +82,90 @@ OFXIC_TEST(example_runtime_paths_returns_empty_for_missing_family) {
 	OFXIC_REQUIRE(ofxICExample::findInstalledExecutable(
 		fixture.root.string(), "llama.cpp-", "llama-server.exe").empty());
 }
+
+OFXIC_TEST(example_runtime_paths_reports_search_evidence) {
+	RuntimeFixture fixture;
+	fixture.add("whisper.cpp-build/bin", "whisper-server.exe",
+		std::filesystem::file_time_type::clock::now());
+	const std::string diagnostic = ofxICExample::installedExecutableSearchDiagnostic(
+		fixture.root.string(), "whisper.cpp-", "whisper-server.exe");
+	OFXIC_REQUIRE(diagnostic.find("root_state=directory") != std::string::npos);
+	OFXIC_REQUIRE(diagnostic.find("family_directories=1") != std::string::npos);
+	OFXIC_REQUIRE(diagnostic.find("matching_files=1") != std::string::npos);
+#if defined(_WIN32)
+	OFXIC_REQUIRE(diagnostic.find("native_root_state=directory") != std::string::npos);
+	OFXIC_REQUIRE(diagnostic.find("native_result=") != std::string::npos);
+	OFXIC_REQUIRE(diagnostic.find("whisper-server.exe") != std::string::npos);
+#endif
+}
+
+OFXIC_TEST(example_runtime_paths_reports_native_evidence_for_missing_root) {
+	RuntimeFixture fixture;
+	const std::string diagnostic = ofxICExample::installedExecutableSearchDiagnostic(
+		(fixture.root / "missing").string(), "llama.cpp-", "llama-server.exe");
+	OFXIC_REQUIRE(diagnostic.find("root_state=") != std::string::npos);
+#if defined(_WIN32)
+	OFXIC_REQUIRE(diagnostic.find("native_root_state=error-") != std::string::npos);
+	OFXIC_REQUIRE(diagnostic.find("native_result=none") != std::string::npos);
+#endif
+}
+
+OFXIC_TEST(example_runtime_paths_uses_startup_snapshot_when_ui_path_is_lost) {
+	RuntimeFixture fixture;
+	const auto detected = fixture.add("startup", "ace-server.exe",
+		std::filesystem::file_time_type::clock::now());
+
+	const auto resolved = ofxICExample::resolveInstalledExecutable(
+		"", detected.string(), (fixture.root / "missing-root").string(),
+		"acestep.cpp-", "ace-server.exe");
+	OFXIC_REQUIRE(std::filesystem::equivalent(resolved, detected));
+}
+
+OFXIC_TEST(example_runtime_paths_prefers_configured_path_over_startup_snapshot) {
+	RuntimeFixture fixture;
+	const auto now = std::filesystem::file_time_type::clock::now();
+	const auto configured = fixture.add("manual", "sd-server.exe", now);
+	const auto detected = fixture.add("startup", "sd-server.exe", now);
+
+	const auto resolved = ofxICExample::resolveInstalledExecutable(
+		configured.string(), detected.string(), fixture.root.string(),
+		"stable-diffusion.cpp-", "sd-server.exe");
+	OFXIC_REQUIRE(std::filesystem::equivalent(resolved, configured));
+}
+
+OFXIC_TEST(example_runtime_paths_discovers_each_sibling_runtime_family) {
+	RuntimeFixture fixture;
+	const auto now = std::filesystem::file_time_type::clock::now();
+	const auto llama = fixture.add(
+		"llama.cpp-build", "llama-server.exe", now);
+	const auto stableDiffusion = fixture.add(
+		"stable-diffusion.cpp-build", "sd-server.exe", now);
+	const auto whisper = fixture.add(
+		"whisper.cpp-build", "whisper-server.exe", now);
+	const auto sam = fixture.add(
+		"sam-python-build/.venv/Scripts", "python.exe", now);
+
+	OFXIC_REQUIRE(std::filesystem::equivalent(
+		ofxICExample::findInstalledExecutable(fixture.root.string(),
+			"llama.cpp-", "llama-server.exe"), llama));
+	OFXIC_REQUIRE(std::filesystem::equivalent(
+		ofxICExample::findInstalledExecutable(fixture.root.string(),
+			"stable-diffusion.cpp-", "sd-server.exe"), stableDiffusion));
+	OFXIC_REQUIRE(std::filesystem::equivalent(
+		ofxICExample::findInstalledExecutable(fixture.root.string(),
+			"whisper.cpp-", "whisper-server.exe"), whisper));
+	OFXIC_REQUIRE(std::filesystem::equivalent(
+		ofxICExample::findInstalledExecutable(fixture.root.string(),
+			"sam-python-", "python.exe"), sam));
+}
+
+#if defined(_WIN32)
+OFXIC_TEST(example_runtime_paths_match_windows_names_without_case_sensitivity) {
+	RuntimeFixture fixture;
+	const auto expected = fixture.add("WHISPER.CPP-BUILD", "WHISPER-SERVER.EXE",
+		std::filesystem::file_time_type::clock::now());
+	const auto resolved = ofxICExample::findInstalledExecutable(
+		fixture.root.string(), "whisper.cpp-", "whisper-server.exe");
+	OFXIC_REQUIRE(std::filesystem::equivalent(resolved, expected));
+}
+#endif

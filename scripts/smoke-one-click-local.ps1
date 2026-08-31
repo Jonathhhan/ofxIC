@@ -1,6 +1,9 @@
 param(
 	[string] $Executable = (Join-Path $PSScriptRoot "..\ofxICExample\bin\ofxICExample.exe"),
-	[string] $Python = "python.exe"
+	[string] $Python = "python.exe",
+	[ValidateRange(10, 300)]
+	[int] $StartupEvidenceTimeoutSeconds = 30,
+	[switch] $KeepEvidence
 )
 
 $ErrorActionPreference = "Stop"
@@ -30,6 +33,7 @@ foreach ($name in $environmentNames) {
 }
 $generatedPaths = [System.Collections.Generic.List[string]]::new()
 $activeExample = $null
+$smokePassed = $false
 $fixtureProcessIdsBefore = @(
 	Get-CimInstance Win32_Process -Filter "Name = 'python.exe'" -ErrorAction SilentlyContinue |
 		Where-Object {
@@ -138,7 +142,7 @@ try {
 	Set-ProcessEnvironment "OFXIC_MUSIC_ENDPOINT_URL" "http://127.0.0.1:8085"
 	Set-ProcessEnvironment "OFXIC_MUSIC_AUTORUN" "acestep"
 	Set-ProcessEnvironment "OFXIC_MUSIC_PROMPT" "deterministic timestamp music"
-	Set-ProcessEnvironment "OFXIC_MUSIC_DURATION" "1"
+	Set-ProcessEnvironment "OFXIC_MUSIC_DURATION" "10"
 	Set-ProcessEnvironment "OFXIC_MUSIC_OUTPUT_FORMAT" "wav"
 	Set-ProcessEnvironment "OFXIC_MUSIC_RESULT_PATH" $musicResult
 	Set-ProcessEnvironment "OFXIC_DIAGNOSTICS_PATH" $musicDiagnostics
@@ -146,7 +150,7 @@ try {
 	Set-ProcessEnvironment "OFXIC_ACESTEP_SERVER_ARGS" (
 		'"' + $aceFixture + '" --port 8085')
 	$activeExample = Start-Example "music"
-	Wait-File $musicDiagnostics $activeExample 10
+	Wait-File $musicDiagnostics $activeExample $StartupEvidenceTimeoutSeconds
 	$diagnostics = Get-Content -Raw -LiteralPath $musicDiagnostics
 	if ($diagnostics -notmatch '(?m)^ofxIC\.version=0\.2\.1-dev$' -or
 		$diagnostics -notmatch '(?m)^privacy=' -or
@@ -186,7 +190,7 @@ try {
 		'"' + $noListenerFixture + '" --seconds 30')
 	Set-ProcessEnvironment "OFXIC_RUNTIME_START_TIMEOUT_SECONDS" "1"
 	$activeExample = Start-Example "startup-failure"
-	Wait-File $failureResult $activeExample 10
+	Wait-File $failureResult $activeExample $StartupEvidenceTimeoutSeconds
 	$failureEvidence = Get-Content -Raw -LiteralPath $failureResult
 	if ($failureEvidence -notmatch "timed out while waiting for the local runtime") {
 		throw "Unexpected runtime-start timeout evidence: $failureEvidence"
@@ -219,8 +223,11 @@ try {
 	Set-ProcessEnvironment "OFXIC_SEGMENTATION_POINT_Y" "0.5"
 	Set-ProcessEnvironment "OFXIC_GUI_RESULT_PATH" $samResult
 	Set-ProcessEnvironment "OFXIC_SAM_BRIDGE_EXECUTABLE" $pythonPath
-	Set-ProcessEnvironment "OFXIC_SAM_BRIDGE_ARGS" (
-		'"' + $samFixture + '" --port 18085 --fixture-mask')
+	# Fixture mode still exercises the same explicit runner/model precedence used
+	# by a real installation; the bridge does not execute these paths here.
+	Set-ProcessEnvironment "OFXIC_SAM_RUNNER" $samFixture
+	Set-ProcessEnvironment "OFXIC_SAM_MODEL" $imagePath
+	Set-ProcessEnvironment "OFXIC_SAM_BRIDGE_ARGS" "--fixture-mask"
 	$activeExample = Start-Example "sam"
 	Wait-File $samResult $activeExample 30
 	$samEvidence = Get-Content -Raw -LiteralPath $samResult
@@ -236,6 +243,7 @@ try {
 	$activeExample = $null
 	Write-Output "Managed SAM one-click task passed"
 	Write-Output "One-click local GUI smoke passed"
+	$smokePassed = $true
 } finally {
 	if ($activeExample -and -not $activeExample.HasExited) {
 		Stop-Process -Id $activeExample.Id -Force -ErrorAction SilentlyContinue
@@ -249,7 +257,9 @@ try {
 	foreach ($name in $environmentNames) {
 		Set-ProcessEnvironment $name $previousEnvironment[$name]
 	}
-	if (Test-Path -LiteralPath $temporary) {
+	if ($smokePassed -and -not $KeepEvidence -and (Test-Path -LiteralPath $temporary)) {
 		Remove-Item -LiteralPath $temporary -Recurse -Force
+	} elseif (Test-Path -LiteralPath $temporary) {
+		Write-Warning "One-click smoke evidence retained at: $temporary"
 	}
 }

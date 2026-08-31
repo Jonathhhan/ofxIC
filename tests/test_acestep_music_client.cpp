@@ -11,6 +11,12 @@ std::string wavBytes() {
 	return std::string("RIFF", 4) + std::string(4, '\0') + "WAVEfmt ";
 }
 
+std::string multipartWav() {
+	return "--ofxic-boundary\r\nContent-Type: audio/wav\r\n\r\n" + wavBytes() +
+		"\r\n--ofxic-boundary\r\nContent-Type: application/octet-stream\r\n\r\nlatent" +
+		"\r\n--ofxic-boundary--\r\n";
+}
+
 ofxIC::HttpResponse response(int status, std::string body) {
 	ofxIC::HttpResponse result;
 	result.started = true;
@@ -129,4 +135,75 @@ OFXIC_TEST(acestep_music_reports_official_task_failure) {
 	const auto failed = music.poll(music.submit(request));
 	OFXIC_REQUIRE(!failed);
 	OFXIC_REQUIRE(failed.error.find("out of memory") != std::string::npos);
+}
+
+OFXIC_TEST(acestep_cpp_runs_instrumental_async_job_and_extracts_multipart_audio) {
+	std::vector<ofxIC::HttpRequest> captured;
+	int call = 0;
+	ofxIC::Endpoint endpoint("http://127.0.0.1:8085", [&](const ofxIC::HttpRequest & request) {
+		captured.push_back(request);
+		switch (call++) {
+		case 0: return response(202, R"({"id":"native-1"})");
+		case 1: return response(200, R"({"status":"running"})");
+		case 2: return response(200, R"({"status":"done"})");
+		default: return response(200, multipartWav());
+		}
+	});
+	ofxIC::AceStepMusicClient music(endpoint);
+	ofxIC::AceStepMusicRequest request;
+	request.caption = "Fast instrumental synthwave";
+	request.durationSeconds = 30;
+	request.outputFormat = "wav";
+	request.protocol = ofxIC::AceStepMusicProtocol::NativeCpp;
+	request.nativeSynthModel = "acestep-v15-turbo-Q8_0.gguf";
+	const auto submitted = music.submit(request);
+	const auto running = music.poll(submitted);
+	const auto completed = music.poll(running);
+	OFXIC_REQUIRE(submitted && submitted.id == "native-1");
+	OFXIC_REQUIRE(submitted.protocol == ofxIC::AceStepMusicProtocol::NativeCpp);
+	OFXIC_REQUIRE(submitted.phase == ofxIC::AceStepMusicJobPhase::Synthesis);
+	OFXIC_REQUIRE(running && running.state == ofxIC::AceStepMusicJobState::Generating);
+	OFXIC_REQUIRE(completed && completed.state == ofxIC::AceStepMusicJobState::Completed);
+	OFXIC_REQUIRE(completed.audioBytes == wavBytes());
+	OFXIC_REQUIRE(captured.size() == 4);
+	OFXIC_REQUIRE(captured[0].url == "http://127.0.0.1:8085/synth");
+	OFXIC_REQUIRE(captured[0].body.find("\"lyrics\":\"[Instrumental]\"") != std::string::npos);
+	OFXIC_REQUIRE(captured[0].body.find("\"output_format\":\"wav16\"") != std::string::npos);
+	OFXIC_REQUIRE(captured[0].body.find(
+		"\"synth_model\":\"acestep-v15-turbo-Q8_0.gguf\"") != std::string::npos);
+	OFXIC_REQUIRE(captured[3].url == "http://127.0.0.1:8085/job?id=native-1&result=1");
+}
+
+OFXIC_TEST(acestep_cpp_chains_language_model_job_into_synthesis_job) {
+	std::vector<ofxIC::HttpRequest> captured;
+	int call = 0;
+	ofxIC::Endpoint endpoint("http://127.0.0.1:8085", [&](const ofxIC::HttpRequest & request) {
+		captured.push_back(request);
+		switch (call++) {
+		case 0: return response(202, R"({"id":"lm-1"})");
+		case 1: return response(200, R"({"status":"done"})");
+		case 2: return response(200, R"([{"caption":"song","lyrics":"hello","audio_codes":"codes"}])");
+		case 3: return response(202, R"({"id":"synth-1"})");
+		case 4: return response(200, R"({"status":"done"})");
+		default: return response(200, wavBytes());
+		}
+	});
+	ofxIC::AceStepMusicClient music(endpoint);
+	ofxIC::AceStepMusicRequest request;
+	request.caption = "Vocal song";
+	request.lyrics = "hello";
+	request.instrumentalOnly = false;
+	request.protocol = ofxIC::AceStepMusicProtocol::NativeCpp;
+	request.nativeSynthModel = "acestep-v15-base-Q8_0.gguf";
+	const auto lm = music.submit(request);
+	const auto synth = music.poll(lm);
+	const auto completed = music.poll(synth);
+	OFXIC_REQUIRE(lm && lm.phase == ofxIC::AceStepMusicJobPhase::LanguageModel);
+	OFXIC_REQUIRE(synth && synth.id == "synth-1");
+	OFXIC_REQUIRE(synth.phase == ofxIC::AceStepMusicJobPhase::Synthesis);
+	OFXIC_REQUIRE(completed && completed.audioBytes == wavBytes());
+	OFXIC_REQUIRE(captured.size() == 6);
+	OFXIC_REQUIRE(captured[0].url == "http://127.0.0.1:8085/lm");
+	OFXIC_REQUIRE(captured[3].url == "http://127.0.0.1:8085/synth");
+	OFXIC_REQUIRE(captured[3].body.find("audio_codes") != std::string::npos);
 }

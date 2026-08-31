@@ -98,19 +98,24 @@ OFXIC_TEST(media_client_submits_native_image_job) {
 
 OFXIC_TEST(media_client_submits_and_polls_native_video_job) {
 	int calls = 0;
+	ofxIC::HttpRequest inspected;
 	ofxIC::HttpRequest submitted;
 	ofxIC::HttpRequest polled;
 	ofxIC::Endpoint endpoint("http://localhost:1234", [&](const ofxIC::HttpRequest & request) {
 		ofxIC::HttpResponse response;
 		response.started = true;
 		if (calls++ == 0) {
+			inspected = request;
+			response.status = 200;
+			response.body = R"({"model":{"name":"wan-video.gguf"},"supported_modes":["vid_gen"],"output_formats_by_mode":{"vid_gen":["avi","webm"]}})";
+		} else if (calls == 2) {
 			submitted = request;
 			response.status = 202;
 			response.body = R"({"id":"job-video","kind":"vid_gen","status":"queued","poll_url":"/sdcpp/v1/jobs/job-video"})";
 		} else {
 			polled = request;
 			response.status = 200;
-			response.body = R"({"id":"job-video","kind":"vid_gen","status":"completed","result":{"output_format":"webm","mime_type":"video/webm","fps":12,"frame_count":29,"b64_json":"dmlkZW8="},"error":null})";
+			response.body = R"({"id":"job-video","kind":"vid_gen","status":"completed","result":{"output_format":"avi","mime_type":"video/x-msvideo","fps":12,"frame_count":29,"b64_json":"dmlkZW8="},"error":null})";
 		}
 		return response;
 	});
@@ -125,14 +130,17 @@ OFXIC_TEST(media_client_submits_and_polls_native_video_job) {
 	const auto completedJob = media.poll(submittedJob);
 	OFXIC_REQUIRE(submittedJob);
 	OFXIC_REQUIRE(completedJob);
+	OFXIC_REQUIRE(inspected.url == "http://localhost:1234/sdcpp/v1/capabilities");
+	OFXIC_REQUIRE(inspected.headers.empty());
 	OFXIC_REQUIRE(submitted.url == "http://localhost:1234/sdcpp/v1/vid_gen");
 	OFXIC_REQUIRE(submitted.body.find("\"video_frames\":29") != std::string::npos);
 	OFXIC_REQUIRE(submitted.body.find("\"fps\":12") != std::string::npos);
+	OFXIC_REQUIRE(submitted.body.find("\"output_format\":\"avi\"") != std::string::npos);
 	OFXIC_REQUIRE(submitted.body.find("batch_count") == std::string::npos);
 	OFXIC_REQUIRE(polled.url == "http://localhost:1234/sdcpp/v1/jobs/job-video");
 	OFXIC_REQUIRE(completedJob.kind == ofxIC::MediaKind::Video);
 	OFXIC_REQUIRE(completedJob.state == ofxIC::MediaJobState::Completed);
-	OFXIC_REQUIRE(completedJob.mimeType == "video/webm");
+	OFXIC_REQUIRE(completedJob.mimeType == "video/x-msvideo");
 	OFXIC_REQUIRE(completedJob.frameCount == 29);
 	OFXIC_REQUIRE(completedJob.payloadsBase64.size() == 1);
 }
@@ -303,6 +311,50 @@ OFXIC_TEST(media_client_explains_hugging_face_payment_required) {
 	OFXIC_REQUIRE(!failed);
 	OFXIC_REQUIRE(failed.httpStatus == 402);
 	OFXIC_REQUIRE(failed.error.find("inference credits or pay-as-you-go billing are required") != std::string::npos);
+}
+
+OFXIC_TEST(media_client_rejects_video_when_loaded_model_is_image_only) {
+	int calls = 0;
+	ofxIC::Endpoint endpoint("http://localhost:1234", [&](const ofxIC::HttpRequest &) {
+		++calls;
+		ofxIC::HttpResponse response;
+		response.started = true;
+		response.status = 200;
+		response.body = R"({"model":{"name":"sd_turbo.safetensors"},"supported_modes":["img_gen"],"output_formats_by_mode":{"img_gen":["png"]}})";
+		return response;
+	});
+	ofxIC::MediaClient media(endpoint);
+	ofxIC::MediaJobRequest request;
+	request.kind = ofxIC::MediaKind::Video;
+	request.prompt = "This requires a video model";
+	const auto failed = media.submit(request);
+	OFXIC_REQUIRE(!failed);
+	OFXIC_REQUIRE(failed.error.find("sd_turbo.safetensors") != std::string::npos);
+	OFXIC_REQUIRE(failed.error.find("does not support video") != std::string::npos);
+	OFXIC_REQUIRE(calls == 1);
+}
+
+OFXIC_TEST(media_client_surfaces_native_submission_error_detail) {
+	int calls = 0;
+	ofxIC::Endpoint endpoint("http://localhost:1234", [&](const ofxIC::HttpRequest &) {
+		ofxIC::HttpResponse response;
+		response.started = true;
+		if (calls++ == 0) {
+			response.status = 200;
+			response.body = R"({"model":{"name":"wan.gguf"},"supported_modes":["vid_gen"],"output_formats_by_mode":{"vid_gen":["avi"]}})";
+		} else {
+			response.status = 400;
+			response.body = R"({"error":"invalid video dimensions"})";
+		}
+		return response;
+	});
+	ofxIC::MediaClient media(endpoint);
+	ofxIC::MediaJobRequest request;
+	request.kind = ofxIC::MediaKind::Video;
+	request.prompt = "invalid request";
+	const auto failed = media.submit(request);
+	OFXIC_REQUIRE(!failed);
+	OFXIC_REQUIRE(failed.error == "media endpoint returned HTTP 400: invalid video dimensions");
 }
 
 OFXIC_TEST(media_client_forwards_control_and_classifies_local_cancellation) {

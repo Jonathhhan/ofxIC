@@ -2,7 +2,9 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cwctype>
 #include <filesystem>
+#include <fstream>
 #include <sstream>
 #include <system_error>
 
@@ -10,6 +12,7 @@
 #define WIN32_LEAN_AND_MEAN
 #include <winsock2.h>
 #include <windows.h>
+#include <shellapi.h>
 #endif
 
 namespace ofxICExample {
@@ -93,16 +96,37 @@ std::string windowsErrorMessage(DWORD error) {
 		text.pop_back();
 	return wideToUtf8(text);
 }
+
+std::wstring quotePowerShellLiteral(const std::wstring & value) {
+	std::wstring result = L"'";
+	for (const wchar_t character : value) {
+		result.push_back(character);
+		if (character == L'\'') result.push_back(L'\'');
+	}
+	result.push_back(L'\'');
+	return result;
+}
 #endif
 
 } // namespace
 
 struct ManagedProcess::Impl {
+	struct FollowedFile {
+		std::string path;
+		std::uintmax_t offset = 0;
+		bool initialized = false;
+	};
+
 	ManagedProcessState processState = ManagedProcessState::Stopped;
 	std::string processName = "Local process";
 	std::string processStatus = "Local process is stopped.";
+	std::string processLaunchMethod = "none";
 	std::string output;
 	std::string newOutput;
+	std::string consoleLine;
+	bool consoleCarriageReturn = false;
+	std::vector<FollowedFile> followedFiles;
+	std::vector<std::string> followedPaths;
 	unsigned long pid = 0;
 	unsigned short port = 0;
 	int lastExitCode = 0;
@@ -110,16 +134,87 @@ struct ManagedProcess::Impl {
 #if defined(_WIN32)
 	HANDLE process = nullptr;
 	HANDLE outputRead = nullptr;
+	HANDLE job = nullptr;
 #endif
 
 	void appendOutput(const char * bytes, std::size_t size) {
 		if (!bytes || size == 0) return;
 		output.append(bytes, size);
-		newOutput.append(bytes, size);
+		for (std::size_t index = 0; index < size; ++index) {
+			const char character = bytes[index];
+			if (character == '\r') {
+				consoleCarriageReturn = true;
+				continue;
+			}
+			if (character == '\n') {
+				newOutput += consoleLine;
+				newOutput.push_back('\n');
+				consoleLine.clear();
+				consoleCarriageReturn = false;
+				continue;
+			}
+			if (consoleCarriageReturn) {
+				consoleLine.clear();
+				consoleCarriageReturn = false;
+			}
+			consoleLine.push_back(character);
+		}
 		if (output.size() > maximumRecentOutput)
 			output.erase(0, output.size() - maximumRecentOutput);
 		if (newOutput.size() > maximumRecentOutput)
 			newOutput.erase(0, newOutput.size() - maximumRecentOutput);
+	}
+
+	std::string latestOutputSummary() const {
+		std::string line = consoleLine;
+		if (line.empty() && !output.empty()) {
+			const std::size_t end = output.find_last_not_of("\r\n \t");
+			if (end != std::string::npos) {
+				const std::size_t separator = output.find_last_of("\r\n", end);
+				const std::size_t begin = separator == std::string::npos ? 0 : separator + 1;
+				line = output.substr(begin, end - begin + 1);
+			}
+		}
+		for (char & character : line)
+			if (character == '\t') character = ' ';
+		constexpr std::size_t maximumStatusOutput = 180;
+		if (line.size() > maximumStatusOutput)
+			line = "..." + line.substr(line.size() - (maximumStatusOutput - 3));
+		return line;
+	}
+
+	void readFollowedOutput() {
+		for (auto & source : followedFiles) {
+			std::error_code error;
+			const std::filesystem::path path(source.path);
+			if (!std::filesystem::is_regular_file(path, error)) continue;
+			const std::uintmax_t size = std::filesystem::file_size(path, error);
+			if (error) continue;
+			if (!source.initialized) {
+				source.offset = size > maximumRecentOutput ? size - maximumRecentOutput : 0;
+				source.initialized = true;
+				const std::string header = "\n--- External log: " + source.path + " ---\n";
+				appendOutput(header.data(), header.size());
+			} else if (size < source.offset) {
+				source.offset = 0;
+				const std::string marker = "\n--- Log was replaced or truncated: " +
+					source.path + " ---\n";
+				appendOutput(marker.data(), marker.size());
+			}
+			if (size <= source.offset) continue;
+			std::uintmax_t begin = source.offset;
+			if (size - begin > maximumRecentOutput) begin = size - maximumRecentOutput;
+			std::ifstream input(path, std::ios::binary);
+			if (!input) continue;
+			input.seekg(static_cast<std::streamoff>(begin));
+			char buffer[4096];
+			while (input) {
+				input.read(buffer, sizeof(buffer));
+				const std::streamsize count = input.gcount();
+				if (count > 0) appendOutput(buffer, static_cast<std::size_t>(count));
+			}
+			source.offset = size;
+		}
 	}
 
 #if defined(_WIN32)
@@ -146,6 +241,10 @@ struct ManagedProcess::Impl {
 			CloseHandle(outputRead);
 			outputRead = nullptr;
 		}
+		if (job) {
+			CloseHandle(job);
+			job = nullptr;
+		}
 	}
 #endif
 };
@@ -171,8 +270,13 @@ bool ManagedProcess::useExisting(const std::string & name, unsigned short readin
 #if defined(_WIN32)
 	if (readinessPort == 0 || !tcpPortIsListening(readinessPort)) return false;
 	impl->processName = name.empty() ? "Local process" : name;
+	impl->output.clear();
+	impl->newOutput.clear();
+	impl->followedFiles.clear();
+	impl->followedPaths.clear();
 	impl->port = readinessPort;
 	impl->pid = 0;
+	impl->processLaunchMethod = "external";
 	impl->processState = ManagedProcessState::Ready;
 	impl->processStatus = impl->processName + " is already reachable at http://127.0.0.1:" +
 		std::to_string(readinessPort) + "; using the externally managed process.";
@@ -184,6 +288,24 @@ bool ManagedProcess::useExisting(const std::string & name, unsigned short readin
 #endif
 }
 
+void ManagedProcess::followOutputFiles(const std::vector<std::string> & paths) {
+	impl->followedFiles.clear();
+	impl->followedPaths.clear();
+	for (const std::string & path : paths) {
+		if (path.empty()) continue;
+		impl->followedFiles.push_back({ path });
+		impl->followedPaths.push_back(path);
+	}
+	impl->readFollowedOutput();
+}
+
+void ManagedProcess::clearRecentOutput() {
+	impl->output.clear();
+	impl->newOutput.clear();
+	impl->consoleLine.clear();
+	impl->consoleCarriageReturn = false;
+}
+
 bool ManagedProcess::start(const std::string & executable,
 	const std::vector<std::string> & arguments, const std::string & name,
 	unsigned short readinessPort, const std::string & requestedWorkingDirectory) {
@@ -191,15 +313,22 @@ bool ManagedProcess::start(const std::string & executable,
 	impl->processName = name.empty() ? "Local process" : name;
 	impl->port = readinessPort;
 	impl->lastExitCode = 0;
+	impl->processLaunchMethod = "none";
 	impl->output.clear();
 	impl->newOutput.clear();
+	impl->consoleLine.clear();
+	impl->consoleCarriageReturn = false;
+	impl->followedFiles.clear();
+	impl->followedPaths.clear();
 	if (useExisting(impl->processName, readinessPort)) return true;
+#if !defined(_WIN32)
 	std::error_code fileError;
 	if (!std::filesystem::is_regular_file(std::filesystem::path(executable), fileError)) {
 		impl->processState = ManagedProcessState::Failed;
 		impl->processStatus = impl->processName + " executable does not exist: " + executable;
 		return false;
 	}
+#endif
 #if defined(_WIN32)
 	SECURITY_ATTRIBUTES security{};
 	security.nLength = sizeof(security);
@@ -218,11 +347,22 @@ bool ManagedProcess::start(const std::string & executable,
 	}
 
 	const std::wstring wideExecutable = utf8ToWide(executable);
+	const DWORD directAttributes = GetFileAttributesW(wideExecutable.c_str());
+	const bool directExecutableVisible = directAttributes != INVALID_FILE_ATTRIBUTES &&
+		(directAttributes & FILE_ATTRIBUTE_DIRECTORY) == 0;
+	std::wstring lowerExecutable = wideExecutable;
+	std::transform(lowerExecutable.begin(), lowerExecutable.end(), lowerExecutable.begin(),
+		[](wchar_t character) { return static_cast<wchar_t>(std::towlower(character)); });
+	const bool installedOfxICRuntime =
+		lowerExecutable.find(L"\\ofxic\\servers\\") != std::wstring::npos;
 	std::wstring command = quoteWindowsArgument(wideExecutable);
-	for (const auto & argument : arguments)
-		command += L" " + quoteWindowsArgument(utf8ToWide(argument));
-	std::vector<wchar_t> mutableCommand(command.begin(), command.end());
-	mutableCommand.push_back(L'\0');
+	std::wstring shellParameters;
+	for (const auto & argument : arguments) {
+		const std::wstring quoted = quoteWindowsArgument(utf8ToWide(argument));
+		command += L" " + quoted;
+		if (!shellParameters.empty()) shellParameters += L" ";
+		shellParameters += quoted;
+	}
 	STARTUPINFOW startup{};
 	startup.cb = sizeof(startup);
 	startup.dwFlags = STARTF_USESTDHANDLES;
@@ -230,39 +370,174 @@ bool ManagedProcess::start(const std::string & executable,
 	startup.hStdOutput = outputWrite;
 	startup.hStdError = outputWrite;
 	PROCESS_INFORMATION processInfo{};
+	BOOL currentProcessIsInJob = FALSE;
+	if (!IsProcessInJob(GetCurrentProcess(), nullptr, &currentProcessIsInJob))
+		currentProcessIsInJob = FALSE;
+	const bool preferShellBroker = currentProcessIsInJob && installedOfxICRuntime &&
+		!directExecutableVisible;
+	if (!currentProcessIsInJob) {
+		impl->job = CreateJobObjectW(nullptr, nullptr);
+		if (!impl->job) {
+			const DWORD error = GetLastError();
+			CloseHandle(outputWrite);
+			impl->closeHandles();
+			impl->processState = ManagedProcessState::Failed;
+			impl->processStatus = "Could not create a Windows job for " + impl->processName +
+				" (Windows error " + std::to_string(error) + ": " + windowsErrorMessage(error) + ").";
+			return false;
+		}
+		JOBOBJECT_EXTENDED_LIMIT_INFORMATION jobLimits{};
+		jobLimits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+		if (!SetInformationJobObject(impl->job, JobObjectExtendedLimitInformation,
+			&jobLimits, sizeof(jobLimits))) {
+			const DWORD error = GetLastError();
+			CloseHandle(outputWrite);
+			impl->closeHandles();
+			impl->processState = ManagedProcessState::Failed;
+			impl->processStatus = "Could not configure a Windows job for " + impl->processName +
+				" (Windows error " + std::to_string(error) + ": " + windowsErrorMessage(error) + ").";
+			return false;
+		}
+	}
 	std::filesystem::path workingPath = requestedWorkingDirectory.empty()
 		? std::filesystem::path(executable).parent_path()
 		: std::filesystem::path(requestedWorkingDirectory);
-	std::error_code directoryError;
-	if (!workingPath.empty() && !std::filesystem::is_directory(workingPath, directoryError)) {
-		CloseHandle(outputWrite);
-		impl->closeHandles();
-		impl->processState = ManagedProcessState::Failed;
-		impl->processStatus = impl->processName + " working directory does not exist: " +
-			workingPath.string();
-		return false;
-	}
 	const std::wstring workingDirectory = workingPath.wstring();
-	const BOOL created = CreateProcessW(wideExecutable.c_str(), mutableCommand.data(),
-		nullptr, nullptr, TRUE, CREATE_NO_WINDOW, nullptr,
-		workingDirectory.empty() ? nullptr : workingDirectory.c_str(), &startup, &processInfo);
-	const DWORD createError = created ? ERROR_SUCCESS : GetLastError();
-	CloseHandle(outputWrite);
+	BOOL created = FALSE;
+	DWORD createError = ERROR_ACCESS_DENIED;
+	auto createDirect = [&](const wchar_t * directory) {
+		std::vector<wchar_t> mutableCommand(command.begin(), command.end());
+		mutableCommand.push_back(L'\0');
+		return CreateProcessW(wideExecutable.c_str(), mutableCommand.data(),
+			nullptr, nullptr, TRUE, CREATE_NO_WINDOW, nullptr, directory,
+			&startup, &processInfo);
+	};
+	if (!preferShellBroker) {
+		created = createDirect(workingDirectory.empty() ? nullptr : workingDirectory.c_str());
+		createError = created ? ERROR_SUCCESS : GetLastError();
+		if (!created && !workingDirectory.empty() &&
+			(createError == ERROR_FILE_NOT_FOUND || createError == ERROR_PATH_NOT_FOUND)) {
+			created = createDirect(nullptr);
+			createError = created ? ERROR_SUCCESS : GetLastError();
+			if (created) {
+				const std::string marker =
+					"Started without the configured working directory.\n";
+				impl->appendOutput(marker.data(), marker.size());
+			}
+		}
+	}
+	bool shellLaunched = false;
+	if (!created && (preferShellBroker || createError == ERROR_FILE_NOT_FOUND ||
+		createError == ERROR_PATH_NOT_FOUND || createError == ERROR_ACCESS_DENIED)) {
+		// A GUI executable started from a managed development workspace can have a
+		// narrower filesystem namespace than Explorer even though both run as the
+		// same user. Ask the Windows shell to open the already configured external
+		// runtime and retain its process handle for readiness and stop supervision.
+		CloseHandle(outputWrite);
+		outputWrite = nullptr;
+		if (impl->outputRead) {
+			CloseHandle(impl->outputRead);
+			impl->outputRead = nullptr;
+		}
+		SHELLEXECUTEINFOW shell{};
+		DWORD shellError = createError;
+		if (!preferShellBroker) {
+			shell.cbSize = sizeof(shell);
+			shell.fMask = SEE_MASK_NOCLOSEPROCESS | SEE_MASK_FLAG_NO_UI;
+			shell.lpVerb = L"open";
+			shell.lpFile = wideExecutable.c_str();
+			shell.lpParameters = shellParameters.empty() ? nullptr : shellParameters.c_str();
+			shell.lpDirectory = workingDirectory.empty() ? nullptr : workingDirectory.c_str();
+			shell.nShow = SW_HIDE;
+			created = ShellExecuteExW(&shell) && shell.hProcess;
+			shellError = created ? ERROR_SUCCESS : GetLastError();
+			if (!created && shell.lpDirectory &&
+				(shellError == ERROR_FILE_NOT_FOUND || shellError == ERROR_PATH_NOT_FOUND)) {
+				shell.lpDirectory = nullptr;
+				created = ShellExecuteExW(&shell) && shell.hProcess;
+				shellError = created ? ERROR_SUCCESS : GetLastError();
+			}
+		}
+		if (!created && installedOfxICRuntime &&
+			(preferShellBroker || shellError == ERROR_FILE_NOT_FOUND || shellError == ERROR_PATH_NOT_FOUND ||
+			 shellError == ERROR_ACCESS_DENIED)) {
+			// Some managed GUI launches cannot resolve LocalAppData in CreateProcess or
+			// ShellExecute, while a system PowerShell process can. Keep PowerShell alive
+			// as the supervised parent by invoking the server with the call operator.
+			std::wstring script = L"& " + quotePowerShellLiteral(wideExecutable);
+			for (const auto & argument : arguments)
+				script += L" " + quotePowerShellLiteral(utf8ToWide(argument));
+			const std::wstring brokerParameters =
+				L"-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command " +
+				quoteWindowsArgument(script);
+			SHELLEXECUTEINFOW broker{};
+			broker.cbSize = sizeof(broker);
+			broker.fMask = SEE_MASK_NOCLOSEPROCESS | SEE_MASK_FLAG_NO_UI;
+			broker.lpVerb = L"open";
+			broker.lpFile = L"powershell.exe";
+			broker.lpParameters = brokerParameters.c_str();
+			broker.nShow = SW_HIDE;
+			created = ShellExecuteExW(&broker) && broker.hProcess;
+			shellError = created ? ERROR_SUCCESS : GetLastError();
+			if (created) {
+				shell.hProcess = broker.hProcess;
+				const std::string marker = "Started through the PowerShell process broker.\n";
+				impl->appendOutput(marker.data(), marker.size());
+			}
+		}
+		if (created) {
+			processInfo.hProcess = shell.hProcess;
+			processInfo.dwProcessId = GetProcessId(shell.hProcess);
+			shellLaunched = true;
+			createError = ERROR_SUCCESS;
+			if (impl->output.empty()) {
+				const std::string marker = "Started through the Windows shell broker.\n";
+				impl->appendOutput(marker.data(), marker.size());
+			}
+		} else {
+			createError = shellError;
+		}
+	}
+	if (outputWrite) CloseHandle(outputWrite);
 	if (!created) {
 		impl->closeHandles();
 		impl->processState = ManagedProcessState::Failed;
-		impl->processStatus = "Could not start " + impl->processName +
-			" (Windows error " + std::to_string(createError) + ": " +
-			windowsErrorMessage(createError) + ").";
+		if (!directExecutableVisible && !installedOfxICRuntime) {
+			impl->processStatus = impl->processName + " executable does not exist: " + executable;
+		} else {
+			impl->processStatus = "Could not launch " + impl->processName +
+				" from the configured executable: " + executable + " (Windows error " +
+				std::to_string(createError) + ": " + windowsErrorMessage(createError) +
+				"). The file may exist but be unavailable in the GUI process context.";
+		}
 		return false;
 	}
-	CloseHandle(processInfo.hThread);
+	if (impl->job && !shellLaunched &&
+		!AssignProcessToJobObject(impl->job, processInfo.hProcess)) {
+		const DWORD error = GetLastError();
+		TerminateProcess(processInfo.hProcess, 1);
+		WaitForSingleObject(processInfo.hProcess, 3000);
+		if (processInfo.hThread) CloseHandle(processInfo.hThread);
+		CloseHandle(processInfo.hProcess);
+		impl->closeHandles();
+		impl->processState = ManagedProcessState::Failed;
+		impl->processStatus = "Could not supervise " + impl->processName +
+			" as a Windows process tree (Windows error " + std::to_string(error) + ": " +
+			windowsErrorMessage(error) + ").";
+		return false;
+	}
+	if (processInfo.hThread) CloseHandle(processInfo.hThread);
 	impl->process = processInfo.hProcess;
 	impl->pid = processInfo.dwProcessId;
+	impl->processLaunchMethod = shellLaunched ? "windows-shell" : "direct";
 	impl->startedAt = std::chrono::steady_clock::now();
 	impl->processState = ManagedProcessState::Starting;
-	impl->processStatus = "Starting " + impl->processName + " on port " +
-		std::to_string(readinessPort) + " (PID " + std::to_string(impl->pid) + ")...";
+	impl->processStatus = readinessPort == 0
+		? "Running " + impl->processName + " (PID " + std::to_string(impl->pid) +
+			", launch=" + impl->processLaunchMethod + ")..."
+		: "Starting " + impl->processName + " on port " +
+			std::to_string(readinessPort) + " (PID " + std::to_string(impl->pid) +
+			", launch=" + impl->processLaunchMethod + ")...";
 	return true;
 #else
 	(void)arguments;
@@ -274,6 +549,7 @@ bool ManagedProcess::start(const std::string & executable,
 
 void ManagedProcess::update() {
 #if defined(_WIN32)
+	if (running()) impl->readFollowedOutput();
 	if (!impl->process) {
 		if (impl->processState == ManagedProcessState::Ready && impl->pid == 0 &&
 			impl->port != 0 && !tcpPortIsListening(impl->port)) {
@@ -291,23 +567,36 @@ void ManagedProcess::update() {
 		impl->processState = code == 0
 			? ManagedProcessState::Exited : ManagedProcessState::Failed;
 		impl->processStatus = impl->processName + " exited with code " +
-			std::to_string(code) + ".";
+			std::to_string(code) + " (launch=" + impl->processLaunchMethod + ").";
+		const std::string lastOutput = impl->latestOutputSummary();
+		if (!lastOutput.empty()) impl->processStatus += " Last output: " + lastOutput;
 		impl->pid = 0;
 		impl->closeHandles();
 		return;
 	}
 	if (impl->port != 0 && tcpPortIsListening(impl->port)) {
+		const auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(
+			std::chrono::steady_clock::now() - impl->startedAt).count();
 		impl->processState = ManagedProcessState::Ready;
 		impl->processStatus = impl->processName + " is ready at http://127.0.0.1:" +
-			std::to_string(impl->port) + " (PID " + std::to_string(impl->pid) + ").";
+			std::to_string(impl->port) + " after " + std::to_string(elapsed) +
+			" s (PID " + std::to_string(impl->pid) + ", launch=" +
+			impl->processLaunchMethod + ").";
 		return;
 	}
 	impl->processState = ManagedProcessState::Starting;
 	const auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(
 		std::chrono::steady_clock::now() - impl->startedAt).count();
-	impl->processStatus = impl->processName + " is starting; waiting for port " +
-		std::to_string(impl->port) + " for " + std::to_string(elapsed) +
-		" s (PID " + std::to_string(impl->pid) + ").";
+	impl->processStatus = impl->port == 0
+		? impl->processName + " is running for " + std::to_string(elapsed) +
+			" s (PID " + std::to_string(impl->pid) + ", launch=" +
+			impl->processLaunchMethod + ")."
+		: impl->processName + " process is running but its endpoint is not ready after " +
+			std::to_string(elapsed) + " s; waiting for TCP port " +
+			std::to_string(impl->port) + " (PID " + std::to_string(impl->pid) +
+			", launch=" + impl->processLaunchMethod + ").";
+	const std::string lastOutput = impl->latestOutputSummary();
+	if (!lastOutput.empty()) impl->processStatus += " Last output: " + lastOutput;
 #endif
 }
 
@@ -323,6 +612,9 @@ void ManagedProcess::stop() {
 #endif
 	impl->pid = 0;
 	impl->lastExitCode = 0;
+	impl->processLaunchMethod = "none";
+	impl->followedFiles.clear();
+	impl->followedPaths.clear();
 	impl->processState = ManagedProcessState::Stopped;
 	impl->processStatus = external
 		? "Disconnected from externally managed " + impl->processName +
@@ -341,7 +633,11 @@ ManagedProcessState ManagedProcess::state() const { return impl->processState; }
 unsigned long ManagedProcess::processId() const { return impl->pid; }
 int ManagedProcess::exitCode() const { return impl->lastExitCode; }
 const std::string & ManagedProcess::status() const { return impl->processStatus; }
+const std::string & ManagedProcess::launchMethod() const { return impl->processLaunchMethod; }
 const std::string & ManagedProcess::recentOutput() const { return impl->output; }
+const std::vector<std::string> & ManagedProcess::followedOutputFiles() const {
+	return impl->followedPaths;
+}
 
 std::string ManagedProcess::takeNewOutput() {
 	std::string result = std::move(impl->newOutput);

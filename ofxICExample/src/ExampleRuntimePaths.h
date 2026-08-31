@@ -11,8 +11,20 @@ std::string findInstalledExecutable(
 	const std::string & familyPrefix,
 	const std::string & executableName);
 
+std::string installedExecutableSearchDiagnostic(
+	const std::string & serverRoot,
+	const std::string & familyPrefix,
+	const std::string & executableName);
+
 std::string resolveInstalledExecutable(
 	const std::string & configuredPath,
+	const std::string & serverRoot,
+	const std::string & familyPrefix,
+	const std::string & executableName);
+
+std::string resolveInstalledExecutable(
+	const std::string & configuredPath,
+	const std::string & startupDetectedPath,
 	const std::string & serverRoot,
 	const std::string & familyPrefix,
 	const std::string & executableName);
