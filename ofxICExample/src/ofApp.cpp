@@ -309,6 +309,34 @@ std::string installedServerRoot() {
 		: (localAppData / "ofxIC" / "servers").string();
 }
 
+std::string resolveWorkbenchPath(const std::string & value) {
+	if (value.empty()) return {};
+	std::filesystem::path path(value);
+	if (path.is_relative())
+		path = std::filesystem::path(ofFilePath::getCurrentExeDir()) / path;
+	return path.lexically_normal().string();
+}
+
+std::string portableWorkbenchPath(const std::string & value) {
+	if (value.empty()) return {};
+	const std::filesystem::path base =
+		std::filesystem::path(ofFilePath::getCurrentExeDir()).lexically_normal();
+	const std::filesystem::path resolved =
+		std::filesystem::path(resolveWorkbenchPath(value)).lexically_normal();
+	const std::filesystem::path relative = resolved.lexically_relative(base);
+	if (!relative.empty() && !relative.is_absolute()) {
+		bool insideWorkbench = true;
+		for (const auto & part : relative) {
+			if (part == "..") {
+				insideWorkbench = false;
+				break;
+			}
+		}
+		if (insideWorkbench) return relative.generic_string();
+	}
+	return resolved.string();
+}
+
 std::string runtimeExecutableFailureDiagnostic(const std::string & configured,
 	const std::string & startupDetected, const std::string & familyPrefix,
 	const std::string & executableName) {
@@ -3127,9 +3155,9 @@ void ofApp::applySettingsToUi(const ofxICExample::ExampleSettings & settings) {
 	chatTemperature = settings.chatTemperature;
 	chatTopP = settings.chatTopP;
 	chatSeed = settings.chatSeed;
-	setTextBuffer(llamaServerPath, settings.llamaServerPath);
-	setTextBuffer(llamaModelPath, settings.llamaModelPath);
-	setTextBuffer(llamaModelDirectory, settings.llamaModelDirectory);
+	setTextBuffer(llamaServerPath, resolveWorkbenchPath(settings.llamaServerPath));
+	setTextBuffer(llamaModelPath, resolveWorkbenchPath(settings.llamaModelPath));
+	setTextBuffer(llamaModelDirectory, resolveWorkbenchPath(settings.llamaModelDirectory));
 	llamaContextSize = settings.llamaContextSize;
 	llamaGpuLayers = settings.llamaGpuLayers;
 	llamaFlashAttention = settings.llamaFlashAttention != 0;
@@ -3141,13 +3169,20 @@ void ofApp::applySettingsToUi(const ofxICExample::ExampleSettings & settings) {
 	setTextBuffer(mediaEndpointUrl, settings.mediaEndpointUrl);
 	setTextBuffer(mediaImageModel, settings.mediaImageModel);
 	setTextBuffer(mediaVideoModel, settings.mediaVideoModel);
-	setTextBuffer(stableDiffusionModelDirectory, settings.stableDiffusionModelDirectory);
-	setTextBuffer(stableDiffusionServerPath, settings.stableDiffusionServerPath);
-	setTextBuffer(stableDiffusionModelPath, settings.stableDiffusionModelPath);
-	setTextBuffer(stableDiffusionVaePath, settings.stableDiffusionVaePath);
-	setTextBuffer(stableDiffusionTextEncoderPath, settings.stableDiffusionTextEncoderPath);
-	setTextBuffer(stableDiffusionClipLPath, settings.stableDiffusionClipLPath);
-	setTextBuffer(stableDiffusionClipGPath, settings.stableDiffusionClipGPath);
+	setTextBuffer(stableDiffusionModelDirectory,
+		resolveWorkbenchPath(settings.stableDiffusionModelDirectory));
+	setTextBuffer(stableDiffusionServerPath,
+		resolveWorkbenchPath(settings.stableDiffusionServerPath));
+	setTextBuffer(stableDiffusionModelPath,
+		resolveWorkbenchPath(settings.stableDiffusionModelPath));
+	setTextBuffer(stableDiffusionVaePath,
+		resolveWorkbenchPath(settings.stableDiffusionVaePath));
+	setTextBuffer(stableDiffusionTextEncoderPath,
+		resolveWorkbenchPath(settings.stableDiffusionTextEncoderPath));
+	setTextBuffer(stableDiffusionClipLPath,
+		resolveWorkbenchPath(settings.stableDiffusionClipLPath));
+	setTextBuffer(stableDiffusionClipGPath,
+		resolveWorkbenchPath(settings.stableDiffusionClipGPath));
 	stableDiffusionCompleteCheckpoint = settings.stableDiffusionCompleteCheckpoint != 0;
 	stableDiffusionFlashAttention = settings.stableDiffusionFlashAttention != 0;
 	stableDiffusionOffloadToCpu = settings.stableDiffusionOffloadToCpu != 0;
@@ -3162,16 +3197,18 @@ void ofApp::applySettingsToUi(const ofxICExample::ExampleSettings & settings) {
 	setTextBuffer(musicEndpointUrl, settings.musicEndpointUrl);
 	musicDuration = settings.musicDuration;
 	musicOutputFormat = settings.musicOutputFormat;
-	setTextBuffer(aceStepServerPath, settings.aceStepServerPath);
+	setTextBuffer(aceStepServerPath, resolveWorkbenchPath(settings.aceStepServerPath));
 	setTextBuffer(aceStepServerArguments, settings.aceStepServerArguments);
-	setTextBuffer(aceStepModelDirectory, settings.aceStepModelDirectory);
-	setTextBuffer(whisperServerPath, settings.whisperServerPath);
-	setTextBuffer(whisperModelPath, settings.whisperModelPath);
+	setTextBuffer(aceStepModelDirectory,
+		resolveWorkbenchPath(settings.aceStepModelDirectory));
+	setTextBuffer(whisperServerPath, resolveWorkbenchPath(settings.whisperServerPath));
+	setTextBuffer(whisperModelPath, resolveWorkbenchPath(settings.whisperModelPath));
 	setTextBuffer(whisperServerArguments, settings.whisperServerArguments);
-	setTextBuffer(samBridgeExecutablePath, settings.samBridgeExecutablePath);
+	setTextBuffer(samBridgeExecutablePath,
+		resolveWorkbenchPath(settings.samBridgeExecutablePath));
 	setTextBuffer(samBridgeArguments, settings.samBridgeArguments);
-	setTextBuffer(samRunnerPath, settings.samRunnerPath);
-	setTextBuffer(samModelPath, settings.samModelPath);
+	setTextBuffer(samRunnerPath, resolveWorkbenchPath(settings.samRunnerPath));
+	setTextBuffer(samModelPath, resolveWorkbenchPath(settings.samModelPath));
 	samCuda = settings.samCuda != 0;
 	configurationDirty = false;
 	mediaConfigurationDirty = false;
@@ -3189,9 +3226,9 @@ ofxICExample::ExampleSettings ofApp::settingsFromUi() const {
 	settings.chatTemperature = chatTemperature;
 	settings.chatTopP = chatTopP;
 	settings.chatSeed = chatSeed;
-	settings.llamaServerPath = llamaServerPath.data();
-	settings.llamaModelPath = llamaModelPath.data();
-	settings.llamaModelDirectory = llamaModelDirectory.data();
+	settings.llamaServerPath = portableWorkbenchPath(llamaServerPath.data());
+	settings.llamaModelPath = portableWorkbenchPath(llamaModelPath.data());
+	settings.llamaModelDirectory = portableWorkbenchPath(llamaModelDirectory.data());
 	settings.llamaContextSize = llamaContextSize;
 	settings.llamaGpuLayers = llamaGpuLayers;
 	settings.llamaFlashAttention = llamaFlashAttention ? 1 : 0;
@@ -3204,13 +3241,19 @@ ofxICExample::ExampleSettings ofApp::settingsFromUi() const {
 	settings.mediaEndpointUrl = mediaEndpointUrl.data();
 	settings.mediaImageModel = mediaImageModel.data();
 	settings.mediaVideoModel = mediaVideoModel.data();
-	settings.stableDiffusionModelDirectory = stableDiffusionModelDirectory.data();
-	settings.stableDiffusionServerPath = stableDiffusionServerPath.data();
-	settings.stableDiffusionModelPath = stableDiffusionModelPath.data();
-	settings.stableDiffusionVaePath = stableDiffusionVaePath.data();
-	settings.stableDiffusionTextEncoderPath = stableDiffusionTextEncoderPath.data();
-	settings.stableDiffusionClipLPath = stableDiffusionClipLPath.data();
-	settings.stableDiffusionClipGPath = stableDiffusionClipGPath.data();
+	settings.stableDiffusionModelDirectory =
+		portableWorkbenchPath(stableDiffusionModelDirectory.data());
+	settings.stableDiffusionServerPath =
+		portableWorkbenchPath(stableDiffusionServerPath.data());
+	settings.stableDiffusionModelPath =
+		portableWorkbenchPath(stableDiffusionModelPath.data());
+	settings.stableDiffusionVaePath = portableWorkbenchPath(stableDiffusionVaePath.data());
+	settings.stableDiffusionTextEncoderPath =
+		portableWorkbenchPath(stableDiffusionTextEncoderPath.data());
+	settings.stableDiffusionClipLPath =
+		portableWorkbenchPath(stableDiffusionClipLPath.data());
+	settings.stableDiffusionClipGPath =
+		portableWorkbenchPath(stableDiffusionClipGPath.data());
 	settings.stableDiffusionCompleteCheckpoint = stableDiffusionCompleteCheckpoint ? 1 : 0;
 	settings.stableDiffusionFlashAttention = stableDiffusionFlashAttention ? 1 : 0;
 	settings.stableDiffusionOffloadToCpu = stableDiffusionOffloadToCpu ? 1 : 0;
@@ -3222,23 +3265,23 @@ ofxICExample::ExampleSettings ofApp::settingsFromUi() const {
 	settings.musicEndpointUrl = musicEndpointUrl.data();
 	settings.musicDuration = musicDuration;
 	settings.musicOutputFormat = musicOutputFormat;
-	settings.aceStepServerPath = aceStepServerPath.data();
+	settings.aceStepServerPath = portableWorkbenchPath(aceStepServerPath.data());
 	settings.aceStepServerArguments = aceStepServerArguments.data();
-	settings.aceStepModelDirectory = aceStepModelDirectory.data();
-	settings.whisperServerPath = whisperServerPath.data();
-	settings.whisperModelPath = whisperModelPath.data();
+	settings.aceStepModelDirectory = portableWorkbenchPath(aceStepModelDirectory.data());
+	settings.whisperServerPath = portableWorkbenchPath(whisperServerPath.data());
+	settings.whisperModelPath = portableWorkbenchPath(whisperModelPath.data());
 	settings.whisperServerArguments = whisperServerArguments.data();
-	settings.samBridgeExecutablePath = samBridgeExecutablePath.data();
+	settings.samBridgeExecutablePath = portableWorkbenchPath(samBridgeExecutablePath.data());
 	settings.samBridgeArguments = samBridgeArguments.data();
-	settings.samRunnerPath = samRunnerPath.data();
-	settings.samModelPath = samModelPath.data();
+	settings.samRunnerPath = portableWorkbenchPath(samRunnerPath.data());
+	settings.samModelPath = portableWorkbenchPath(samModelPath.data());
 	settings.samCuda = samCuda ? 1 : 0;
 	return settings;
 }
 
 void ofApp::saveExampleSettings() {
 	if (ofxICExample::saveSettings(settingsPath, settingsFromUi())) {
-		settingsStatus = "Saved non-secret settings in the user profile.";
+		settingsStatus = "Saved non-secret settings. Paths inside the Workbench are portable relative paths.";
 	} else {
 		settingsStatus = "Could not save settings; check values and file access.";
 	}
