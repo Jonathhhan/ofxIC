@@ -628,8 +628,9 @@ void setTextBuffer(std::array<char, Size> & destination, const std::string & val
 }
 
 std::string timestampedOutputFilename(const char * kind, const std::string & extension) {
-	return "ofxIC-" + std::string(kind) + "-" +
-		ofGetTimestampString("%Y%m%d-%H%M%S-%i") + "." + extension;
+	const std::string stem = "ofxIC-" + std::string(kind) + "-" +
+		ofGetTimestampString("%Y%m%d-%H%M%S-%i");
+	return extension.empty() ? stem : stem + "." + extension;
 }
 
 void writeAutomationResult(const std::string & status, const std::string & output) {
@@ -1122,9 +1123,7 @@ void ofApp::update() {
 	if (mediaFinished.exchange(false)) {
 		finishMediaWorker();
 		mediaBusy = false;
-		std::string base64;
-		std::string bytes;
-		std::string format;
+		std::string savedPath;
 		bool isVideo = false;
 		{
 			std::lock_guard<std::mutex> lock(mediaResultMutex);
@@ -1132,24 +1131,15 @@ void ofApp::update() {
 			pendingMediaProgressStatus.clear();
 			mediaOutput = std::move(pendingMediaOutput);
 			currentMediaJob = std::move(pendingMediaJob);
-			base64 = std::move(pendingMediaBase64);
-			bytes = std::move(pendingMediaBytes);
-			format = std::move(pendingMediaFormat);
+			savedPath = std::move(pendingMediaSavedPath);
 			isVideo = pendingMediaIsVideo;
 			pendingMediaIsVideo = false;
 		}
-		std::string savedPath;
-		if (!base64.empty() || !bytes.empty()) {
-			if (bytes.empty()) bytes = decodeBase64(base64);
-			const std::string extension = format.empty() ? (isVideo ? "webm" : "png") : format;
-			const std::string path = ofToDataPath(
-				timestampedOutputFilename("media", extension), true);
-			if (ofBufferToFile(path, ofBuffer(bytes.data(), bytes.size()))) {
-				savedPath = path;
+		if (!savedPath.empty()) {
 				if (isVideo) {
 					generatedImage.clear();
 					generatedVideo.close();
-					if (generatedVideo.load(path)) {
+					if (generatedVideo.load(savedPath)) {
 						generatedVideo.setLoopState(OF_LOOP_NORMAL);
 						generatedVideo.play();
 					} else {
@@ -1157,10 +1147,8 @@ void ofApp::update() {
 					}
 				} else {
 					generatedVideo.close();
-					generatedImage.load(path);
+					generatedImage.load(savedPath);
 				}
-				mediaOutput += "\nSaved: " + path;
-			}
 		}
 		writeMediaAutomationResult(mediaStatus, mediaOutput);
 		if (!activeMediaTaskKind.empty()) {
@@ -1238,6 +1226,7 @@ void ofApp::draw() {
 	bool loadLlamaModelRequested = false;
 	bool chooseLlamaModelDirectoryRequested = false;
 	bool rescanLlamaModelsRequested = false;
+	bool chooseLlamaServerRequested = false;
 	bool startLlamaServerRequested = false;
 	bool stopLlamaServerRequested = false;
 	bool chooseSdServerRequested = false;
@@ -1353,6 +1342,36 @@ void ofApp::draw() {
 		if (ImGui::Button(buttonId.c_str())) {
 			setTextBuffer(destination, endpointUrl.data());
 			if (dirty) *dirty = true;
+		}
+	};
+	const auto drawPathInput = [](const char * label, auto & destination,
+		const char * id, bool & chooseRequested) {
+		ImGui::InputText(label, destination.data(), destination.size());
+		ImGui::SameLine();
+		const std::string buttonId = std::string("Choose...##path-") + id;
+		if (ImGui::Button(buttonId.c_str())) chooseRequested = true;
+	};
+	const auto drawRuntimeExecutable = [&](const char * label, auto & destination,
+		std::string & detected, const char * id, const char * familyPrefix,
+		const char * executableName, const char * installerScript,
+		std::string & statusText, bool & chooseRequested) {
+		ImGui::InputText(label, destination.data(), destination.size());
+		ImGui::SameLine();
+		const std::string chooseId = std::string("Choose...##runtime-executable-") + id;
+		if (ImGui::Button(chooseId.c_str())) chooseRequested = true;
+		ImGui::SameLine();
+		const std::string detectId = std::string("Detect installed##runtime-executable-") + id;
+		if (ImGui::Button(detectId.c_str())) {
+			detected = installedServerExecutable(familyPrefix, executableName);
+			if (detected.empty()) {
+				statusText = std::string("No installed ") + executableName +
+					" found. Run scripts\\" + installerScript + ".";
+			} else {
+				setTextBuffer(destination, detected);
+				statusText = std::string("Installed ") + executableName + " selected.";
+			}
+			ofLogNotice("ofxIC servers") << "Detect " << executableName << ": " <<
+				(detected.empty() ? "not found" : detected);
 		}
 	};
 	const auto drawAuthentication = [&](const char * id, const std::string & token,
@@ -1556,33 +1575,14 @@ void ofApp::draw() {
 			drawRuntimeControls(llamaProcess, llamaServerStatus, "llama",
 				startLlamaServerRequested, stopLlamaServerRequested);
 			if (ImGui::CollapsingHeader("Runtime settings##llama")) {
-			if (ImGui::Button("Use detected llama-server")) {
-				detectedLlamaServerPath = installedServerExecutable(
-					"llama.cpp-", "llama-server.exe");
-				const std::string & installed = detectedLlamaServerPath;
-				if (installed.empty()) {
-					llamaServerStatus = "No script-installed llama-server found under " +
-						(localAppDataDirectory() / "ofxIC" / "servers").string() + ".";
-				} else {
-					setTextBuffer(llamaServerPath, installed);
-					llamaServerStatus = "Script-installed llama-server detected.";
-				}
-				ofLogNotice("ofxIC servers") << "Use detected llama-server: " <<
-					(installed.empty() ? "not found" : installed);
-			}
-			ImGui::SameLine();
-			ImGui::TextDisabled("startup detection: %s", detectedLlamaServerPath.empty()
-				? "not found" : detectedLlamaServerPath.c_str());
-			ImGui::InputText("Server executable", llamaServerPath.data(), llamaServerPath.size());
-			ImGui::TextDisabled("Resolved server executable:");
-			ImGui::TextWrapped("%s", llamaServerPath[0]
-				? llamaServerPath.data() : "No llama-server executable detected.");
-			ImGui::InputText("Selected GGUF model", llamaModelPath.data(), llamaModelPath.size());
-			ImGui::SameLine();
-			loadLlamaModelRequested = ImGui::Button("Choose GGUF");
-			ImGui::InputText("Model search folder", llamaModelDirectory.data(), llamaModelDirectory.size());
-			ImGui::SameLine();
-			chooseLlamaModelDirectoryRequested = ImGui::Button("Choose folder");
+			drawRuntimeExecutable("Server executable", llamaServerPath,
+				detectedLlamaServerPath, "llama", "llama.cpp-", "llama-server.exe",
+				"install-llama-server.ps1", llamaServerStatus,
+				chooseLlamaServerRequested);
+			drawPathInput("Selected GGUF model", llamaModelPath, "llama-model",
+				loadLlamaModelRequested);
+			drawPathInput("Model search folder", llamaModelDirectory, "llama-model-folder",
+				chooseLlamaModelDirectoryRequested);
 			ImGui::SameLine();
 			rescanLlamaModelsRequested = ImGui::Button("Rescan models");
 			if (!detectedLlamaModels.empty() && ImGui::BeginCombo("Detected GGUF models",
@@ -1680,20 +1680,12 @@ void ofApp::draw() {
 			drawRuntimeControls(whisperProcess, whisperServerStatus, "whisper",
 				startWhisperServerRequested, stopWhisperServerRequested);
 			if (ImGui::CollapsingHeader("Runtime settings##whisper")) {
-				ImGui::InputText("whisper-server executable", whisperServerPath.data(), whisperServerPath.size());
-				ImGui::SameLine(); chooseWhisperServerRequested = ImGui::Button("Choose server##whisper");
-				ImGui::SameLine();
-				if (ImGui::Button("Detect installed##whisper")) {
-					const std::string detected = installedServerExecutable("whisper.cpp-", "whisper-server.exe");
-					if (!detected.empty()) {
-						detectedWhisperServerPath = detected;
-						setTextBuffer(whisperServerPath, detected);
-						whisperServerStatus = "Script-installed whisper-server selected.";
-					} else whisperServerStatus = "No script-installed whisper-server found. Run scripts\\install-whisper-server.ps1.";
-					ofLogNotice("ofxIC servers") << "Detect whisper-server: " << (detected.empty() ? "not found" : detected);
-				}
-				ImGui::InputText("Whisper model", whisperModelPath.data(), whisperModelPath.size());
-				ImGui::SameLine(); chooseWhisperModelRequested = ImGui::Button("Choose model##whisper");
+				drawRuntimeExecutable("Server executable", whisperServerPath,
+					detectedWhisperServerPath, "whisper", "whisper.cpp-", "whisper-server.exe",
+					"install-whisper-server.ps1", whisperServerStatus,
+					chooseWhisperServerRequested);
+				drawPathInput("Whisper model", whisperModelPath, "whisper-model",
+					chooseWhisperModelRequested);
 				ImGui::InputText("Extra arguments##whisper", whisperServerArguments.data(), whisperServerArguments.size());
 			}
 		}
@@ -1726,31 +1718,15 @@ void ofApp::draw() {
 		drawRuntimeControls(stableDiffusionProcess, stableDiffusionServerStatus, "sd",
 			startSdServerRequested, stopSdServerRequested);
 		if (ImGui::CollapsingHeader("Runtime settings##sd")) {
-		if (ImGui::Button("Use detected sd-server")) {
-			detectedStableDiffusionServerPath = installedServerExecutable(
-				"stable-diffusion.cpp-", "sd-server.exe");
-			const std::string & installed = detectedStableDiffusionServerPath;
-			if (installed.empty()) {
-				stableDiffusionServerStatus = "No script-installed sd-server found under " +
-					(localAppDataDirectory() / "ofxIC" / "servers").string() + ".";
-			} else {
-				setTextBuffer(stableDiffusionServerPath, installed);
-				stableDiffusionServerStatus = "Script-installed sd-server detected.";
-			}
-			ofLogNotice("ofxIC servers") << "Use detected sd-server: " <<
-				(installed.empty() ? "not found" : installed);
-		}
-		ImGui::SameLine();
-		ImGui::TextDisabled("startup detection: %s", detectedStableDiffusionServerPath.empty()
-			? "not found" : detectedStableDiffusionServerPath.c_str());
-		ImGui::InputText("sd-server executable", stableDiffusionServerPath.data(), stableDiffusionServerPath.size());
-		ImGui::SameLine(); chooseSdServerRequested = ImGui::Button("Choose server##sd");
-		ImGui::TextWrapped("%s", stableDiffusionServerPath[0] ? stableDiffusionServerPath.data() : "No sd-server detected.");
-		ImGui::InputText("Model search folder##sd", stableDiffusionModelDirectory.data(), stableDiffusionModelDirectory.size());
-		ImGui::SameLine(); chooseSdModelDirectoryRequested = ImGui::Button("Choose folder##sd");
+		drawRuntimeExecutable("Server executable", stableDiffusionServerPath,
+			detectedStableDiffusionServerPath, "sd", "stable-diffusion.cpp-", "sd-server.exe",
+			"install-stable-diffusion-server.ps1", stableDiffusionServerStatus,
+			chooseSdServerRequested);
+		drawPathInput("Model search folder##sd", stableDiffusionModelDirectory,
+			"sd-model-folder", chooseSdModelDirectoryRequested);
 		ImGui::SameLine(); rescanSdModelsRequested = ImGui::Button("Rescan models##sd");
-		ImGui::InputText("Diffusion model", stableDiffusionModelPath.data(), stableDiffusionModelPath.size());
-		ImGui::SameLine(); chooseSdModelRequested = ImGui::Button("Choose model##sd");
+		drawPathInput("Diffusion model", stableDiffusionModelPath, "sd-model",
+			chooseSdModelRequested);
 		if (stableDiffusionProcess.running()) {
 			ImGui::TextDisabled("Loaded by running server: %s",
 				stableDiffusionActiveModelPath.empty() ? "externally managed / unknown"
@@ -1788,18 +1764,18 @@ void ofApp::draw() {
 			ImGui::EndCombo();
 		}
 		ImGui::BeginDisabled(stableDiffusionCompleteCheckpoint);
-		ImGui::InputText("VAE (optional)", stableDiffusionVaePath.data(), stableDiffusionVaePath.size());
-		ImGui::SameLine(); chooseSdVaeRequested = ImGui::Button("Choose VAE##sd");
+		drawPathInput("VAE (optional)", stableDiffusionVaePath, "sd-vae",
+			chooseSdVaeRequested);
 		if (!detectedVaeModels.empty() && ImGui::BeginCombo("Detected VAEs", ofFilePath::getFileName(stableDiffusionVaePath.data()).c_str())) {
 			for (const auto & path : detectedVaeModels) if (ImGui::Selectable(ofFilePath::getFileName(path).c_str(), path == stableDiffusionVaePath.data())) setTextBuffer(stableDiffusionVaePath, path);
 			ImGui::EndCombo();
 		}
-		ImGui::InputText("CLIP-L (SD3/Flux)", stableDiffusionClipLPath.data(), stableDiffusionClipLPath.size());
-		ImGui::SameLine(); chooseSdClipLRequested = ImGui::Button("Choose CLIP-L##sd");
-		ImGui::InputText("CLIP-G (SD3)", stableDiffusionClipGPath.data(), stableDiffusionClipGPath.size());
-		ImGui::SameLine(); chooseSdClipGRequested = ImGui::Button("Choose CLIP-G##sd");
-		ImGui::InputText("T5XXL (SD3/Flux)", stableDiffusionTextEncoderPath.data(), stableDiffusionTextEncoderPath.size());
-		ImGui::SameLine(); chooseSdTextEncoderRequested = ImGui::Button("Choose T5XXL##sd");
+		drawPathInput("CLIP-L (SD3/Flux)", stableDiffusionClipLPath, "sd-clip-l",
+			chooseSdClipLRequested);
+		drawPathInput("CLIP-G (SD3)", stableDiffusionClipGPath, "sd-clip-g",
+			chooseSdClipGRequested);
+		drawPathInput("T5XXL (SD3/Flux)", stableDiffusionTextEncoderPath, "sd-t5",
+			chooseSdTextEncoderRequested);
 		if (!detectedTextEncoders.empty() && ImGui::BeginCombo("Detected T5/text encoders", ofFilePath::getFileName(stableDiffusionTextEncoderPath.data()).c_str())) {
 			for (const auto & path : detectedTextEncoders) if (ImGui::Selectable(ofFilePath::getFileName(path).c_str(), path == stableDiffusionTextEncoderPath.data())) setTextBuffer(stableDiffusionTextEncoderPath, path);
 			ImGui::EndCombo();
@@ -1899,8 +1875,8 @@ void ofApp::draw() {
 		drawRuntimeControls(aceStepProcess, aceStepServerStatus, "acestep",
 			startAceStepServerRequested, stopAceStepServerRequested);
 		if (ImGui::CollapsingHeader("Runtime settings##acestep")) {
-		ImGui::InputText("ACE-Step server", aceStepServerPath.data(), aceStepServerPath.size());
-		ImGui::SameLine(); chooseAceStepServerRequested = ImGui::Button("Choose server##ace");
+		drawPathInput("ACE-Step server", aceStepServerPath, "acestep-server",
+			chooseAceStepServerRequested);
 		ImGui::SameLine();
 		if (ImGui::Button("Detect installed##ace")) {
 			const std::string detected = installedAceStepServer();
@@ -1916,9 +1892,8 @@ void ofApp::draw() {
 			} else aceStepServerStatus = "No ACE-Step server found. Run scripts\\install-acestep-server.ps1.";
 			ofLogNotice("ofxIC servers") << "Detect ACE-Step: " << (detected.empty() ? "not found" : detected);
 		}
-		ImGui::InputText("Model folder##ace", aceStepModelDirectory.data(), aceStepModelDirectory.size());
-		ImGui::SameLine();
-		chooseAceStepModelDirectoryRequested = ImGui::Button("Choose folder##ace-models");
+		drawPathInput("Model folder##ace", aceStepModelDirectory, "acestep-model-folder",
+			chooseAceStepModelDirectoryRequested);
 		if (isNativeAceStepServer(aceStepServerPath.data())) {
 			ImGui::TextDisabled("GGUF set: %s", hasNativeAceStepModels(aceStepModelDirectory.data())
 				? "LM + embedding + DiT + VAE ready" : "incomplete or not found");
@@ -1977,12 +1952,12 @@ void ofApp::draw() {
 					: "Installed SAM runtime and checkpoint selected.")
 				: "No script-installed SAM runtime found. Run scripts\\install-sam-server.ps1.";
 		}
-		ImGui::InputText("Python executable", samBridgeExecutablePath.data(), samBridgeExecutablePath.size());
-		ImGui::SameLine(); chooseSamBridgeRequested = ImGui::Button("Choose Python##sam");
-		ImGui::InputText("SAM runner", samRunnerPath.data(), samRunnerPath.size());
-		ImGui::SameLine(); chooseSamRunnerRequested = ImGui::Button("Choose runner##sam");
-		ImGui::InputText("SAM checkpoint", samModelPath.data(), samModelPath.size());
-		ImGui::SameLine(); chooseSamModelRequested = ImGui::Button("Choose checkpoint##sam");
+		drawPathInput("Python executable", samBridgeExecutablePath, "sam-python",
+			chooseSamBridgeRequested);
+		drawPathInput("SAM runner", samRunnerPath, "sam-runner",
+			chooseSamRunnerRequested);
+		drawPathInput("SAM checkpoint", samModelPath, "sam-checkpoint",
+			chooseSamModelRequested);
 		ImGui::Checkbox("CUDA 13##sam", &samCuda);
 		ImGui::InputText("Extra bridge arguments", samBridgeArguments.data(), samBridgeArguments.size());
 		ImGui::TextDisabled("The GUI starts the bundled bridge and the selected external SAM runner on port 18085.");
@@ -2137,6 +2112,7 @@ void ofApp::draw() {
 		ofFileDialogResult selection = ofSystemLoadDialog(title);
 		if (selection.bSuccess) setTextBuffer(destination, selection.getPath());
 	};
+	if (chooseLlamaServerRequested) choosePath("Choose llama-server.exe", llamaServerPath);
 	if (chooseSdServerRequested) choosePath("Choose sd-server.exe", stableDiffusionServerPath);
 	if (chooseSdModelDirectoryRequested) {
 		ofFileDialogResult selection = ofSystemLoadDialog("Choose Stable Diffusion model folder", true, stableDiffusionModelDirectory.data());
@@ -3932,10 +3908,13 @@ void ofApp::generateMedia() {
 	const int backend = selectedMediaBackend;
 	const bool autoPoll = backend != 0;
 	const std::string mediaModel = video ? mediaVideoModel.data() : mediaImageModel.data();
+	const std::string outputStem = ofToDataPath(
+		timestampedOutputFilename("media", ""), true);
 	mediaStatus = backend == 1
 		? (video ? "Submitting Hugging Face video..." : "Generating Hugging Face image...")
 		: (backend == 2 ? "Submitting native media job..." : "Generating OpenAI image...");
-	mediaWorker = std::thread([this, prompt, width, height, frames, fps, video, backend, mediaModel, autoPoll]() {
+	mediaWorker = std::thread([this, prompt, width, height, frames, fps, video, backend,
+		mediaModel, autoPoll, outputStem]() {
 		ofxIC::RequestControl control;
 		control.shouldCancel = [this]() { return cancellationRequested.load(); };
 		std::string nextStatus;
@@ -3943,6 +3922,7 @@ void ofApp::generateMedia() {
 		std::string nextBase64;
 		std::string nextBytes;
 		std::string nextFormat;
+		std::string nextSavedPath;
 		ofxIC::MediaJob nextJob;
 		if (backend == 0) {
 			ofxIC::ImageRequest request;
@@ -4002,12 +3982,22 @@ void ofApp::generateMedia() {
 				nextBase64 = nextJob.payloadsBase64.front();
 			}
 		}
+		if (nextBytes.empty() && !nextBase64.empty()) nextBytes = decodeBase64(nextBase64);
+		if (!nextBytes.empty()) {
+			const std::string extension = nextFormat.empty()
+				? (video ? "webm" : "png") : nextFormat;
+			const std::string path = outputStem + "." + extension;
+			if (ofBufferToFile(path, ofBuffer(nextBytes.data(), nextBytes.size()))) {
+				nextSavedPath = path;
+				nextOutput += "\nSaved: " + path;
+			} else {
+				nextOutput += "\nCould not save generated media.";
+			}
+		}
 		std::lock_guard<std::mutex> lock(mediaResultMutex);
 		pendingMediaStatus = std::move(nextStatus);
 		pendingMediaOutput = std::move(nextOutput);
-		pendingMediaBase64 = std::move(nextBase64);
-		pendingMediaBytes = std::move(nextBytes);
-		pendingMediaFormat = std::move(nextFormat);
+		pendingMediaSavedPath = std::move(nextSavedPath);
 		pendingMediaIsVideo = video;
 		pendingMediaJob = std::move(nextJob);
 		mediaFinished = true;

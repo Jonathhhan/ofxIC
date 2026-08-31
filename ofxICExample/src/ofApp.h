@@ -269,9 +269,7 @@ private:
 	std::string pendingMediaStatus;
 	std::string pendingMediaProgressStatus;
 	std::string pendingMediaOutput;
-	std::string pendingMediaBase64;
-	std::string pendingMediaBytes;
-	std::string pendingMediaFormat;
+	std::string pendingMediaSavedPath;
 	std::string musicStatus;
 	std::string musicOutput;
 	std::string pendingMusicStatus;
