@@ -1,4 +1,5 @@
 #include "ofApp.h"
+#include "ExampleMediaModelPolicy.h"
 #include "ExampleAtomicFile.h"
 #include "ExampleRuntimePaths.h"
 
@@ -307,34 +308,6 @@ std::string installedServerRoot() {
 	return localAppData.empty()
 		? std::string()
 		: (localAppData / "ofxIC" / "servers").string();
-}
-
-std::string resolveWorkbenchPath(const std::string & value) {
-	if (value.empty()) return {};
-	std::filesystem::path path(value);
-	if (path.is_relative())
-		path = std::filesystem::path(ofFilePath::getCurrentExeDir()) / path;
-	return path.lexically_normal().string();
-}
-
-std::string portableWorkbenchPath(const std::string & value) {
-	if (value.empty()) return {};
-	const std::filesystem::path base =
-		std::filesystem::path(ofFilePath::getCurrentExeDir()).lexically_normal();
-	const std::filesystem::path resolved =
-		std::filesystem::path(resolveWorkbenchPath(value)).lexically_normal();
-	const std::filesystem::path relative = resolved.lexically_relative(base);
-	if (!relative.empty() && !relative.is_absolute()) {
-		bool insideWorkbench = true;
-		for (const auto & part : relative) {
-			if (part == "..") {
-				insideWorkbench = false;
-				break;
-			}
-		}
-		if (insideWorkbench) return relative.generic_string();
-	}
-	return resolved.string();
 }
 
 std::string runtimeExecutableFailureDiagnostic(const std::string & configured,
@@ -976,6 +949,7 @@ void ofApp::setup() {
 		__TIME__ << "; executable=" <<
 		(std::filesystem::path(ofFilePath::getCurrentExeDir()) / "ofxICExample.exe").string();
 	gui.setup(nullptr, true);
+	guiHeartbeatPath = environmentValue("OFXIC_GUI_HEARTBEAT_PATH");
 	streamChat = environmentValue("OFXIC_CHAT_STREAM") == "1";
 	chat.setSystemPrompt(chatSystemPrompt.data());
 	ofxIC::ChatOptions options;
@@ -1078,6 +1052,15 @@ void ofApp::setup() {
 }
 
 void ofApp::update() {
+	if (mediaBusy && !guiHeartbeatPath.empty()) {
+		++guiHeartbeatFrames;
+		const std::uint64_t now = ofGetElapsedTimeMillis();
+		if (now - guiHeartbeatLastWriteMillis >= 100) {
+			std::ofstream heartbeat(guiHeartbeatPath, std::ios::binary | std::ios::trunc);
+			if (heartbeat) heartbeat << guiHeartbeatFrames << '\n';
+			guiHeartbeatLastWriteMillis = now;
+		}
+	}
 	updateLocalLlamaServer();
 	updateManagedProcess(stableDiffusionProcess, stableDiffusionServerStatus, "sd-server");
 	updateManagedProcess(aceStepProcess, aceStepServerStatus, "ACE-Step server");
@@ -1771,6 +1754,7 @@ void ofApp::draw() {
 					ofFilePath::getEnclosingDirectory(addonsSdTurbo, false));
 				setTextBuffer(stableDiffusionModelPath, addonsSdTurbo);
 				stableDiffusionCompleteCheckpoint = true;
+				applyInferredMediaKind(addonsSdTurbo);
 				scanStableDiffusionModels(stableDiffusionModelDirectory.data(),
 					detectedDiffusionModels, detectedVaeModels, detectedTextEncoders);
 				stableDiffusionServerStatus = "Working Addons SD-Turbo preset selected.";
@@ -1781,6 +1765,7 @@ void ofApp::draw() {
 			for (const auto & path : detectedDiffusionModels) if (ImGui::Selectable(ofFilePath::getFileName(path).c_str(), path == stableDiffusionModelPath.data())) {
 				setTextBuffer(stableDiffusionModelPath, path);
 				stableDiffusionCompleteCheckpoint = ofToLower(ofFilePath::getFileExt(path)) != "gguf";
+				applyInferredMediaKind(path);
 				const std::string name = ofToLower(ofFilePath::getFileName(path));
 				if (name.find("wan") != std::string::npos) {
 					setTextBuffer(stableDiffusionVaePath, preferredModelComponent(detectedVaeModels,
@@ -1820,6 +1805,12 @@ void ofApp::draw() {
 		selectedMediaBackend == 2 ? "checked from loaded model" :
 			(mediaProfile.supportsVideo ? "yes" : "no"));
 	ImGui::TextWrapped("%s", mediaProfile.capabilityNote);
+	if (selectedMediaBackend == 2) {
+		const auto inferred = ofxICExample::inferMediaModelKind(stableDiffusionModelPath.data());
+		if (inferred)
+			ImGui::TextDisabled("Selected model type: %s (inferred from model family)",
+				*inferred == ofxICExample::MediaModelKind::Video ? "Video" : "Image");
+	}
 	if (mediaProfile.supportsImage && mediaProfile.supportsVideo) {
 		ImGui::Combo("Kind", &selectedMediaKind, mediaKinds, 2);
 	} else {
@@ -2160,6 +2151,7 @@ void ofApp::draw() {
 			setTextBuffer(stableDiffusionModelPath, selection.getPath());
 			stableDiffusionCompleteCheckpoint =
 				ofToLower(ofFilePath::getFileExt(selection.getPath())) != "gguf";
+			applyInferredMediaKind(selection.getPath());
 			const std::string name = ofToLower(ofFilePath::getFileName(selection.getPath()));
 			if (name.find("wan") != std::string::npos) {
 				setTextBuffer(stableDiffusionVaePath, preferredModelComponent(detectedVaeModels,
@@ -3141,6 +3133,10 @@ bool ofApp::loadDocument(const std::string & path) {
 }
 
 void ofApp::applySettingsToUi(const ofxICExample::ExampleSettings & settings) {
+	const std::string workbenchRoot = ofFilePath::getCurrentExeDir();
+	const auto resolveWorkbenchPath = [&](const std::string & value) {
+		return ofxICExample::resolveWorkbenchPath(value, workbenchRoot);
+	};
 	selectedProfile = settings.endpointProfile;
 	selectedMediaBackend = settings.mediaBackend;
 	selectedMusicBackend = settings.musicBackend;
@@ -3188,6 +3184,7 @@ void ofApp::applySettingsToUi(const ofxICExample::ExampleSettings & settings) {
 	stableDiffusionOffloadToCpu = settings.stableDiffusionOffloadToCpu != 0;
 	if (ofToLower(ofFilePath::getFileExt(stableDiffusionModelPath.data())) == "gguf")
 		stableDiffusionCompleteCheckpoint = false;
+	applyInferredMediaKind(stableDiffusionModelPath.data());
 	scanStableDiffusionModels(stableDiffusionModelDirectory.data(), detectedDiffusionModels,
 		detectedVaeModels, detectedTextEncoders);
 	mediaWidth = settings.mediaWidth;
@@ -3216,6 +3213,10 @@ void ofApp::applySettingsToUi(const ofxICExample::ExampleSettings & settings) {
 }
 
 ofxICExample::ExampleSettings ofApp::settingsFromUi() const {
+	const std::string workbenchRoot = ofFilePath::getCurrentExeDir();
+	const auto portableWorkbenchPath = [&](const std::string & value) {
+		return ofxICExample::portableWorkbenchPath(value, workbenchRoot);
+	};
 	ofxICExample::ExampleSettings settings;
 	settings.endpointProfile = selectedProfile;
 	settings.endpointUrl = endpointUrl.data();
@@ -3395,6 +3396,12 @@ void ofApp::selectMediaBackend(int backendIndex) {
 	}
 	mediaConfigurationDirty = true;
 	applyMediaConfiguration();
+}
+
+void ofApp::applyInferredMediaKind(const std::string & modelPath) {
+	const auto inferred = ofxICExample::inferMediaModelKind(modelPath);
+	if (!inferred) return;
+	selectedMediaKind = *inferred == ofxICExample::MediaModelKind::Video ? 1 : 0;
 }
 
 void ofApp::selectMusicBackend(int backendIndex) {

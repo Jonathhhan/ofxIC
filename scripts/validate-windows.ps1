@@ -44,6 +44,8 @@ if ($SkipGuiSmoke) {
 } else {
 	Write-Output "[5/6] Model-free one-click GUI vertical smoke"
 	& (Join-Path $PSScriptRoot "smoke-one-click-local.ps1")
+	Write-Output "[5/6] Media worker responsiveness smoke"
+	& (Join-Path $PSScriptRoot "smoke-image.ps1")
 }
 
 if ($SkipRuntimePlan) {

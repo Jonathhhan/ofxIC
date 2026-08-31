@@ -82,6 +82,7 @@ private:
 	bool exportDiagnostics(const std::string & path);
 	void selectEndpointProfile(int profileIndex);
 	void selectMediaBackend(int backendIndex);
+	void applyInferredMediaKind(const std::string & modelPath);
 	void selectMusicBackend(int backendIndex);
 	void inspectEndpoint();
 	void sendMessage();
@@ -291,4 +292,7 @@ private:
 	std::atomic<bool> mediaBusy{ false };
 	std::atomic<bool> mediaFinished{ false };
 	std::atomic<bool> musicFinished{ false };
+	std::string guiHeartbeatPath;
+	std::uint64_t guiHeartbeatFrames = 0;
+	std::uint64_t guiHeartbeatLastWriteMillis = 0;
 };

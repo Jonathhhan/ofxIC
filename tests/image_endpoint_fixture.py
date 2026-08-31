@@ -5,8 +5,10 @@ import argparse
 import base64
 import json
 import struct
+import time
 import zlib
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 
 
 def png_fixture(width=8, height=8):
@@ -61,6 +63,10 @@ class Handler(BaseHTTPRequestHandler):
         if request.get("prompt") != "deterministic image fixture":
             self.send_json(400, {"error": {"message": "unexpected fixture prompt"}})
             return
+        if self.server.request_marker:
+            Path(self.server.request_marker).write_text("request received\n", encoding="utf-8")
+        if self.server.delay_ms > 0:
+            time.sleep(self.server.delay_ms / 1000.0)
         self.send_json(200, {
             "created": 1,
             "output_format": "png",
@@ -74,8 +80,13 @@ class Handler(BaseHTTPRequestHandler):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--port", type=int, default=18087)
+    parser.add_argument("--delay-ms", type=int, default=0)
+    parser.add_argument("--request-marker")
     args = parser.parse_args()
-    ThreadingHTTPServer(("127.0.0.1", args.port), Handler).serve_forever()
+    server = ThreadingHTTPServer(("127.0.0.1", args.port), Handler)
+    server.delay_ms = max(0, args.delay_ms)
+    server.request_marker = args.request_marker
+    server.serve_forever()
 
 
 if __name__ == "__main__":

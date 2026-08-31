@@ -38,6 +38,55 @@ public:
 
 } // namespace
 
+OFXIC_TEST(example_runtime_paths_resolve_relative_paths_from_workbench_root) {
+	RuntimeFixture fixture;
+	const auto workbench = fixture.root / "bin";
+	const auto expected = workbench / "runtime/servers/llama/llama-server.exe";
+	const std::string resolved = ofxICExample::resolveWorkbenchPath(
+		"runtime/servers/llama/llama-server.exe", workbench.string());
+	OFXIC_REQUIRE(std::filesystem::path(resolved) == expected.lexically_normal());
+}
+
+OFXIC_TEST(example_runtime_paths_store_paths_inside_workbench_as_portable) {
+	RuntimeFixture fixture;
+	const auto workbench = fixture.root / "bin";
+	const auto server = workbench / "runtime/servers/sd/sd-server.exe";
+	const std::string portable = ofxICExample::portableWorkbenchPath(
+		server.string(), workbench.string());
+	OFXIC_REQUIRE(portable == "runtime/servers/sd/sd-server.exe");
+}
+
+OFXIC_TEST(example_runtime_paths_keep_external_models_absolute) {
+	RuntimeFixture fixture;
+	const auto workbench = fixture.root / "bin";
+	const auto model = fixture.root / "models/model.gguf";
+	const std::string portable = ofxICExample::portableWorkbenchPath(
+		model.string(), workbench.string());
+	OFXIC_REQUIRE(std::filesystem::path(portable) == model.lexically_normal());
+	OFXIC_REQUIRE(std::filesystem::path(portable).is_absolute());
+}
+
+OFXIC_TEST(example_runtime_paths_do_not_store_parent_traversal_as_portable) {
+	RuntimeFixture fixture;
+	const auto workbench = fixture.root / "bin";
+	const std::string portable = ofxICExample::portableWorkbenchPath(
+		"../models/model.gguf", workbench.string());
+	OFXIC_REQUIRE(std::filesystem::path(portable).is_absolute());
+	OFXIC_REQUIRE(std::filesystem::path(portable) ==
+		(fixture.root / "models/model.gguf").lexically_normal());
+}
+
+OFXIC_TEST(example_runtime_paths_portable_round_trip_preserves_target) {
+	RuntimeFixture fixture;
+	const auto workbench = fixture.root / "bin";
+	const auto model = workbench / "runtime/models/whisper/base.bin";
+	const std::string portable = ofxICExample::portableWorkbenchPath(
+		model.string(), workbench.string());
+	const std::string resolved = ofxICExample::resolveWorkbenchPath(
+		portable, workbench.string());
+	OFXIC_REQUIRE(std::filesystem::path(resolved) == model.lexically_normal());
+}
+
 OFXIC_TEST(example_runtime_paths_prefers_a_valid_configured_executable) {
 	RuntimeFixture fixture;
 	const auto configured = fixture.add("manual", "llama-server.exe",

@@ -158,6 +158,33 @@ bool executableFileExists(const std::string & path) {
 	return std::filesystem::is_regular_file(std::filesystem::path(path), error);
 }
 
+std::string resolveWorkbenchPath(
+	const std::string & value,
+	const std::string & workbenchRoot) {
+	if (value.empty()) return {};
+	std::filesystem::path path(value);
+	if (path.is_relative()) path = std::filesystem::path(workbenchRoot) / path;
+	return path.lexically_normal().string();
+}
+
+std::string portableWorkbenchPath(
+	const std::string & value,
+	const std::string & workbenchRoot) {
+	if (value.empty()) return {};
+	const std::filesystem::path base =
+		std::filesystem::path(workbenchRoot).lexically_normal();
+	const std::filesystem::path resolved =
+		std::filesystem::path(resolveWorkbenchPath(value, workbenchRoot)).lexically_normal();
+	const std::filesystem::path relative = resolved.lexically_relative(base);
+	if (!relative.empty() && !relative.is_absolute()) {
+		for (const auto & part : relative) {
+			if (part == "..") return resolved.string();
+		}
+		return relative.generic_string();
+	}
+	return resolved.string();
+}
+
 std::string findInstalledExecutable(
 	const std::string & serverRoot,
 	const std::string & familyPrefix,

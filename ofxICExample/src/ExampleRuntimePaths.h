@@ -6,6 +6,14 @@ namespace ofxICExample {
 
 bool executableFileExists(const std::string & path);
 
+std::string resolveWorkbenchPath(
+	const std::string & value,
+	const std::string & workbenchRoot);
+
+std::string portableWorkbenchPath(
+	const std::string & value,
+	const std::string & workbenchRoot);
+
 std::string findInstalledExecutable(
 	const std::string & serverRoot,
 	const std::string & familyPrefix,

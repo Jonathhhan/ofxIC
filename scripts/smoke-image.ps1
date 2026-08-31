@@ -1,6 +1,7 @@
 param(
 	[string] $Executable = (Join-Path $PSScriptRoot "..\ofxICExample\bin\ofxICExample.exe"),
-	[int] $Port = 18087
+	[int] $Port = 18087,
+	[int] $DelayMilliseconds = 1500
 )
 
 $ErrorActionPreference = "Stop"
@@ -9,6 +10,8 @@ $executablePath = [System.IO.Path]::GetFullPath($Executable)
 $fixtureServer = Join-Path $repository "tests\image_endpoint_fixture.py"
 $temporary = Join-Path ([System.IO.Path]::GetTempPath()) ("ofxIC-image-" + [guid]::NewGuid())
 $resultPath = Join-Path $temporary "result.txt"
+$heartbeatPath = Join-Path $temporary "heartbeat.txt"
+$requestMarker = Join-Path $temporary "request-started.txt"
 $generatedPath = $null
 
 if (-not (Test-Path -LiteralPath $executablePath)) {
@@ -22,6 +25,7 @@ $names = @(
 	"OFXIC_MEDIA_AUTORUN",
 	"OFXIC_MEDIA_PROMPT",
 	"OFXIC_MEDIA_RESULT_PATH",
+	"OFXIC_GUI_HEARTBEAT_PATH",
 	"OFXIC_SETTINGS_PATH")
 $savedEnvironment = @{}
 foreach ($name in $names) {
@@ -34,7 +38,8 @@ try {
 	New-Item -ItemType Directory -Path $temporary | Out-Null
 	$quotedFixture = '"' + $fixtureServer + '"'
 	$server = Start-Process -FilePath "python.exe" -ArgumentList @(
-		$quotedFixture, "--port", $Port) -WindowStyle Hidden -PassThru
+		$quotedFixture, "--port", $Port, "--delay-ms", $DelayMilliseconds,
+		"--request-marker", ('"' + $requestMarker + '"')) -WindowStyle Hidden -PassThru
 	$readyDeadline = [DateTime]::UtcNow.AddSeconds(5)
 	$serverReady = $false
 	do {
@@ -57,9 +62,28 @@ try {
 	$env:OFXIC_MEDIA_AUTORUN = "image"
 	$env:OFXIC_MEDIA_PROMPT = "deterministic image fixture"
 	$env:OFXIC_MEDIA_RESULT_PATH = $resultPath
+	$env:OFXIC_GUI_HEARTBEAT_PATH = $heartbeatPath
 	$env:OFXIC_SETTINGS_PATH = (Join-Path $temporary "settings")
 	$example = Start-Process -FilePath $executablePath `
 		-WorkingDirectory (Split-Path $executablePath) -WindowStyle Hidden -PassThru
+
+	$heartbeatDeadline = [DateTime]::UtcNow.AddSeconds(5)
+	do {
+		Start-Sleep -Milliseconds 50
+		if ($example.HasExited) { throw "Image GUI exited before the fixture request" }
+	} while ((-not (Test-Path -LiteralPath $requestMarker) -or
+		-not (Test-Path -LiteralPath $heartbeatPath)) -and
+		[DateTime]::UtcNow -lt $heartbeatDeadline)
+	if (-not (Test-Path -LiteralPath $requestMarker) -or
+		-not (Test-Path -LiteralPath $heartbeatPath)) {
+		throw "Image GUI did not enter the delayed media request with a heartbeat"
+	}
+	$firstHeartbeat = [int64](Get-Content -Raw -LiteralPath $heartbeatPath)
+	Start-Sleep -Milliseconds 500
+	$secondHeartbeat = [int64](Get-Content -Raw -LiteralPath $heartbeatPath)
+	if ($secondHeartbeat -le $firstHeartbeat) {
+		throw "GUI update heartbeat stopped during media generation: $firstHeartbeat -> $secondHeartbeat"
+	}
 
 	$deadline = [DateTime]::UtcNow.AddSeconds(20)
 	do {
@@ -89,7 +113,7 @@ try {
 	if ($width -ne 8 -or $height -ne 8) {
 		throw "Saved image dimensions are ${width}x${height}, expected 8x8"
 	}
-	Write-Output "Image GUI smoke passed: decoded and saved ${width}x${height} PNG"
+	Write-Output "Image GUI smoke passed: heartbeat advanced $firstHeartbeat -> $secondHeartbeat; decoded and saved ${width}x${height} PNG"
 } finally {
 	if ($example -and -not $example.HasExited) {
 		$example.CloseMainWindow() | Out-Null

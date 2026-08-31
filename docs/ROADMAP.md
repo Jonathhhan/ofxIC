@@ -249,6 +249,27 @@ alongside `example-chat` and the complete workbench, so both core onboarding
 paths remain reproducible without turning the workbench into introductory API
 documentation.
 
+#### M3.9 — Portable workbench paths and frame-thread evidence
+
+Status: completed after portable runtime staging and long-running media work
+exposed two distinct support risks: settings could retain machine-specific
+absolute paths for files shipped beside the workbench, and merely creating a
+worker thread did not prove that the openFrameworks frame loop remained live.
+
+Server and model paths inside the workbench directory are now stored relative
+to the executable and resolved against that executable directory when loaded.
+External locations such as a separate model drive or LocalAppData remain
+normalized absolute paths. The policy lives in the existing example-internal
+runtime-path component and has deterministic coverage for internal paths,
+external paths, parent traversal, relative resolution, and round trips.
+
+Media response decoding and file output stay on the media worker. A delayed
+deterministic image endpoint now marks the interval in which its HTTP response
+is intentionally blocked, while an automation-only heartbeat proves that the
+regular workbench `update()` loop advances during that same interval. This
+responsiveness smoke is part of Windows release validation. GPU saturation by
+a real CUDA runtime remains separate model-backed performance evidence.
+
 Completion evidence for each patch:
 
 - the first meaningful failure is retained in an issue, test, or release note;
