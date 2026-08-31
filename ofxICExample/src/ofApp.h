@@ -95,9 +95,7 @@ private:
 	void inspectSegmentationBridge();
 	void segmentImage();
 	void generateMedia();
-	void pollMediaJob();
 	void generateMusic();
-	void pollMusicJob();
 	void finishWorker();
 	void finishMediaWorker();
 	std::string configuredToken() const;

@@ -10,6 +10,7 @@ param(
 $ErrorActionPreference = "Stop"
 $repository = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot ".."))
 $testBuild = Join-Path ([System.IO.Path]::GetTempPath()) "ofxIC-professional-validation"
+$exampleAction = if ($IncrementalExample) { "build" } else { "rebuild" }
 
 Write-Output "[1/6] Deterministic C++ and Python tests"
 cmake -S (Join-Path $repository "tests") -B $testBuild
@@ -22,18 +23,18 @@ if ($LASTEXITCODE -ne 0) { throw "Deterministic tests failed with exit code $LAS
 if ($SkipMinimalExamples) {
 	Write-Output "[2/6] Minimal examples skipped by explicit request"
 } else {
-	Write-Output "[2/6] Minimal chat example rebuild"
+	Write-Output "[2/6] Minimal chat example $exampleAction"
 	$chatArguments = @{ Configuration = $Configuration; Example = "example-chat" }
 	if (-not $IncrementalExample) { $chatArguments.Rebuild = $true }
 	& (Join-Path $PSScriptRoot "build-example.ps1") @chatArguments
 
-	Write-Output "[3/6] Grounded documents example rebuild"
+	Write-Output "[3/6] Grounded documents example $exampleAction"
 	$documentsArguments = @{ Configuration = $Configuration; Example = "example-documents" }
 	if (-not $IncrementalExample) { $documentsArguments.Rebuild = $true }
 	& (Join-Path $PSScriptRoot "build-example.ps1") @documentsArguments
 }
 
-Write-Output "[4/6] Complete workbench rebuild"
+Write-Output "[4/6] Complete workbench $exampleAction"
 $buildArguments = @{ Configuration = $Configuration }
 if (-not $IncrementalExample) { $buildArguments.Rebuild = $true }
 & (Join-Path $PSScriptRoot "build-example.ps1") @buildArguments

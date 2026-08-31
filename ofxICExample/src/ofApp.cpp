@@ -1230,9 +1230,7 @@ void ofApp::draw() {
 	bool inspectSegmentationBridgeRequested = false;
 	bool segmentImageRequested = false;
 	bool generateMediaRequested = false;
-	bool pollMediaRequested = false;
 	bool generateMusicRequested = false;
-	bool pollMusicRequested = false;
 	bool saveMusicTokenRequested = false;
 	bool forgetMusicTokenRequested = false;
 	bool saveSettingsRequested = false;
@@ -1284,22 +1282,24 @@ void ofApp::draw() {
 			maximumPreviewHeight / height));
 		return ImVec2(width * scale, height * scale);
 	};
-	const auto drawRuntimeStatus = [](ofxICExample::ManagedProcess & process,
-		const std::string & statusText, const char * id) {
-		ImVec4 color(0.60f, 0.63f, 0.68f, 1.0f);
-		switch (process.state()) {
+	const auto runtimeStateColor = [](ofxICExample::ManagedProcessState state) {
+		switch (state) {
 		case ofxICExample::ManagedProcessState::Ready:
-			color = ImVec4(0.24f, 0.82f, 0.45f, 1.0f); break;
+			return ImVec4(0.24f, 0.82f, 0.45f, 1.0f);
 		case ofxICExample::ManagedProcessState::Starting:
-			color = ImVec4(0.95f, 0.72f, 0.22f, 1.0f); break;
+			return ImVec4(0.95f, 0.72f, 0.22f, 1.0f);
 		case ofxICExample::ManagedProcessState::Exited:
-			color = ImVec4(0.95f, 0.52f, 0.22f, 1.0f); break;
+			return ImVec4(0.95f, 0.52f, 0.22f, 1.0f);
 		case ofxICExample::ManagedProcessState::Failed:
-			color = ImVec4(0.95f, 0.28f, 0.28f, 1.0f); break;
-		default: break;
+			return ImVec4(0.95f, 0.28f, 0.28f, 1.0f);
+		default:
+			return ImVec4(0.60f, 0.63f, 0.68f, 1.0f);
 		}
+	};
+	const auto drawRuntimeStatus = [&](ofxICExample::ManagedProcess & process,
+		const std::string & statusText, const char * id) {
 		ImGui::SameLine();
-		ImGui::TextColored(color, "[%s]",
+		ImGui::TextColored(runtimeStateColor(process.state()), "[%s]",
 			ofxICExample::managedProcessStateLabel(process.state()));
 		ImGui::TextWrapped("%s", statusText.c_str());
 		const auto & followedFiles = process.followedOutputFiles();
@@ -1328,16 +1328,70 @@ void ofApp::draw() {
 			ImGui::EndChild();
 		}
 	};
+	const auto drawRuntimeControls = [&](ofxICExample::ManagedProcess & process,
+		const std::string & statusText, const char * id,
+		bool & startRequested, bool & stopRequested) {
+		const bool running = process.running();
+		const std::string startId = std::string("Start##runtime-") + id;
+		ImGui::BeginDisabled(running);
+		if (ImGui::Button(startId.c_str())) startRequested = true;
+		ImGui::EndDisabled();
+		ImGui::SameLine();
+		const std::string stopLabel = process.ownsProcess() ? "Stop" : "Disconnect";
+		const std::string stopId = stopLabel + "##runtime-" + id;
+		ImGui::BeginDisabled(!running);
+		if (ImGui::Button(stopId.c_str())) stopRequested = true;
+		ImGui::EndDisabled();
+		drawRuntimeStatus(process, statusText, id);
+	};
+	const auto drawEndpointInput = [&](const char * label, auto & destination,
+		const char * id, bool * dirty = nullptr) {
+		if (ImGui::InputText(label, destination.data(), destination.size()) && dirty)
+			*dirty = true;
+		ImGui::SameLine();
+		const std::string buttonId = std::string("Use LLM URL##endpoint-") + id;
+		if (ImGui::Button(buttonId.c_str())) {
+			setTextBuffer(destination, endpointUrl.data());
+			if (dirty) *dirty = true;
+		}
+	};
+	const auto drawAuthentication = [&](const char * id, const std::string & token,
+		const std::string & source, const std::string & environment, auto & input,
+		bool & saveRequested, bool & forgetRequested) {
+		const std::string header = std::string("Authentication - ") +
+			(token.empty() ? "not loaded##auth-" : "loaded##auth-") + id;
+		if (!ImGui::CollapsingHeader(header.c_str())) return;
+		ImGui::TextDisabled("Source: %s", source.c_str());
+		if (token.empty())
+			ImGui::TextWrapped("Set without storing it: %s",
+				tokenSetupHint(environment).c_str());
+		if (!ofxICExample::credentialStoreAvailable()) return;
+		ImGui::SetNextItemWidth(280);
+		const std::string inputId = std::string("Token##auth-input-") + id;
+		ImGui::InputText(inputId.c_str(), input.data(), input.size(),
+			ImGuiInputTextFlags_Password);
+		ImGui::SameLine();
+		ImGui::BeginDisabled(taskLocked || !input[0]);
+		const std::string saveId = std::string("Save securely##auth-save-") + id;
+		if (ImGui::Button(saveId.c_str())) saveRequested = true;
+		ImGui::EndDisabled();
+		ImGui::SameLine();
+		ImGui::BeginDisabled(taskLocked || storedTokens.count(environment) == 0);
+		const std::string forgetId = std::string("Forget saved token##auth-forget-") + id;
+		if (ImGui::Button(forgetId.c_str())) forgetRequested = true;
+		ImGui::EndDisabled();
+	};
 	if (ImGui::BeginTabBar("Inference task tabs")) {
 	if (ImGui::BeginTabItem("Overview")) {
 		ImGui::Text("ofxIC %s", ofxIC::versionString);
-		ImGui::SameLine();
-		if (ImGui::Button("Export diagnostics...")) exportDiagnosticsRequested = true;
-		ImGui::TextDisabled("%s", diagnosticsStatus.c_str());
-		ImGui::TextDisabled("Workbench build: %s %s | %s", __DATE__, __TIME__,
-			(std::filesystem::path(ofFilePath::getCurrentExeDir()) /
+		if (ImGui::CollapsingHeader("Diagnostics")) {
+			if (ImGui::Button("Export diagnostics...")) exportDiagnosticsRequested = true;
+			ImGui::TextDisabled("%s", diagnosticsStatus.c_str());
+			ImGui::TextDisabled("Workbench build: %s %s", __DATE__, __TIME__);
+			ImGui::TextWrapped("%s", (std::filesystem::path(ofFilePath::getCurrentExeDir()) /
 				"ofxICExample.exe").string().c_str());
-		ImGui::SeparatorText("Local runtime supervisor");
+		}
+		ImGui::SeparatorText("Local runtimes");
 		ImGui::TextWrapped(
 			"External runtimes stay separate from ofxIC. Configure models and paths in "
 			"their task tabs; supervise all owned processes here.");
@@ -1360,7 +1414,7 @@ void ofApp::draw() {
 				return executable ? std::string("missing ") + modelLabel
 					: std::string("missing executable");
 			};
-			const auto row = [](const char * name, const char * endpoint,
+			const auto row = [&](const char * name, const char * endpoint,
 				const char * id, const ofxICExample::ManagedProcess & process,
 				const std::string & configurationState,
 				bool & startRequested, bool & stopRequested) {
@@ -1368,16 +1422,7 @@ void ofApp::draw() {
 				ImGui::TableNextRow();
 				ImGui::TableSetColumnIndex(0); ImGui::TextUnformatted(name);
 				ImGui::TableSetColumnIndex(1);
-				ImVec4 color(0.60f, 0.63f, 0.68f, 1.0f);
-				if (process.state() == ofxICExample::ManagedProcessState::Ready)
-					color = ImVec4(0.24f, 0.82f, 0.45f, 1.0f);
-				else if (process.state() == ofxICExample::ManagedProcessState::Starting)
-					color = ImVec4(0.95f, 0.72f, 0.22f, 1.0f);
-				else if (process.state() == ofxICExample::ManagedProcessState::Failed)
-					color = ImVec4(0.95f, 0.28f, 0.28f, 1.0f);
-				else if (process.state() == ofxICExample::ManagedProcessState::Exited)
-					color = ImVec4(0.95f, 0.52f, 0.22f, 1.0f);
-				ImGui::TextColored(color, "%s",
+				ImGui::TextColored(runtimeStateColor(process.state()), "%s",
 					ofxICExample::managedProcessStateLabel(process.state()));
 				ImGui::TableSetColumnIndex(2);
 				ImGui::TextColored(configured
@@ -1421,7 +1466,8 @@ void ofApp::draw() {
 		}
 		ImGui::TextDisabled(
 			"Failed starts remain actionable: open the matching task tab for the exact status and server output.");
-		ImGui::SeparatorText("Install missing runtimes");
+		if (installerProcess.running()) ImGui::SetNextItemOpen(true, ImGuiCond_Always);
+		if (ImGui::CollapsingHeader("Install missing runtimes")) {
 		ImGui::TextWrapped(
 			"Installers place external CUDA runtimes under %%LOCALAPPDATA%%\\ofxIC\\servers. "
 			"They remain separate processes and are detected automatically when installation completes.");
@@ -1436,7 +1482,8 @@ void ofApp::draw() {
 			ImGui::SameLine();
 			cancelInstallerRequested = ImGui::Button("Cancel installation");
 		}
-		drawRuntimeStatus(installerProcess, installerStatus, "installer");
+			drawRuntimeStatus(installerProcess, installerStatus, "installer");
+		}
 		if (deferredTask != DeferredTask::None) {
 			ImGui::SeparatorText("Queued task");
 			ImGui::TextColored(ImVec4(0.95f, 0.72f, 0.22f, 1.0f), "%s is waiting for its runtime.",
@@ -1484,24 +1531,9 @@ void ofApp::draw() {
 		ImGui::EndDisabled();
 		const std::string token = configuredToken();
 		const std::string tokenSource = configuredTokenSource();
-		if (token.empty()) {
-			ImGui::TextDisabled("Token: not loaded (%s)", tokenSource.c_str());
-			ImGui::TextWrapped("If authentication is required, set it without storing it: %s",
-				tokenSetupHint(tokenSource).c_str());
-		} else ImGui::Text("Token: loaded from %s", tokenSource.c_str());
-		if (ofxICExample::credentialStoreAvailable()) {
-			ImGui::SetNextItemWidth(280);
-			ImGui::InputText("Token##chat-token", tokenInput.data(), tokenInput.size(),
-				ImGuiInputTextFlags_Password);
-			ImGui::SameLine();
-			ImGui::BeginDisabled(taskLocked || !tokenInput[0]);
-			saveTokenRequested = ImGui::Button("Save securely##chat-token");
-			ImGui::EndDisabled(); ImGui::SameLine();
-			const std::string preferredToken = endpointProfiles[selectedProfile].tokenEnvironment;
-			ImGui::BeginDisabled(taskLocked || storedTokens.count(preferredToken) == 0);
-			forgetTokenRequested = ImGui::Button("Forget saved token##chat-token");
-			ImGui::EndDisabled();
-		}
+		drawAuthentication("llm", token, tokenSource,
+			endpointProfiles[selectedProfile].tokenEnvironment, tokenInput,
+			saveTokenRequested, forgetTokenRequested);
 		if (!credentialStatus.empty()) ImGui::TextWrapped("%s", credentialStatus.c_str());
 		ImGui::TextWrapped("%s", status.c_str());
 		ImGui::TextDisabled("%s Tokens are never stored in settings.", settingsStatus.c_str());
@@ -1520,8 +1552,10 @@ void ofApp::draw() {
 			if (ImGui::Button(configurationDirty ? "Apply chat settings *" : "Apply chat settings"))
 				applyRequested = true;
 		}
-		if (selectedProfile == 0 && ImGui::CollapsingHeader(
-			"Local llama-server", ImGuiTreeNodeFlags_DefaultOpen)) {
+		if (selectedProfile == 0) {
+			drawRuntimeControls(llamaProcess, llamaServerStatus, "llama",
+				startLlamaServerRequested, stopLlamaServerRequested);
+			if (ImGui::CollapsingHeader("Runtime settings##llama")) {
 			if (ImGui::Button("Use detected llama-server")) {
 				detectedLlamaServerPath = installedServerExecutable(
 					"llama.cpp-", "llama-server.exe");
@@ -1565,15 +1599,7 @@ void ofApp::draw() {
 			ImGui::SameLine();
 			ImGui::InputInt("GPU layers", &llamaGpuLayers);
 			ImGui::Checkbox("Flash Attention##llama", &llamaFlashAttention);
-			const bool localServerRunning = llamaProcess.running();
-			ImGui::BeginDisabled(localServerRunning);
-			startLlamaServerRequested = ImGui::Button("Start llama-server");
-			ImGui::EndDisabled();
-			ImGui::SameLine();
-			ImGui::BeginDisabled(!localServerRunning);
-			stopLlamaServerRequested = ImGui::Button("Stop llama-server");
-			ImGui::EndDisabled();
-			drawRuntimeStatus(llamaProcess, llamaServerStatus, "llama");
+			}
 		}
 		if (!lastMessage.empty()) ImGui::TextDisabled("Last message: %s", lastMessage.c_str());
 		ImGui::TextUnformatted("Message");
@@ -1647,16 +1673,13 @@ void ofApp::draw() {
 			setTextBuffer(transcriptionEndpointUrl,
 				ofxICExample::defaultTranscriptionEndpointUrl(transcriptionProtocol));
 		}
-		ImGui::InputText("Audio base URL", transcriptionEndpointUrl.data(),
-			transcriptionEndpointUrl.size());
-		ImGui::SameLine();
-		if (ImGui::Button("Use chat URL##audio")) {
-			setTextBuffer(transcriptionEndpointUrl, endpointUrl.data());
-		}
+		drawEndpointInput("Audio base URL", transcriptionEndpointUrl, "audio");
 		ImGui::InputText("Audio model", transcriptionModel.data(), transcriptionModel.size());
 		if (transcriptionProtocol == 1) {
 			ImGui::TextDisabled("whisper.cpp selects its model when the server starts.");
-			if (ImGui::CollapsingHeader("Local whisper.cpp server", ImGuiTreeNodeFlags_DefaultOpen)) {
+			drawRuntimeControls(whisperProcess, whisperServerStatus, "whisper",
+				startWhisperServerRequested, stopWhisperServerRequested);
+			if (ImGui::CollapsingHeader("Runtime settings##whisper")) {
 				ImGui::InputText("whisper-server executable", whisperServerPath.data(), whisperServerPath.size());
 				ImGui::SameLine(); chooseWhisperServerRequested = ImGui::Button("Choose server##whisper");
 				ImGui::SameLine();
@@ -1672,12 +1695,6 @@ void ofApp::draw() {
 				ImGui::InputText("Whisper model", whisperModelPath.data(), whisperModelPath.size());
 				ImGui::SameLine(); chooseWhisperModelRequested = ImGui::Button("Choose model##whisper");
 				ImGui::InputText("Extra arguments##whisper", whisperServerArguments.data(), whisperServerArguments.size());
-				const bool running = whisperProcess.running();
-				ImGui::BeginDisabled(running);
-				startWhisperServerRequested = ImGui::Button("Start whisper.cpp"); ImGui::EndDisabled();
-				ImGui::SameLine(); ImGui::BeginDisabled(!running);
-				stopWhisperServerRequested = ImGui::Button("Stop whisper.cpp"); ImGui::EndDisabled();
-				drawRuntimeStatus(whisperProcess, whisperServerStatus, "whisper");
 			}
 		}
 		loadAudioRequested = ImGui::Button("Load audio");
@@ -1705,7 +1722,10 @@ void ofApp::draw() {
 		ImGui::TextDisabled("A script-installed sd-server and local checkpoint are available.");
 	}
 	const MediaBackendProfile & mediaProfile = mediaBackends[selectedMediaBackend];
-	if (selectedMediaBackend == 2 && ImGui::CollapsingHeader("Local sd-server", ImGuiTreeNodeFlags_DefaultOpen)) {
+	if (selectedMediaBackend == 2) {
+		drawRuntimeControls(stableDiffusionProcess, stableDiffusionServerStatus, "sd",
+			startSdServerRequested, stopSdServerRequested);
+		if (ImGui::CollapsingHeader("Runtime settings##sd")) {
 		if (ImGui::Button("Use detected sd-server")) {
 			detectedStableDiffusionServerPath = installedServerExecutable(
 				"stable-diffusion.cpp-", "sd-server.exe");
@@ -1789,12 +1809,7 @@ void ofApp::draw() {
 			ImGui::TextDisabled("VAE and text encoders are loaded from the complete checkpoint.");
 		ImGui::Checkbox("Flash Attention##sd", &stableDiffusionFlashAttention);
 		ImGui::SameLine(); ImGui::Checkbox("Offload to CPU##sd", &stableDiffusionOffloadToCpu);
-		const bool running = stableDiffusionProcess.running();
-		ImGui::BeginDisabled(running);
-		startSdServerRequested = ImGui::Button("Start sd-server"); ImGui::EndDisabled();
-		ImGui::SameLine(); ImGui::BeginDisabled(!running);
-		stopSdServerRequested = ImGui::Button("Stop sd-server"); ImGui::EndDisabled();
-		drawRuntimeStatus(stableDiffusionProcess, stableDiffusionServerStatus, "sd");
+		}
 	}
 	ImGui::TextDisabled("Capabilities: Image: %s | Video: %s",
 		mediaProfile.supportsImage ? "yes" : "no",
@@ -1808,15 +1823,8 @@ void ofApp::draw() {
 		ImGui::Text("Kind: %s", mediaKinds[selectedMediaKind]);
 	}
 	if (selectedMediaBackend != 1) {
-		if (ImGui::InputText(
-			"Media base URL", mediaEndpointUrl.data(), mediaEndpointUrl.size())) {
-			mediaConfigurationDirty = true;
-		}
-		ImGui::SameLine();
-		if (ImGui::Button("Use chat URL##media")) {
-			setTextBuffer(mediaEndpointUrl, endpointUrl.data());
-			mediaConfigurationDirty = true;
-		}
+		drawEndpointInput("Media base URL", mediaEndpointUrl, "media",
+			&mediaConfigurationDirty);
 	} else {
 		ImGui::TextDisabled("fal-ai through Hugging Face routing");
 	}
@@ -1843,37 +1851,15 @@ void ofApp::draw() {
 			? (selectedMediaKind == 0 ? "Generate local image" : "Generate local video")
 			: "Generate OpenAI image");
 	generateMediaRequested = ImGui::Button(generateLabel);
-	if (!currentMediaJob.id.empty() && !currentMediaJob.terminal()) {
-		ImGui::SameLine();
-		pollMediaRequested = ImGui::Button("Poll job");
-	}
 	ImGui::EndDisabled();
 	if (mediaBusy) {
 		ImGui::SameLine();
 		cancelRequested = ImGui::Button("Cancel media request") || cancelRequested;
 	}
 	const std::string mediaToken = configuredMediaToken();
-	ImGui::TextDisabled("Media token: %s (%s)",
-		mediaToken.empty() ? "not loaded" : "loaded",
-		configuredMediaTokenSource().c_str());
-	if (mediaToken.empty()) {
-		ImGui::TextWrapped("If authentication is required: %s",
-			tokenSetupHint(mediaBackends[selectedMediaBackend].tokenEnvironment).c_str());
-	}
-	if (ofxICExample::credentialStoreAvailable()) {
-		ImGui::SetNextItemWidth(280);
-		ImGui::InputText("Token##media-token", mediaTokenInput.data(), mediaTokenInput.size(),
-			ImGuiInputTextFlags_Password);
-		ImGui::SameLine();
-		ImGui::BeginDisabled(taskLocked || !mediaTokenInput[0]);
-		saveMediaTokenRequested = ImGui::Button("Save securely##media-token");
-		ImGui::EndDisabled();
-		ImGui::SameLine();
-		const std::string preferredMediaToken = mediaBackends[selectedMediaBackend].tokenEnvironment;
-		ImGui::BeginDisabled(taskLocked || storedTokens.count(preferredMediaToken) == 0);
-		forgetMediaTokenRequested = ImGui::Button("Forget saved token##media-token");
-		ImGui::EndDisabled();
-	}
+	drawAuthentication("media", mediaToken, configuredMediaTokenSource(),
+		mediaBackends[selectedMediaBackend].tokenEnvironment, mediaTokenInput,
+		saveMediaTokenRequested, forgetMediaTokenRequested);
 	if (mediaBusy) ImGui::TextDisabled("Waiting for media endpoint...");
 	ImGui::TextWrapped("%s", mediaStatus.c_str());
 	if (!mediaOutput.empty()) ImGui::TextWrapped("%s", mediaOutput.c_str());
@@ -1909,7 +1895,10 @@ void ofApp::draw() {
 		ImGui::EndCombo();
 	}
 	ImGui::TextDisabled("%s", musicBackends[selectedMusicBackend].capabilityNote);
-	if (selectedMusicBackend == 0 && ImGui::CollapsingHeader("Local ACE-Step 1.5 server", ImGuiTreeNodeFlags_DefaultOpen)) {
+	if (selectedMusicBackend == 0) {
+		drawRuntimeControls(aceStepProcess, aceStepServerStatus, "acestep",
+			startAceStepServerRequested, stopAceStepServerRequested);
+		if (ImGui::CollapsingHeader("Runtime settings##acestep")) {
 		ImGui::InputText("ACE-Step server", aceStepServerPath.data(), aceStepServerPath.size());
 		ImGui::SameLine(); chooseAceStepServerRequested = ImGui::Button("Choose server##ace");
 		ImGui::SameLine();
@@ -1935,22 +1924,10 @@ void ofApp::draw() {
 				? "LM + embedding + DiT + VAE ready" : "incomplete or not found");
 		}
 		ImGui::InputText("Server arguments", aceStepServerArguments.data(), aceStepServerArguments.size());
-		const bool running = aceStepProcess.running();
-		ImGui::BeginDisabled(running);
-		startAceStepServerRequested = ImGui::Button("Start ACE-Step"); ImGui::EndDisabled();
-		ImGui::SameLine(); ImGui::BeginDisabled(!running);
-		stopAceStepServerRequested = ImGui::Button("Stop ACE-Step"); ImGui::EndDisabled();
-		drawRuntimeStatus(aceStepProcess, aceStepServerStatus, "acestep");
+		}
 	}
-	if (ImGui::InputText(
-		"Music base URL", musicEndpointUrl.data(), musicEndpointUrl.size())) {
-		musicConfigurationDirty = true;
-	}
-	ImGui::SameLine();
-	if (ImGui::Button("Use chat URL##music")) {
-		setTextBuffer(musicEndpointUrl, endpointUrl.data());
-		musicConfigurationDirty = true;
-	}
+	drawEndpointInput("Music base URL", musicEndpointUrl, "music",
+		&musicConfigurationDirty);
 	ImGui::InputTextMultiline(
 		"##music-prompt", musicInput.data(), musicInput.size(), ImVec2(-1, 58));
 	ImGui::InputInt("Duration (seconds)", &musicDuration);
@@ -1958,13 +1935,6 @@ void ofApp::draw() {
 	const char * musicFormats[] = { "MP3", "WAV" };
 	ImGui::Combo("Format", &musicOutputFormat, musicFormats, 2);
 	generateMusicRequested = ImGui::Button("Generate music");
-	const bool musicJobPending = selectedMusicBackend == 0
-		? !currentAceStepMusicJob.id.empty() && !currentAceStepMusicJob.terminal()
-		: !currentMusicJob.id.empty() && !currentMusicJob.terminal();
-	if (musicJobPending) {
-		ImGui::SameLine();
-		pollMusicRequested = ImGui::Button("Poll music job");
-	}
 	ImGui::EndDisabled();
 	if (mediaBusy) {
 		ImGui::SameLine();
@@ -1972,27 +1942,9 @@ void ofApp::draw() {
 	}
 	if (selectedMusicBackend == 1) {
 		const std::string musicToken = configuredMusicToken();
-		ImGui::TextDisabled("Stability token: %s (%s)",
-			musicToken.empty() ? "not loaded" : "loaded",
-			configuredMusicTokenSource().c_str());
-		if (musicToken.empty()) {
-			ImGui::TextWrapped("Authentication: %s",
-				tokenSetupHint("STABILITY_API_KEY").c_str());
-		}
-		if (ofxICExample::credentialStoreAvailable()) {
-			ImGui::SetNextItemWidth(280);
-			ImGui::InputText("Token##music-token", musicTokenInput.data(), musicTokenInput.size(),
-				ImGuiInputTextFlags_Password);
-			ImGui::SameLine();
-			ImGui::BeginDisabled(taskLocked || !musicTokenInput[0]);
-			saveMusicTokenRequested = ImGui::Button("Save securely##music-token");
-			ImGui::EndDisabled();
-			ImGui::SameLine();
-			ImGui::BeginDisabled(
-				taskLocked || storedTokens.count("STABILITY_API_KEY") == 0);
-			forgetMusicTokenRequested = ImGui::Button("Forget saved token##music-token");
-			ImGui::EndDisabled();
-		}
+		drawAuthentication("music", musicToken, configuredMusicTokenSource(),
+			"STABILITY_API_KEY", musicTokenInput,
+			saveMusicTokenRequested, forgetMusicTokenRequested);
 	} else {
 		ImGui::TextDisabled("Local ACE-Step does not require or receive an API token.");
 	}
@@ -2008,7 +1960,9 @@ void ofApp::draw() {
 	if (ImGui::BeginTabItem("SAM")) {
 	ImGui::TextUnformatted("SAM bridge v1");
 	ImGui::TextDisabled("External endpoint: PPM + normalized points -> PGM mask");
-	if (ImGui::CollapsingHeader("Local SAM bridge process", ImGuiTreeNodeFlags_DefaultOpen)) {
+	drawRuntimeControls(samBridgeProcess, samBridgeProcessStatus, "sam",
+		startSamBridgeRequested, stopSamBridgeRequested);
+	if (ImGui::CollapsingHeader("Runtime settings##sam")) {
 		if (ImGui::Button("Detect installed SAM runtime")) {
 			const std::string python = installedServerExecutable("sam-python-", "python.exe");
 			const std::string runner = installedServerExecutable("sam-python-", "sam-python-runner.py");
@@ -2032,20 +1986,9 @@ void ofApp::draw() {
 		ImGui::Checkbox("CUDA 13##sam", &samCuda);
 		ImGui::InputText("Extra bridge arguments", samBridgeArguments.data(), samBridgeArguments.size());
 		ImGui::TextDisabled("The GUI starts the bundled bridge and the selected external SAM runner on port 18085.");
-		const bool running = samBridgeProcess.running();
-		ImGui::BeginDisabled(running);
-		startSamBridgeRequested = ImGui::Button("Start SAM bridge"); ImGui::EndDisabled();
-		ImGui::SameLine(); ImGui::BeginDisabled(!running);
-		stopSamBridgeRequested = ImGui::Button("Stop SAM bridge"); ImGui::EndDisabled();
-		drawRuntimeStatus(samBridgeProcess, samBridgeProcessStatus, "sam");
 	}
 	ImGui::BeginDisabled(taskLocked);
-	ImGui::InputText("SAM base URL", segmentationEndpointUrl.data(),
-		segmentationEndpointUrl.size());
-	ImGui::SameLine();
-	if (ImGui::Button("Use chat URL##sam")) {
-		setTextBuffer(segmentationEndpointUrl, endpointUrl.data());
-	}
+	drawEndpointInput("SAM base URL", segmentationEndpointUrl, "sam");
 	inspectSegmentationBridgeRequested = ImGui::Button("Check bridge");
 	ImGui::SameLine();
 	loadSegmentationImageRequested = ImGui::Button("Load segmentation image");
@@ -2327,7 +2270,6 @@ void ofApp::draw() {
 		if (mediaConfigurationDirty) applyMediaConfiguration();
 		generateMedia();
 	}
-	if (pollMediaRequested) pollMediaJob();
 	if (saveMusicTokenRequested) {
 		saveTokenCredential("STABILITY_API_KEY", musicTokenInput);
 	}
@@ -2336,7 +2278,6 @@ void ofApp::draw() {
 		if (musicConfigurationDirty) applyMusicConfiguration();
 		generateMusic();
 	}
-	if (pollMusicRequested) pollMusicJob();
 }
 
 void ofApp::keyPressed(int key) {
@@ -4073,42 +4014,6 @@ void ofApp::generateMedia() {
 	});
 }
 
-void ofApp::pollMediaJob() {
-	if (currentMediaJob.id.empty() || busy || mediaBusy.exchange(true)) return;
-	const ofxIC::MediaJob job = currentMediaJob;
-	cancellationRequested = false;
-	mediaStatus = "Polling media job " + job.id + "...";
-	mediaWorker = std::thread([this, job]() {
-		ofxIC::RequestControl control;
-		control.shouldCancel = [this]() { return cancellationRequested.load(); };
-		ofxIC::MediaJob nextJob = media.poll(job, control);
-		std::string nextStatus = nextJob
-			? "Media job " + nextJob.id + " is " + mediaJobStateLabel(nextJob.state)
-			: "Media job failed: " + nextJob.error;
-		std::string nextOutput;
-		std::string nextBase64;
-		std::string nextBytes;
-		if (nextJob.state == ofxIC::MediaJobState::Completed &&
-			!nextJob.payloadsBase64.empty()) {
-			nextBase64 = nextJob.payloadsBase64.front();
-			nextOutput = "Received " + ofToString(nextJob.frameCount) + " frame(s)";
-		} else if (nextJob.state == ofxIC::MediaJobState::Completed &&
-			!nextJob.payloadBytes.empty()) {
-			nextBytes = nextJob.payloadBytes.front();
-			nextOutput = "Received " + ofToString(nextBytes.size()) + " media bytes";
-		}
-		std::lock_guard<std::mutex> lock(mediaResultMutex);
-		pendingMediaStatus = std::move(nextStatus);
-		pendingMediaOutput = std::move(nextOutput);
-		pendingMediaBase64 = std::move(nextBase64);
-		pendingMediaBytes = std::move(nextBytes);
-		pendingMediaFormat = nextJob.outputFormat;
-		pendingMediaIsVideo = nextJob.kind == ofxIC::MediaKind::Video;
-		pendingMediaJob = std::move(nextJob);
-		mediaFinished = true;
-	});
-}
-
 void ofApp::generateMusic() {
 	if (!musicInput[0] || busy || mediaBusy) return;
 	if (selectedMusicBackend == 0 && deferUntilRuntimeReady(DeferredTask::Music)) return;
@@ -4166,7 +4071,8 @@ void ofApp::generateMusic() {
 				nextBytes = nextAceStepJob.audioBytes;
 				nextOutput = "Received " + ofToString(nextBytes.size()) + " local audio bytes";
 			} else if (nextAceStepJob) {
-				nextOutput = "Use Poll music job until the local result is ready.";
+				nextOutput = nextAceStepJob.error.empty()
+					? "Local music generation did not complete." : nextAceStepJob.error;
 			}
 		} else {
 			ofxIC::StabilityAudioRequest request;
@@ -4195,7 +4101,8 @@ void ofApp::generateMusic() {
 				nextBytes = nextStabilityJob.audioBytes;
 				nextOutput = "Received " + ofToString(nextBytes.size()) + " audio bytes";
 			} else if (nextStabilityJob) {
-				nextOutput = "Use Poll music job until the result is ready.";
+				nextOutput = nextStabilityJob.error.empty()
+					? "Music generation did not complete." : nextStabilityJob.error;
 			}
 		}
 		std::lock_guard<std::mutex> lock(mediaResultMutex);
@@ -4203,66 +4110,6 @@ void ofApp::generateMusic() {
 		pendingMusicOutput = std::move(nextOutput);
 		pendingMusicBytes = std::move(nextBytes);
 		pendingMusicFormat = format;
-		pendingMusicJob = std::move(nextStabilityJob);
-		pendingAceStepMusicJob = std::move(nextAceStepJob);
-		musicFinished = true;
-	});
-}
-
-void ofApp::pollMusicJob() {
-	if (busy || mediaBusy.exchange(true)) return;
-	const int backend = selectedMusicBackend;
-	const ofxIC::StabilityAudioJob stabilityJob = currentMusicJob;
-	const ofxIC::AceStepMusicJob aceStepJob = currentAceStepMusicJob;
-	cancellationRequested = false;
-	if ((backend == 0 && aceStepJob.id.empty()) ||
-		(backend == 1 && stabilityJob.id.empty())) {
-		mediaBusy = false;
-		return;
-	}
-	musicStatus = "Polling music job " +
-		(backend == 0 ? aceStepJob.id : stabilityJob.id) + "...";
-	mediaWorker = std::thread([this, backend, stabilityJob, aceStepJob]() {
-		ofxIC::RequestControl control;
-		control.shouldCancel = [this]() { return cancellationRequested.load(); };
-		ofxIC::StabilityAudioJob nextStabilityJob;
-		ofxIC::AceStepMusicJob nextAceStepJob;
-		std::string nextStatus;
-		std::string nextOutput;
-		std::string nextBytes;
-		std::string nextFormat;
-		if (backend == 0) {
-			nextAceStepJob = aceStepMusic.poll(aceStepJob, control);
-			nextStatus = nextAceStepJob
-				? "ACE-Step job " + nextAceStepJob.id + " is " +
-					musicJobStateLabel(nextAceStepJob.state)
-				: "Local music job failed: " + nextAceStepJob.error;
-			nextFormat = nextAceStepJob.outputFormat;
-			if (nextAceStepJob.state == ofxIC::AceStepMusicJobState::Completed) {
-				nextBytes = nextAceStepJob.audioBytes;
-				nextOutput = "Received " + ofToString(nextBytes.size()) + " local audio bytes";
-			} else if (nextAceStepJob && !nextAceStepJob.terminal()) {
-				nextOutput = "The local job is still running; poll again shortly.";
-			}
-		} else {
-			nextStabilityJob = stabilityMusic.poll(stabilityJob, control);
-			nextStatus = nextStabilityJob
-				? "Music job " + nextStabilityJob.id + " is " +
-					musicJobStateLabel(nextStabilityJob.state)
-				: "Music job failed: " + nextStabilityJob.error;
-			nextFormat = nextStabilityJob.outputFormat;
-			if (nextStabilityJob.state == ofxIC::StabilityAudioJobState::Completed) {
-				nextBytes = nextStabilityJob.audioBytes;
-				nextOutput = "Received " + ofToString(nextBytes.size()) + " audio bytes";
-			} else if (nextStabilityJob && !nextStabilityJob.terminal()) {
-				nextOutput = "The job is still running; poll again shortly.";
-			}
-		}
-		std::lock_guard<std::mutex> lock(mediaResultMutex);
-		pendingMusicStatus = std::move(nextStatus);
-		pendingMusicOutput = std::move(nextOutput);
-		pendingMusicBytes = std::move(nextBytes);
-		pendingMusicFormat = std::move(nextFormat);
 		pendingMusicJob = std::move(nextStabilityJob);
 		pendingAceStepMusicJob = std::move(nextAceStepJob);
 		musicFinished = true;

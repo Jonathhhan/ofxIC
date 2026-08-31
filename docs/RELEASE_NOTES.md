@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- On 2026-08-31, separate marker-gated local runs exercised all five external
+  runtime adapters with real models: Llama returned a chat completion,
+  stable-diffusion.cpp loaded `sd_turbo` on an RTX 3090, Whisper transcribed a
+  generated WAV through the regular GUI, SAM produced a mask through the GUI
+  and CUDA bridge runner, and native ACE-Step completed a 1,920,044-byte WAV.
+  These observations are model-backed evidence and remain distinct from the
+  deterministic suite and model-free GUI lifecycle smoke.
 - Hardened local runtime starts with immutable startup-detection fallbacks, so
   an empty or stale editable GUI path can no longer hide an installation that
   was successfully discovered at startup. On Windows, executable discovery now
@@ -38,10 +45,11 @@
 - public `ofxIC::versionMajor`, `versionMinor`, `versionPatch`, and
   `versionString` metadata identify the current `0.2.1-dev` build;
 - `scripts/build-example.ps1` verifies generated-project source membership and
-  performs a Windows Release/x64 rebuild, with project regeneration available
-  explicitly; its `-Example` parameter applies the same validation to minimal
-  or full examples. `scripts/validate-windows.ps1` combines the deterministic suite,
-  canonical example rebuild, and model-free GUI smoke;
+  performs a fast incremental Windows Release/x64 build by default, with
+  unconditional `-Rebuild` and project regeneration available explicitly; its
+  `-Example` parameter applies the same validation to minimal or full examples.
+  `scripts/validate-windows.ps1` retains unconditional rebuilds for its release
+  path and combines them with the deterministic suite and model-free GUI smoke;
 - `scripts/smoke-local-runtime-matrix.ps1` reports the five selected local
   executable/model configurations in no-start plan mode and can explicitly run
   the GUI-owned lifecycle matrix; Windows validation includes the safe plan;
