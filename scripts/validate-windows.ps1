@@ -24,18 +24,18 @@ if ($SkipMinimalExamples) {
 } else {
 	Write-Output "[2/6] Minimal chat example rebuild"
 	$chatArguments = @{ Configuration = $Configuration; Example = "example-chat" }
-	if ($IncrementalExample) { $chatArguments.Incremental = $true }
+	if (-not $IncrementalExample) { $chatArguments.Rebuild = $true }
 	& (Join-Path $PSScriptRoot "build-example.ps1") @chatArguments
 
 	Write-Output "[3/6] Grounded documents example rebuild"
 	$documentsArguments = @{ Configuration = $Configuration; Example = "example-documents" }
-	if ($IncrementalExample) { $documentsArguments.Incremental = $true }
+	if (-not $IncrementalExample) { $documentsArguments.Rebuild = $true }
 	& (Join-Path $PSScriptRoot "build-example.ps1") @documentsArguments
 }
 
 Write-Output "[4/6] Complete workbench rebuild"
 $buildArguments = @{ Configuration = $Configuration }
-if ($IncrementalExample) { $buildArguments.Incremental = $true }
+if (-not $IncrementalExample) { $buildArguments.Rebuild = $true }
 & (Join-Path $PSScriptRoot "build-example.ps1") @buildArguments
 
 if ($SkipGuiSmoke) {

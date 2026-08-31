@@ -163,9 +163,11 @@ History after a bounded test timeout.
 
 Status: completed as the supportability gate for `0.2.1-dev`.
 
-Windows development now has one canonical rebuild command that verifies source
-membership in the generated openFrameworks project, uses `Rebuild` by default,
-verifies that the expected EXE was rewritten, and reports the exact artifact.
+Windows development now has one canonical build command that verifies source
+membership in the generated openFrameworks project, uses a fast incremental
+build by default, and reports whether the exact artifact changed or was already
+current. `-Rebuild` remains the unconditional path used by release validation
+and verifies that the expected EXE was rewritten.
 Project regeneration remains an explicit option because it is needed only after
 adding sources and can fail independently of compilation. A second command
 combines the deterministic CMake suite, canonical example rebuild, and

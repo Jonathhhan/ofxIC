@@ -8,11 +8,13 @@ param(
 	[string] $MsBuild = "",
 	[string] $ProjectGenerator = "",
 	[switch] $Incremental,
+	[switch] $Rebuild,
 	[switch] $UpdateProject,
 	[switch] $Clean
 )
 
 $ErrorActionPreference = "Stop"
+if ($Incremental -and $Rebuild) { throw "Choose either -Incremental or -Rebuild, not both." }
 $repository = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot ".."))
 $openFrameworksRoot = [System.IO.Path]::GetFullPath((Join-Path $repository "..\.."))
 $exampleDirectory = Join-Path $repository $Example
@@ -131,7 +133,10 @@ if ($runningExamples.Count -gt 0) {
 }
 
 $builder = Resolve-MsBuild
-$target = if ($Incremental -and -not $Clean) { "Build" } else { "Rebuild" }
+$target = if ($Rebuild -or $Clean) { "Rebuild" } else { "Build" }
+$previousWriteTime = if (Test-Path -LiteralPath $executable -PathType Leaf) {
+	(Get-Item -LiteralPath $executable).LastWriteTimeUtc
+} else { [DateTime]::MinValue }
 $started = [DateTime]::UtcNow
 Write-Output "$target $Configuration|$Platform with $builder"
 & $builder $solution ("/t:" + $target) ("/p:Configuration=" + $Configuration) `
@@ -146,7 +151,11 @@ $artifact = Get-Item -LiteralPath $executable
 if ($target -eq "Rebuild" -and $artifact.LastWriteTimeUtc -lt $started.AddSeconds(-2)) {
 	throw "Rebuild did not refresh the example executable timestamp"
 }
-Write-Output ("Built: " + $artifact.FullName)
+if ($target -eq "Build" -and $artifact.LastWriteTimeUtc -eq $previousWriteTime) {
+	Write-Output ("Up to date: " + $artifact.FullName)
+} else {
+	Write-Output ("Built: " + $artifact.FullName)
+}
 Write-Output ("Timestamp: " + $artifact.LastWriteTime.ToString("yyyy-MM-dd HH:mm:ss"))
 Write-Output ("Bytes: " + $artifact.Length)
 if ($Example -eq "ofxICExample") {

@@ -95,9 +95,11 @@ incremental-build message:
 ```
 
 `build-example.ps1` verifies that every addon/example `.cpp` belongs to the
-generated project and performs a real Release/x64 `Rebuild` by default, then
-prints the exact EXE path, write time, and size. `-Incremental` is an explicit
-faster opt-in. Use `-UpdateProject` only when source files were added and the
+generated project and performs a fast incremental Release/x64 build by default,
+then reports whether the exact EXE was rebuilt or already current. Use
+`-Rebuild` for an unconditional full rebuild; `validate-windows.ps1` does this
+automatically for release validation. `-Incremental` remains accepted for
+compatibility. Use `-UpdateProject` only when source files were added and the
 local openFrameworks Project Generator needs to refresh the solution. The
 validation script runs deterministic CMake tests, rebuilds both focused
 examples and the complete workbench, and then executes the model-free GUI
