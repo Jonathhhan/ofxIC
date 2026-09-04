@@ -358,6 +358,19 @@ comma-decimal/grouping locale and NaN/positive/negative infinity. The tests rest
 the process locale after every case and need neither installed language packs
 nor a model server. This is protocol validation, not live-inference evidence.
 
+#### M3.14 — Preserve media transport failure causes
+
+Native capability inspection, image generation, job submission/poll/cancel and
+the fal mapping/submit/status/result/download pipeline now stop on transport
+failure before interpreting a response body. HTTP 200 headers cannot mask a
+cancelled or timed-out body read, and status zero is classified as transport
+failure rather than a provider rejection. Actual provider errors and remote job
+cancellation retain their existing handling.
+
+Four injected-transport regression tests first reproduced the defects and cover
+failure categories across native operations and all five fal stages. No hosted
+credits or live model runtime is required by this evidence.
+
 ### M4 — `0.3` only after real convergence
 
 Do not schedule `0.3` by date or by backend count. Start it only after two real

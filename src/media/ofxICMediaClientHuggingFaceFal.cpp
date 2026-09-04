@@ -179,9 +179,17 @@ void applyControl(HttpRequest & request, const RequestControl & control,
 	request.shouldCancel = control.shouldCancel;
 }
 
-void applyResponseFailure(const HttpResponse & response, MediaJob & job) {
+bool applyResponseFailure(const HttpResponse & response, MediaJob & job) {
 	job.cancelled = response.cancelled;
 	job.failure = response.cancelled ? RequestFailure::Cancelled : response.failure;
+	job.httpStatus = response.status;
+	if (response.started && response.status > 0 && job.failure == RequestFailure::None) return false;
+	if (job.failure == RequestFailure::None) job.failure = RequestFailure::Transport;
+	job.success = false;
+	job.error = !response.error.empty() ? response.error :
+		(job.failure == RequestFailure::Cancelled ? "request cancelled" :
+			(job.failure == RequestFailure::Timeout ? "media request timed out" : "media transport failed"));
+	return true;
 }
 
 } // namespace
@@ -225,9 +233,8 @@ MediaJob MediaClient::submitHuggingFaceFal(
 	mappingRequest.useBearerToken = false;
 	applyControl(mappingRequest, control, 30);
 	const HttpResponse mappingResponse = endpoint.perform(std::move(mappingRequest));
-	applyResponseFailure(mappingResponse, job);
-	job.httpStatus = mappingResponse.status;
-	if (!mappingResponse.started || mappingResponse.status < 200 || mappingResponse.status >= 300) {
+	if (applyResponseFailure(mappingResponse, job)) return job;
+	if (mappingResponse.status < 200 || mappingResponse.status >= 300) {
 		if (job.failure == RequestFailure::None) job.failure = mappingResponse.status > 0
 			? RequestFailure::Provider : RequestFailure::Transport;
 		job.error = mappingResponse.error.empty()
@@ -261,16 +268,8 @@ MediaJob MediaClient::submitHuggingFaceFal(
 	submitRequest.body = buildHuggingFaceFalBody(request);
 	applyControl(submitRequest, control, request.kind == MediaKind::Video ? 60 : 300);
 	const HttpResponse response = endpoint.perform(std::move(submitRequest));
-	applyResponseFailure(response, job);
-	job.httpStatus = response.status;
 	job.rawResponse = response.body;
-	if (!response.started) {
-		if (job.failure == RequestFailure::None) job.failure = RequestFailure::Transport;
-		job.error = response.error.empty()
-			? "Hugging Face / fal-ai media request did not start"
-			: response.error;
-		return job;
-	}
+	if (applyResponseFailure(response, job)) return job;
 	if (response.status < 200 || response.status >= 300) {
 		job.failure = RequestFailure::Provider;
 		job.error = "Hugging Face / fal-ai returned HTTP " + std::to_string(response.status);
@@ -362,16 +361,8 @@ MediaJob MediaClient::pollHuggingFaceFal(
 	statusRequest.url = job.pollUrl;
 	applyControl(statusRequest, control, 30);
 	const HttpResponse statusResponse = endpoint.perform(std::move(statusRequest));
-	applyResponseFailure(statusResponse, result);
-	result.httpStatus = statusResponse.status;
 	result.rawResponse = statusResponse.body;
-	if (!statusResponse.started) {
-		if (result.failure == RequestFailure::None) result.failure = RequestFailure::Transport;
-		result.error = statusResponse.error.empty()
-			? "Hugging Face / fal-ai poll did not start"
-			: statusResponse.error;
-		return result;
-	}
+	if (applyResponseFailure(statusResponse, result)) return result;
 	if (statusResponse.status < 200 || statusResponse.status >= 300) {
 		result.failure = RequestFailure::Provider;
 		result.error = "Hugging Face / fal-ai poll returned HTTP " +
@@ -402,10 +393,9 @@ MediaJob MediaClient::pollHuggingFaceFal(
 	outputRequest.url = job.resultUrl;
 	applyControl(outputRequest, control, 60);
 	const HttpResponse outputResponse = endpoint.perform(std::move(outputRequest));
-	applyResponseFailure(outputResponse, result);
-	result.httpStatus = outputResponse.status;
 	result.rawResponse = outputResponse.body;
-	if (!outputResponse.started || outputResponse.status < 200 || outputResponse.status >= 300) {
+	if (applyResponseFailure(outputResponse, result)) return result;
+	if (outputResponse.status < 200 || outputResponse.status >= 300) {
 		if (result.failure == RequestFailure::None) result.failure = outputResponse.status > 0
 			? RequestFailure::Provider : RequestFailure::Transport;
 		result.error = outputResponse.error.empty()
@@ -434,14 +424,7 @@ bool MediaClient::downloadHuggingFaceFalOutput(
 	applyControl(downloadRequest, control, 300);
 	downloadRequest.maxResponseBytes = 512U * 1024U * 1024U;
 	const HttpResponse response = endpoint.perform(std::move(downloadRequest));
-	applyResponseFailure(response, job);
-	job.httpStatus = response.status;
-	if (!response.started) {
-		if (job.failure == RequestFailure::None) job.failure = RequestFailure::Transport;
-		job.success = false;
-		job.error = response.error.empty() ? "media download did not start" : response.error;
-		return false;
-	}
+	if (applyResponseFailure(response, job)) return false;
 	if (response.status < 200 || response.status >= 300) {
 		job.failure = RequestFailure::Provider;
 		job.success = false;

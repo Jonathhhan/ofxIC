@@ -188,10 +188,18 @@ void applyControl(HttpRequest & request, RequestControl control, int defaultTime
 	request.shouldCancel = std::move(control.shouldCancel);
 }
 
-void applyResponseFailure(const HttpResponse & response, bool & cancelled,
-	RequestFailure & failure) {
+bool applyResponseFailure(const HttpResponse & response, bool & cancelled,
+	RequestFailure & failure, std::string & error, const char * fallback) {
 	cancelled = response.cancelled;
 	failure = response.cancelled ? RequestFailure::Cancelled : response.failure;
+	// HTTP headers may already say 200 when reading the body times out or is
+	// cancelled. Never parse that partial body or overwrite the transport cause.
+	if (response.started && response.status > 0 && failure == RequestFailure::None) return false;
+	if (failure == RequestFailure::None) failure = RequestFailure::Transport;
+	error = !response.error.empty() ? response.error :
+		(failure == RequestFailure::Cancelled ? "request cancelled" :
+			(failure == RequestFailure::Timeout ? "media request timed out" : fallback));
+	return true;
 }
 
 MediaJob mediaFailure(MediaKind kind, std::string message,
@@ -250,12 +258,8 @@ MediaCapabilities MediaClient::inspectCapabilities(RequestControl control) const
 	const HttpResponse response = endpoint.perform(std::move(request));
 	result.httpStatus = response.status;
 	result.rawResponse = response.body;
-	result.cancelled = response.cancelled;
-	result.failure = response.cancelled ? RequestFailure::Cancelled : response.failure;
-	if (!response.started) {
-		if (result.failure == RequestFailure::None) result.failure = RequestFailure::Transport;
-		result.error = response.error.empty()
-			? "could not inspect sd-server capabilities" : response.error;
+	if (applyResponseFailure(response, result.cancelled, result.failure, result.error,
+		"could not inspect sd-server capabilities")) {
 		return result;
 	}
 	if (response.status < 200 || response.status >= 300) {
@@ -315,12 +319,10 @@ ImageResult MediaClient::generateImage(const ImageRequest & request, RequestCont
 	httpRequest.body = buildImageBody(request);
 	applyControl(httpRequest, std::move(control), 180);
 	const HttpResponse response = endpoint.perform(std::move(httpRequest));
-	applyResponseFailure(response, result.cancelled, result.failure);
 	result.httpStatus = response.status;
 	result.rawResponse = response.body;
-	if (!response.started) {
-		if (result.failure == RequestFailure::None) result.failure = RequestFailure::Transport;
-		result.error = response.error.empty() ? "image request did not start" : response.error;
+	if (applyResponseFailure(response, result.cancelled, result.failure, result.error,
+		"image request failed")) {
 		return result;
 	}
 	if (response.status < 200 || response.status >= 300) {
@@ -566,10 +568,8 @@ MediaJob MediaClient::parseJob(
 	result.httpStatus = response.status;
 	result.rawResponse = response.body;
 	result.pollUrl = std::move(fallbackPollUrl);
-	applyResponseFailure(response, result.cancelled, result.failure);
-	if (!response.started) {
-		if (result.failure == RequestFailure::None) result.failure = RequestFailure::Transport;
-		result.error = response.error.empty() ? "media job request did not start" : response.error;
+	if (applyResponseFailure(response, result.cancelled, result.failure, result.error,
+		"media job request failed")) {
 		return result;
 	}
 	if (response.status < 200 || response.status >= 300) {

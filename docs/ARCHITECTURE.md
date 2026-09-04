@@ -106,6 +106,11 @@ addon.
   before transport, including before capability inspection or provider mapping.
   Finite-value clamping behavior is unchanged; serializers do not change the
   application's global locale.
+- Media adapters prioritize transport failure over HTTP status and body parsing.
+  A cancelled/timed-out read after HTTP 200 is not a completed response; a missing
+  HTTP status is not a provider error. Native capability/image/job requests and
+  all five fal stages stop immediately while preserving the transport cause.
+  A server-side cancelled job remains distinct from local request cancellation.
 - On headless Windows builds, non-streaming HTTP(S) uses WinHTTP. In an
   openFrameworks build, non-streaming HTTPS uses WinHTTP/Schannel so certificate
   and proxy handling follow native Windows trust, while streaming and

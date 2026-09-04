@@ -3,6 +3,109 @@
 
 #include <string>
 
+namespace {
+ofxIC::HttpResponse interruptedMediaResponse(ofxIC::RequestFailure failure, int status,
+	const std::string & body) {
+	ofxIC::HttpResponse response;
+	response.started = true;
+	response.status = status;
+	response.body = body;
+	response.failure = failure;
+	response.cancelled = failure == ofxIC::RequestFailure::Cancelled;
+	response.error = "transport interrupted";
+	return response;
+}
+} // namespace
+
+OFXIC_TEST(media_client_preserves_transport_failure_even_after_success_headers) {
+	for (auto failure : { ofxIC::RequestFailure::Cancelled, ofxIC::RequestFailure::Timeout,
+		ofxIC::RequestFailure::Transport, ofxIC::RequestFailure::InvalidResponse }) {
+		for (int status : { 0, 200 }) {
+			ofxIC::Endpoint endpoint("http://example.test", [&](const ofxIC::HttpRequest &) {
+				return interruptedMediaResponse(failure, status,
+					R"({"supported_modes":["img_gen"],"id":"one","status":"completed","b64_json":"aW1hZ2U="})");
+			});
+			ofxIC::MediaClient media(endpoint);
+			const auto verify = [&](const auto & result) {
+				OFXIC_REQUIRE(!result);
+				OFXIC_REQUIRE(result.failure == failure);
+				OFXIC_REQUIRE(result.cancelled == (failure == ofxIC::RequestFailure::Cancelled));
+				OFXIC_REQUIRE(result.error == "transport interrupted");
+			};
+			verify(media.inspectCapabilities());
+			ofxIC::ImageRequest image;
+			image.prompt = "image";
+			verify(media.generateImage(image));
+			verify(media.poll("one"));
+			ofxIC::MediaJob job;
+			job.id = "one";
+			verify(media.cancel(job));
+		}
+	}
+}
+
+OFXIC_TEST(media_client_classifies_missing_http_status_as_transport_failure) {
+	ofxIC::Endpoint endpoint("http://example.test", [](const ofxIC::HttpRequest &) {
+		return interruptedMediaResponse(ofxIC::RequestFailure::None, 0, "");
+	});
+	ofxIC::MediaClient media(endpoint);
+	OFXIC_REQUIRE(media.poll("one").failure == ofxIC::RequestFailure::Transport);
+}
+
+OFXIC_TEST(media_client_preserves_failure_during_native_submit_after_capabilities) {
+	int calls = 0;
+	ofxIC::Endpoint endpoint("http://example.test", [&](const ofxIC::HttpRequest &) {
+		if (++calls == 1) {
+			auto response = interruptedMediaResponse(ofxIC::RequestFailure::None, 200,
+				R"({"supported_modes":["img_gen"]})");
+			response.error.clear();
+			return response;
+		}
+		return interruptedMediaResponse(ofxIC::RequestFailure::Timeout, 0, "");
+	});
+	ofxIC::MediaClient media(endpoint);
+	ofxIC::MediaJobRequest request;
+	request.prompt = "image";
+	const auto result = media.submit(request);
+	OFXIC_REQUIRE(!result);
+	OFXIC_REQUIRE(result.failure == ofxIC::RequestFailure::Timeout);
+	OFXIC_REQUIRE(calls == 2);
+}
+
+OFXIC_TEST(media_client_stops_fal_pipeline_on_transport_failure_at_every_stage) {
+	for (auto failure : { ofxIC::RequestFailure::Cancelled, ofxIC::RequestFailure::Timeout,
+		ofxIC::RequestFailure::Transport, ofxIC::RequestFailure::InvalidResponse }) {
+		for (int faultAt = 1; faultAt <= 5; ++faultAt) {
+			int calls = 0;
+			ofxIC::Endpoint endpoint("https://router.huggingface.co", [&](const ofxIC::HttpRequest &) {
+				const std::string bodies[] = {
+					R"({"inferenceProviderMapping":{"fal-ai":{"providerId":"fal-ai/wan/test","task":"text-to-video"}}})",
+					R"({"request_id":"one","status":"IN_QUEUE","response_url":"https://queue.fal.run/fal-ai/wan/test/requests/one"})",
+					R"({"status":"COMPLETED"})",
+					R"({"video":{"url":"https://cdn.example/video.mp4"}})", "video bytes"
+				};
+				++calls;
+				OFXIC_REQUIRE(calls <= 5);
+				auto response = interruptedMediaResponse(calls == faultAt ? failure : ofxIC::RequestFailure::None,
+					200, bodies[calls - 1]);
+				if (calls != faultAt) response.error.clear();
+				return response;
+			});
+			ofxIC::MediaClient media(endpoint);
+			ofxIC::MediaJobRequest request;
+			request.kind = ofxIC::MediaKind::Video;
+			request.model = "test/video";
+			request.prompt = "video";
+			auto result = media.submitHuggingFaceFal(request);
+			if (result) result = media.poll(result);
+			OFXIC_REQUIRE(!result);
+			OFXIC_REQUIRE(result.failure == failure);
+			OFXIC_REQUIRE(result.error == "transport interrupted");
+			OFXIC_REQUIRE(calls == faultAt);
+		}
+	}
+}
+
 OFXIC_TEST(media_client_generates_openai_compatible_images) {
 	ofxIC::HttpRequest captured;
 	ofxIC::Endpoint endpoint("http://localhost:1234/v1", [&](const ofxIC::HttpRequest & request) {
