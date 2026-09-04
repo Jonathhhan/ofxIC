@@ -7,6 +7,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 add_executable(ofxIC_tests
 	test_main.cpp
 	test_endpoint.cpp
+	test_protocol_numbers.cpp
 	test_media_client.cpp
 	test_acestep_music_client.cpp
 	test_stability_audio_client.cpp
@@ -18,6 +19,7 @@ add_executable(ofxIC_tests
 	test_example_settings.cpp
 	test_example_runtime_paths.cpp
 	test_example_media_model_policy.cpp
+	test_example_media_context_policy.cpp
 	test_example_managed_process.cpp
 	test_example_job_history.cpp
 	test_example_credentials.cpp
@@ -35,6 +37,7 @@ add_executable(ofxIC_tests
 	../ofxICExample/src/ExampleSettings.cpp
 	../ofxICExample/src/ExampleRuntimePaths.cpp
 	../ofxICExample/src/ExampleMediaModelPolicy.cpp
+	../ofxICExample/src/ExampleMediaContextPolicy.cpp
 	../ofxICExample/src/ExampleManagedProcess.cpp
 	../ofxICExample/src/ExampleJobHistory.cpp
 	../ofxICExample/src/ExampleCredentialStore.cpp

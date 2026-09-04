@@ -12,6 +12,7 @@ public:
 	explicit MediaClient(Endpoint & endpoint);
 
 	ImageResult generateImage(const ImageRequest & request, RequestControl control = {}) const;
+	MediaCapabilities inspectCapabilities(RequestControl control = {}) const;
 	MediaJob submit(const MediaJobRequest & request, RequestControl control = {}) const;
 	MediaJob submitHuggingFaceFal(const MediaJobRequest & request, RequestControl control = {}) const;
 	MediaJob poll(const MediaJob & job, RequestControl control = {}) const;

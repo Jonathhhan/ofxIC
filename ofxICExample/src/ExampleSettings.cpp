@@ -12,7 +12,7 @@
 namespace ofxICExample {
 namespace {
 
-constexpr int settingsVersion = 3;
+constexpr int settingsVersion = 4;
 
 bool parseString(const std::string & value, std::string & destination) {
 	if (value.empty() || value.front() != '"') return false;
@@ -134,6 +134,10 @@ bool validSettings(const ExampleSettings & settings) {
 		settings.mediaHeight >= 1 && settings.mediaHeight <= 8192 &&
 		settings.mediaFrames >= 1 && settings.mediaFrames <= 10000 &&
 		settings.mediaFps >= 1 && settings.mediaFps <= 240 &&
+		settings.mediaSeed >= -1 && settings.mediaSteps >= 1 && settings.mediaSteps <= 1000 &&
+		std::isfinite(settings.mediaGuidance) && settings.mediaGuidance >= 0.0f &&
+		settings.mediaGuidance <= 1000.0f && validText(settings.mediaSampler, 64) &&
+		validText(settings.mediaScheduler, 64) && validText(settings.mediaOutputFormat, 32) &&
 		settings.musicBackend >= 0 && settings.musicBackend <= 1 &&
 		validEndpoint(settings.musicEndpointUrl) &&
 		settings.musicDuration >= 1 && settings.musicDuration <= 600 &&
@@ -318,6 +322,18 @@ SettingsLoadStatus loadSettings(const std::string & path, ExampleSettings & sett
 			valid = parseInt(value, parsed.mediaFrames);
 		} else if (key == "media_fps") {
 			valid = parseInt(value, parsed.mediaFps);
+		} else if (key == "media_seed") {
+			valid = parseInt(value, parsed.mediaSeed);
+		} else if (key == "media_steps") {
+			valid = parseInt(value, parsed.mediaSteps);
+		} else if (key == "media_guidance") {
+			valid = parseFloat(value, parsed.mediaGuidance);
+		} else if (key == "media_sampler") {
+			valid = parseString(value, parsed.mediaSampler);
+		} else if (key == "media_scheduler") {
+			valid = parseString(value, parsed.mediaScheduler);
+		} else if (key == "media_output_format") {
+			valid = parseString(value, parsed.mediaOutputFormat);
 		} else if (key == "music_backend") {
 			valid = parseInt(value, parsed.musicBackend);
 			hasMusicBackend = valid;
@@ -408,6 +424,12 @@ bool saveSettings(const std::string & path, const ExampleSettings & settings) {
 		<< "media_height=" << settings.mediaHeight << '\n'
 		<< "media_frames=" << settings.mediaFrames << '\n'
 		<< "media_fps=" << settings.mediaFps << '\n'
+		<< "media_seed=" << settings.mediaSeed << '\n'
+		<< "media_steps=" << settings.mediaSteps << '\n'
+		<< "media_guidance=" << settings.mediaGuidance << '\n'
+		<< "media_sampler=" << std::quoted(settings.mediaSampler) << '\n'
+		<< "media_scheduler=" << std::quoted(settings.mediaScheduler) << '\n'
+		<< "media_output_format=" << std::quoted(settings.mediaOutputFormat) << '\n'
 		<< "music_backend=" << settings.musicBackend << '\n'
 		<< "music_endpoint_url=" << std::quoted(settings.musicEndpointUrl) << '\n'
 		<< "music_duration=" << settings.musicDuration << '\n'
@@ -524,6 +546,22 @@ void applyEnvironmentOverrides(
 	readPositiveOverride(environment, "OFXIC_MEDIA_HEIGHT", 8192, settings.mediaHeight);
 	readPositiveOverride(environment, "OFXIC_MEDIA_FRAMES", 10000, settings.mediaFrames);
 	readPositiveOverride(environment, "OFXIC_MEDIA_FPS", 240, settings.mediaFps);
+	if (const std::string * seed = environmentValue(environment, "OFXIC_MEDIA_SEED")) {
+		int parsed = 0;
+		if (parseInt(*seed, parsed) && parsed >= -1) settings.mediaSeed = parsed;
+	}
+	readPositiveOverride(environment, "OFXIC_MEDIA_STEPS", 1000, settings.mediaSteps);
+	if (const std::string * guidance = environmentValue(environment, "OFXIC_MEDIA_GUIDANCE")) {
+		float parsed = 0.0f;
+		if (parseFloat(*guidance, parsed) && parsed >= 0.0f && parsed <= 1000.0f)
+			settings.mediaGuidance = parsed;
+	}
+	if (const std::string * sampler = environmentValue(environment, "OFXIC_MEDIA_SAMPLER"))
+		if (validText(*sampler, 64)) settings.mediaSampler = *sampler;
+	if (const std::string * scheduler = environmentValue(environment, "OFXIC_MEDIA_SCHEDULER"))
+		if (validText(*scheduler, 64)) settings.mediaScheduler = *scheduler;
+	if (const std::string * format = environmentValue(environment, "OFXIC_MEDIA_OUTPUT_FORMAT"))
+		if (validText(*format, 32)) settings.mediaOutputFormat = *format;
 	if (const std::string * musicUrl = environmentValue(
 		environment, "OFXIC_MUSIC_ENDPOINT_URL")) {
 		settings.musicEndpointUrl = *musicUrl;

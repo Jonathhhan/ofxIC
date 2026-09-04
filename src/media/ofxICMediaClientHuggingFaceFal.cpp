@@ -2,7 +2,9 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cmath>
 #include <iomanip>
+#include <locale>
 #include <sstream>
 #include <utility>
 
@@ -210,6 +212,11 @@ MediaJob MediaClient::submitHuggingFaceFal(
 		job.error = "Hugging Face / fal-ai media model is empty";
 		return job;
 	}
+	if (!std::isfinite(request.guidance)) {
+		job.failure = RequestFailure::Validation;
+		job.error = "media guidance must be a finite number";
+		return job;
+	}
 
 	HttpRequest mappingRequest;
 	mappingRequest.method = HttpMethod::Get;
@@ -310,6 +317,7 @@ MediaJob MediaClient::submitHuggingFaceFal(
 std::string MediaClient::buildHuggingFaceFalBody(const MediaJobRequest & request) {
 	const bool video = request.kind == MediaKind::Video;
 	std::ostringstream body;
+	body.imbue(std::locale::classic());
 	body << "{\"prompt\":\"" << escapeJson(request.prompt) << "\"";
 	if (!request.negativePrompt.empty()) {
 		if (video) {

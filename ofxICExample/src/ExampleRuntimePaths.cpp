@@ -188,8 +188,13 @@ std::string portableWorkbenchPath(
 std::string findInstalledExecutable(
 	const std::string & serverRoot,
 	const std::string & familyPrefix,
-	const std::string & executableName) {
+	const std::string & executableName,
+	const std::string & preferredPath) {
 	if (serverRoot.empty() || familyPrefix.empty() || executableName.empty()) return {};
+	// A script's expected destination is a search hint, not proof of installation.
+	if (!preferredPath.empty() && filenameEquals(preferredPath, executableName) &&
+		executableFileExists(preferredPath))
+		return normalizedPath(preferredPath);
 	const std::filesystem::path root(serverRoot);
 #if defined(_WIN32)
 	// Prefer the native API on Windows. Some sandboxed/medium-integrity GUI

@@ -5,7 +5,14 @@ param(
 	[int] $Height = 512,
 	[int] $Frames = 17,
 	[int] $Fps = 8,
+	[int] $Seed = -1,
+	[int] $Steps = 28,
+	[double] $Guidance = 7.0,
+	[string] $Sampler = "",
+	[string] $Scheduler = "",
+	[string] $OutputFormat = "",
 	[int] $TimeoutSeconds = 1200,
+	[int] $MinimumUniqueFrames = 2,
 	[string] $Prompt = "A small paper sculpture slowly rotating on a clean studio background"
 )
 
@@ -22,6 +29,14 @@ if (-not (Test-Path -LiteralPath $executablePath)) {
 }
 if ($Width -lt 64 -or $Height -lt 64 -or $Frames -lt 1 -or $Fps -lt 1) {
 	throw "Width and height must be at least 64; frames and FPS must be positive"
+}
+if ($MinimumUniqueFrames -lt 2) {
+	throw "MinimumUniqueFrames must be at least 2"
+}
+$ffprobe = Get-Command ffprobe.exe -ErrorAction SilentlyContinue
+$ffmpeg = Get-Command ffmpeg.exe -ErrorAction SilentlyContinue
+if (-not $ffprobe -or -not $ffmpeg) {
+	throw "The live video smoke requires ffprobe.exe and ffmpeg.exe on PATH"
 }
 
 $capabilities = Invoke-RestMethod -Uri ($Endpoint.TrimEnd('/') + "/sdcpp/v1/capabilities") `
@@ -43,6 +58,12 @@ $environmentNames = @(
 	"OFXIC_MEDIA_HEIGHT",
 	"OFXIC_MEDIA_FRAMES",
 	"OFXIC_MEDIA_FPS",
+	"OFXIC_MEDIA_SEED",
+	"OFXIC_MEDIA_STEPS",
+	"OFXIC_MEDIA_GUIDANCE",
+	"OFXIC_MEDIA_SAMPLER",
+	"OFXIC_MEDIA_SCHEDULER",
+	"OFXIC_MEDIA_OUTPUT_FORMAT",
 	"OFXIC_MEDIA_RESULT_PATH",
 	"OFXIC_SETTINGS_PATH")
 foreach ($name in $environmentNames) {
@@ -62,6 +83,12 @@ try {
 	$env:OFXIC_MEDIA_HEIGHT = $Height.ToString()
 	$env:OFXIC_MEDIA_FRAMES = $Frames.ToString()
 	$env:OFXIC_MEDIA_FPS = $Fps.ToString()
+	$env:OFXIC_MEDIA_SEED = $Seed.ToString()
+	$env:OFXIC_MEDIA_STEPS = $Steps.ToString()
+	$env:OFXIC_MEDIA_GUIDANCE = $Guidance.ToString([Globalization.CultureInfo]::InvariantCulture)
+	$env:OFXIC_MEDIA_SAMPLER = $Sampler
+	$env:OFXIC_MEDIA_SCHEDULER = $Scheduler
+	$env:OFXIC_MEDIA_OUTPUT_FORMAT = $OutputFormat
 	$env:OFXIC_MEDIA_RESULT_PATH = $resultPath
 	$env:OFXIC_SETTINGS_PATH = (Join-Path $temporary "settings")
 
@@ -88,8 +115,30 @@ try {
 	if ((Get-Item -LiteralPath $generatedPath).Length -lt 16) {
 		throw "Generated video file is unexpectedly small: $generatedPath"
 	}
+	$probeLines = & $ffprobe.Source -v error -count_frames -select_streams v:0 `
+		-show_entries stream=avg_frame_rate,nb_read_frames,duration `
+		-of default=noprint_wrappers=1 $generatedPath
+	if ($LASTEXITCODE -ne 0) { throw "ffprobe could not decode generated video: $generatedPath" }
+	$probe = @{}
+	foreach ($line in $probeLines) {
+		$parts = $line -split '=', 2
+		if ($parts.Count -eq 2) { $probe[$parts[0]] = $parts[1] }
+	}
+	$decodedFrames = if ($probe.nb_read_frames -match '^\d+$') { [int]$probe.nb_read_frames } else { 0 }
+	if ($decodedFrames -lt 2) {
+		throw "Generated output is not an animation: ffprobe decoded $decodedFrames frame(s)"
+	}
+	$frameHashes = & $ffmpeg.Source -v error -i $generatedPath -map 0:v:0 -f framemd5 - |
+		Where-Object { $_ -match '^0,' } |
+		ForEach-Object { ($_ -split ',')[-1].Trim() }
+	if ($LASTEXITCODE -ne 0) { throw "ffmpeg could not decode generated video: $generatedPath" }
+	$uniqueFrames = @($frameHashes | Sort-Object -Unique).Count
+	if ($uniqueFrames -lt $MinimumUniqueFrames) {
+		throw "Generated output contains $decodedFrames frames but only $uniqueFrames unique frame(s)"
+	}
 	Write-Output "Video GUI live smoke passed"
 	Write-Output "Model: $($capabilities.model.name)"
+	Write-Output "Decoded frames: $decodedFrames; unique frames: $uniqueFrames; rate: $($probe.avg_frame_rate); duration: $($probe.duration) s"
 	Write-Output "Output: $generatedPath"
 } finally {
 	if ($example -and -not $example.HasExited) {

@@ -17,7 +17,8 @@ std::string portableWorkbenchPath(
 std::string findInstalledExecutable(
 	const std::string & serverRoot,
 	const std::string & familyPrefix,
-	const std::string & executableName);
+	const std::string & executableName,
+	const std::string & preferredPath = {});
 
 std::string installedExecutableSearchDiagnostic(
 	const std::string & serverRoot,

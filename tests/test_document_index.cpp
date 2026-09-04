@@ -50,6 +50,25 @@ OFXIC_TEST(document_index_loads_a_file_with_an_explicit_source_identifier) {
 	std::remove(path.c_str());
 }
 
+OFXIC_TEST(document_index_does_not_split_utf8_at_chunk_or_overlap_boundaries) {
+	for (const std::string character : { std::string("\xE6\xBC\xA2"), std::string("\xF0\x9F\x8C\x8D") }) {
+		ofxIC::DocumentIndex index;
+		std::string text(899, 'a');
+		for (int i = 0; i < 1000; ++i) text += character;
+		OFXIC_REQUIRE(index.addText("unicode", text));
+		const auto hits = index.search(character, 100);
+		OFXIC_REQUIRE(hits.size() > 1);
+		for (const auto & hit : hits) {
+			std::size_t position = 0;
+			while (position < hit.text.size() && hit.text[position] == 'a') ++position;
+			while (position < hit.text.size()) {
+				OFXIC_REQUIRE(hit.text.substr(position, character.size()) == character);
+				position += character.size();
+			}
+		}
+	}
+}
+
 OFXIC_TEST(document_index_rejects_oversized_inputs_without_partial_changes) {
 	ofxIC::DocumentIndex index;
 	OFXIC_REQUIRE(index.addText("small.txt", "already indexed"));

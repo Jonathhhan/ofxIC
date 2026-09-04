@@ -19,7 +19,7 @@ $executable = Join-Path $installDirectory "sd-server.exe"
 
 if ($Plan) {
 	Write-Output "stable-diffusion.cpp release: $release"
-	Write-Output "Backend: CUDA $cuda (supported by the installed NVIDIA 610.47 driver)"
+	Write-Output "Backend: CUDA $cuda (requires a compatible NVIDIA driver; driver compatibility is not checked by -Plan)"
 	Write-Output "Install directory: $installDirectory"
 	foreach ($archive in $archives) {
 		Write-Output "Download: $baseUrl/$($archive.Name)"

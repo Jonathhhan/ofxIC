@@ -2,7 +2,9 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cmath>
 #include <cstdlib>
+#include <locale>
 #include <sstream>
 #include <utility>
 
@@ -147,9 +149,10 @@ std::vector<std::string> extractStringArrayField(const std::string & json,
 	return result;
 }
 
-int extractIntField(const std::string & json, const std::string & key) {
+int extractIntField(const std::string & json, const std::string & key,
+	std::size_t searchFrom = 0) {
 	const std::string quoted = "\"" + key + "\"";
-	const std::size_t keyPosition = json.find(quoted);
+	const std::size_t keyPosition = json.find(quoted, searchFrom);
 	if (keyPosition == std::string::npos) return 0;
 	const std::size_t colon = json.find(':', keyPosition + quoted.size());
 	if (colon == std::string::npos) return 0;
@@ -207,6 +210,15 @@ bool contains(const std::vector<std::string> & values, const std::string & value
 	return std::find(values.begin(), values.end(), value) != values.end();
 }
 
+std::string lowerFilename(std::string value) {
+	const std::size_t separator = value.find_last_of("/\\");
+	if (separator != std::string::npos) value.erase(0, separator + 1U);
+	std::transform(value.begin(), value.end(), value.begin(), [](unsigned char character) {
+		return static_cast<char>(std::tolower(character));
+	});
+	return value;
+}
+
 std::string preferredVideoFormat(const std::vector<std::string> & formats) {
 	// MJPG AVI is decoded by the stock Windows Media Foundation player. WebM is
 	// preferred only when AVI is unavailable because sd-server may be built
@@ -220,6 +232,69 @@ std::string preferredVideoFormat(const std::vector<std::string> & formats) {
 
 MediaClient::MediaClient(Endpoint & endpoint)
 	: endpoint(endpoint) {
+}
+
+MediaCapabilities MediaClient::inspectCapabilities(RequestControl control) const {
+	MediaCapabilities result;
+	if (control.timeoutSeconds < 0) {
+		result.failure = RequestFailure::InvalidResponse;
+		result.error = "request timeout cannot be negative";
+		return result;
+	}
+	HttpRequest request;
+	request.method = HttpMethod::Get;
+	request.url = "/sdcpp/v1/capabilities";
+	request.accept = "application/json";
+	request.useBearerToken = false;
+	applyControl(request, std::move(control), 30);
+	const HttpResponse response = endpoint.perform(std::move(request));
+	result.httpStatus = response.status;
+	result.rawResponse = response.body;
+	result.cancelled = response.cancelled;
+	result.failure = response.cancelled ? RequestFailure::Cancelled : response.failure;
+	if (!response.started) {
+		if (result.failure == RequestFailure::None) result.failure = RequestFailure::Transport;
+		result.error = response.error.empty()
+			? "could not inspect sd-server capabilities" : response.error;
+		return result;
+	}
+	if (response.status < 200 || response.status >= 300) {
+		result.failure = RequestFailure::Provider;
+		result.error = "sd-server capability endpoint returned HTTP " +
+			std::to_string(response.status);
+		const std::string detail = Endpoint::extractErrorText(response.body);
+		if (!detail.empty()) result.error += ": " + detail;
+		return result;
+	}
+	const std::size_t modelObject = response.body.find("\"model\"");
+	result.model = modelObject == std::string::npos
+		? std::string{} : extractStringField(response.body, "name", modelObject);
+	result.currentMode = extractStringField(response.body, "current_mode");
+	result.supportedModes = extractStringArrayField(response.body, "supported_modes");
+	result.samplers = extractStringArrayField(response.body, "samplers");
+	result.schedulers = extractStringArrayField(response.body, "schedulers");
+	const std::size_t formatsObject = response.body.find("\"output_formats_by_mode\"");
+	if (formatsObject != std::string::npos) {
+		result.imageOutputFormats = extractStringArrayField(response.body, "img_gen", formatsObject);
+		result.videoOutputFormats = extractStringArrayField(response.body, "vid_gen", formatsObject);
+	}
+	const std::size_t limitsObject = response.body.find("\"limits\"");
+	if (limitsObject != std::string::npos) {
+		result.minWidth = extractIntField(response.body, "min_width", limitsObject);
+		result.maxWidth = extractIntField(response.body, "max_width", limitsObject);
+		result.minHeight = extractIntField(response.body, "min_height", limitsObject);
+		result.maxHeight = extractIntField(response.body, "max_height", limitsObject);
+	}
+	const std::size_t defaultsObject = response.body.find("\"defaults\"");
+	if (defaultsObject != std::string::npos) {
+		result.defaultWidth = extractIntField(response.body, "width", defaultsObject);
+		result.defaultHeight = extractIntField(response.body, "height", defaultsObject);
+		result.defaultVideoFrames = extractIntField(response.body, "video_frames", defaultsObject);
+		result.defaultFps = extractIntField(response.body, "fps", defaultsObject);
+		result.defaultOutputFormat = extractStringField(response.body, "output_format", defaultsObject);
+	}
+	result.success = true;
+	return result;
 }
 
 ImageResult MediaClient::generateImage(const ImageRequest & request, RequestControl control) const {
@@ -284,43 +359,68 @@ MediaJob MediaClient::submit(const MediaJobRequest & request, RequestControl con
 		return result;
 	}
 	MediaJobRequest effectiveRequest = request;
-	if (request.kind == MediaKind::Video) {
-		HttpRequest capabilitiesRequest;
-		capabilitiesRequest.method = HttpMethod::Get;
-		capabilitiesRequest.url = "/sdcpp/v1/capabilities";
-		capabilitiesRequest.accept = "application/json";
-		capabilitiesRequest.useBearerToken = false;
-		applyControl(capabilitiesRequest, control, 30);
-		const HttpResponse capabilities = endpoint.perform(std::move(capabilitiesRequest));
-		if (!capabilities.started) {
-			return mediaFailure(request.kind,
-				capabilities.error.empty()
-					? "could not inspect sd-server video capabilities"
-					: capabilities.error,
-				capabilities.failure == RequestFailure::None
-					? RequestFailure::Transport : capabilities.failure,
-				capabilities.status, capabilities.body);
+	if (!std::isfinite(request.guidance)) {
+		return mediaFailure(request.kind, "media guidance must be a finite number",
+			RequestFailure::Validation);
+	}
+	{
+		const MediaCapabilities capabilities = inspectCapabilities(control);
+		if (!capabilities) {
+			MediaJob failed = mediaFailure(request.kind, capabilities.error,
+				capabilities.failure, capabilities.httpStatus, capabilities.rawResponse);
+			failed.cancelled = capabilities.cancelled;
+			return failed;
 		}
-		if (capabilities.status < 200 || capabilities.status >= 300) {
+		const auto & modes = capabilities.supportedModes;
+		const std::string & model = capabilities.model;
+		if (!request.model.empty() && !model.empty() &&
+			lowerFilename(request.model) != lowerFilename(model)) {
 			return mediaFailure(request.kind,
-				"sd-server capability endpoint returned HTTP " +
-					std::to_string(capabilities.status), RequestFailure::Provider,
-				capabilities.status, capabilities.body);
+				"sd-server loaded " + model + " but the selected context is " +
+					lowerFilename(request.model) + "; restart sd-server to load the selected context");
 		}
-		const std::vector<std::string> modes = extractStringArrayField(
-			capabilities.body, "supported_modes");
-		const std::string model = extractStringField(capabilities.body, "name");
-		if (!contains(modes, "vid_gen")) {
+		const char * requiredMode = request.kind == MediaKind::Video ? "vid_gen" : "img_gen";
+		if (!contains(modes, requiredMode)) {
 			return mediaFailure(request.kind,
 				"loaded sd-server model" + (model.empty() ? std::string{} : " " + model) +
-				" does not support video generation; select a WAN, LTX-Video, "
-				"AnimateDiff, or another vid_gen-capable model and restart sd-server");
+				" does not support " +
+				(request.kind == MediaKind::Video ? "video" : "image") +
+				" generation; select a compatible model and restart sd-server");
 		}
-		const std::size_t formatsObject = capabilities.body.find(
-			"\"output_formats_by_mode\"");
-		const std::vector<std::string> formats = formatsObject == std::string::npos
-			? std::vector<std::string>{}
-			: extractStringArrayField(capabilities.body, "vid_gen", formatsObject);
+		if ((capabilities.minWidth > 0 && request.width < capabilities.minWidth) ||
+			(capabilities.maxWidth > 0 && request.width > capabilities.maxWidth) ||
+			(capabilities.minHeight > 0 && request.height < capabilities.minHeight) ||
+			(capabilities.maxHeight > 0 && request.height > capabilities.maxHeight)) {
+			return mediaFailure(request.kind,
+				"requested media size " + std::to_string(request.width) + "x" +
+				std::to_string(request.height) + " is outside the loaded context limits " +
+				std::to_string(capabilities.minWidth) + "-" +
+				std::to_string(capabilities.maxWidth) + " x " +
+				std::to_string(capabilities.minHeight) + "-" +
+				std::to_string(capabilities.maxHeight));
+		}
+		if (!request.sampleMethod.empty() && !capabilities.samplers.empty() &&
+			!contains(capabilities.samplers, request.sampleMethod)) {
+			return mediaFailure(request.kind, "loaded context does not support sampler " +
+				request.sampleMethod);
+		}
+		if (!request.scheduler.empty() && !capabilities.schedulers.empty() &&
+			!contains(capabilities.schedulers, request.scheduler)) {
+			return mediaFailure(request.kind, "loaded context does not support scheduler " +
+				request.scheduler);
+		}
+		const auto & modeFormats = request.kind == MediaKind::Video
+			? capabilities.videoOutputFormats : capabilities.imageOutputFormats;
+		if (!request.outputFormat.empty() && !modeFormats.empty() &&
+			!contains(modeFormats, request.outputFormat)) {
+			return mediaFailure(request.kind, "loaded context does not support " +
+				request.outputFormat + " output for the selected mode");
+		}
+		if (request.kind != MediaKind::Video) {
+			// A successful capability match is the external-process equivalent of
+			// a loaded image context. Submission is safe only after this point.
+		} else {
+		const std::vector<std::string> & formats = capabilities.videoOutputFormats;
 		if (effectiveRequest.outputFormat.empty()) {
 			effectiveRequest.outputFormat = preferredVideoFormat(formats);
 			if (effectiveRequest.outputFormat.empty()) {
@@ -331,6 +431,7 @@ MediaJob MediaClient::submit(const MediaJobRequest & request, RequestControl con
 			return mediaFailure(request.kind,
 				"sd-server does not support requested video format " +
 				effectiveRequest.outputFormat);
+		}
 		}
 	}
 	HttpRequest httpRequest;
@@ -418,6 +519,7 @@ MediaJob MediaClient::cancel(const MediaJob & job, RequestControl control) const
 
 std::string MediaClient::buildImageBody(const ImageRequest & request) {
 	std::ostringstream body;
+	body.imbue(std::locale::classic());
 	body << "{\"prompt\":\"" << escapeJson(request.prompt) << "\"";
 	if (!request.model.empty()) body << ",\"model\":\"" << escapeJson(request.model) << "\"";
 	body << ",\"n\":" << std::max(1, request.count)
@@ -432,6 +534,7 @@ std::string MediaClient::buildJobBody(const MediaJobRequest & request) {
 		? (video ? "webm" : "png")
 		: request.outputFormat;
 	std::ostringstream body;
+	body.imbue(std::locale::classic());
 	body << "{\"prompt\":\"" << escapeJson(request.prompt) << "\""
 		 << ",\"negative_prompt\":\"" << escapeJson(request.negativePrompt) << "\""
 		 << ",\"width\":" << std::max(1, request.width)
@@ -444,7 +547,12 @@ std::string MediaClient::buildJobBody(const MediaJobRequest & request) {
 		body << ",\"batch_count\":" << std::max(1, request.imageCount);
 	}
 	body << ",\"sample_params\":{\"sample_steps\":" << std::max(1, request.steps)
-		 << ",\"guidance\":{\"txt_cfg\":" << std::max(0.0f, request.guidance) << "}}"
+		 << ",\"guidance\":{\"txt_cfg\":" << std::max(0.0f, request.guidance) << "}";
+	if (!request.sampleMethod.empty())
+		body << ",\"sample_method\":\"" << escapeJson(request.sampleMethod) << "\"";
+	if (!request.scheduler.empty())
+		body << ",\"scheduler\":\"" << escapeJson(request.scheduler) << "\"";
+	body << "}"
 		 << ",\"output_format\":\"" << escapeJson(outputFormat) << "\"}";
 	return body.str();
 }

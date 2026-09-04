@@ -26,6 +26,39 @@ enum class MediaJobState {
 	Cancelled
 };
 
+struct MediaCapabilities {
+	bool success = false;
+	bool cancelled = false;
+	RequestFailure failure = RequestFailure::None;
+	int httpStatus = 0;
+	std::string model;
+	std::string currentMode;
+	std::vector<std::string> supportedModes;
+	std::vector<std::string> imageOutputFormats;
+	std::vector<std::string> videoOutputFormats;
+	std::vector<std::string> samplers;
+	std::vector<std::string> schedulers;
+	int minWidth = 0;
+	int maxWidth = 0;
+	int minHeight = 0;
+	int maxHeight = 0;
+	int defaultWidth = 0;
+	int defaultHeight = 0;
+	int defaultVideoFrames = 0;
+	int defaultFps = 0;
+	std::string defaultOutputFormat;
+	std::string error;
+	std::string rawResponse;
+
+	bool supports(MediaKind kind) const {
+		const std::string required = kind == MediaKind::Video ? "vid_gen" : "img_gen";
+		for (const auto & mode : supportedModes) if (mode == required) return true;
+		return false;
+	}
+
+	explicit operator bool() const { return success; }
+};
+
 struct ImageRequest {
 	std::string prompt;
 	std::string model;
@@ -61,6 +94,8 @@ struct MediaJobRequest {
 	int seed = -1;
 	int steps = 28;
 	float guidance = 7.0f;
+	std::string sampleMethod;
+	std::string scheduler;
 	int imageCount = 1;
 	int videoFrames = 33;
 	int fps = 16;

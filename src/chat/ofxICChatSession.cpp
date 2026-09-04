@@ -65,11 +65,10 @@ ChatResult ChatSession::complete(
 	const std::vector<ToolDefinition> & tools,
 	ChatChunkCallback onChunk,
 	RequestControl control) {
-	const std::size_t checkpoint = messages.size();
-	messages.insert(messages.end(), newMessages.begin(), newMessages.end());
 	ChatRequest request;
 	request.systemPrompt = systemPrompt;
 	request.messages = messages;
+	request.messages.insert(request.messages.end(), newMessages.begin(), newMessages.end());
 	request.tools = tools;
 	request.options = options;
 
@@ -80,9 +79,9 @@ ChatResult ChatSession::complete(
 		assistantMessage.role = ChatRole::Assistant;
 		assistantMessage.content = result.text;
 		assistantMessage.toolCalls = result.toolCalls;
-		messages.push_back(std::move(assistantMessage));
-	} else {
-		messages.resize(checkpoint);
+		request.messages.push_back(std::move(assistantMessage));
+		// Commit only a complete exchange, including when transport/callbacks throw.
+		messages.swap(request.messages);
 	}
 	return result;
 }

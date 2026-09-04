@@ -46,6 +46,7 @@ private:
 	void applyMusicConfiguration();
 	void applySettingsToUi(const ofxICExample::ExampleSettings & settings);
 	void applyLocalRuntimeDefaults();
+	void rescanInstalledRuntimes();
 	ofxICExample::ExampleSettings settingsFromUi() const;
 	void saveExampleSettings();
 	void resetExampleSettings();
@@ -54,15 +55,13 @@ private:
 	void updateLocalLlamaServer();
 	void startLocalStableDiffusionServer();
 	void stopLocalStableDiffusionServer();
+	std::string stableDiffusionRuntimeSignature() const;
 	void startLocalAceStepServer();
 	void stopLocalAceStepServer();
 	void startLocalWhisperServer();
 	void stopLocalWhisperServer();
 	void startLocalSamBridge();
 	void stopLocalSamBridge();
-	void startRuntimeInstaller(const std::string & runtime,
-		const std::string & script, const std::vector<std::string> & arguments = {});
-	void updateRuntimeInstaller();
 	void updateManagedProcess(ofxICExample::ManagedProcess & process,
 		std::string & processStatus, const std::string & logName);
 	void configureRuntimeAutomation();
@@ -96,6 +95,7 @@ private:
 	void inspectSegmentationBridge();
 	void segmentImage();
 	void generateMedia();
+	void inspectMediaContext();
 	void generateMusic();
 	void finishWorker();
 	void finishMediaWorker();
@@ -161,6 +161,7 @@ private:
 	bool stableDiffusionOffloadToCpu = false;
 	ofxICExample::ManagedProcess stableDiffusionProcess;
 	std::string stableDiffusionActiveModelPath;
+	std::string stableDiffusionActiveRuntimeSignature;
 	std::string stableDiffusionServerStatus = "Local sd-server is stopped.";
 	std::array<char, 1024> aceStepServerPath{};
 	std::string detectedAceStepServerPath;
@@ -189,10 +190,8 @@ private:
 	std::uint64_t runtimeAutomationTimeoutMillis = 900000;
 	bool runtimeAutomationPlanOnly = false;
 	bool runtimeAutomationFinished = false;
-	ofxICExample::ManagedProcess installerProcess;
-	std::string installerTarget;
-	std::string installerStatus = "No runtime installer is currently running.";
-	bool installerCompletionHandled = true;
+	std::string runtimeSetupStatus =
+		"Fixed versions are defined in the scripts; pinning alone does not prove compatibility.";
 	std::array<char, 256> transcriptionModel{};
 	std::array<char, 256> mediaImageModel{};
 	std::array<char, 256> mediaVideoModel{};
@@ -210,6 +209,12 @@ private:
 	int mediaHeight = 512;
 	int mediaFrames = 33;
 	int mediaFps = 16;
+	int mediaSeed = -1;
+	int mediaSteps = 28;
+	float mediaGuidance = 7.0f;
+	std::string mediaSampler;
+	std::string mediaScheduler;
+	std::string mediaOutputFormat;
 	int musicDuration = 30;
 	int musicOutputFormat = 0;
 	bool configurationDirty = false;
@@ -280,6 +285,9 @@ private:
 	bool pendingMediaIsVideo = false;
 	ofxIC::MediaJob currentMediaJob;
 	ofxIC::MediaJob pendingMediaJob;
+	ofxIC::MediaCapabilities currentMediaCapabilities;
+	ofxIC::MediaCapabilities pendingMediaCapabilities;
+	bool pendingMediaCapabilitiesReady = false;
 	ofxIC::StabilityAudioJob currentMusicJob;
 	ofxIC::StabilityAudioJob pendingMusicJob;
 	ofxIC::AceStepMusicJob currentAceStepMusicJob;

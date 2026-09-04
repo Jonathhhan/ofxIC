@@ -3,6 +3,30 @@
 `ofxIC` means **Inference Connector**. The addon owns client-side protocol and
 workflow state; inference remains in a separate local or hosted process.
 
+## Product vision
+
+`ofxIC` should make external inference feel native to an openFrameworks
+application without pretending that unlike runtimes share one implementation.
+The durable interaction is:
+
+```text
+connect -> inspect capabilities -> configure valid controls -> run asynchronously
+        -> observe progress -> preview/save -> recover or explain failure
+```
+
+The public addon provides typed protocol contracts, cancellation, bounded
+responses, and portable state values. Applications decide which endpoint to
+use, which files to expose, whether to supervise a local process, and what to
+persist. The workbench is the reference control plane: capability-first rather
+than provider-guessing, non-blocking by construction, explicit about ownership,
+and able to export privacy-aware evidence for support.
+
+The next convergence targets are durable resumption of supported remote jobs,
+portable user-defined endpoint profiles, and smaller workbench controllers.
+They become shared public abstractions only after two exercised consumers need
+the same behavior. Embedded runtimes, silent fallback, unrestricted tools, and
+generic model hierarchies remain outside the vision.
+
 ## Product path
 
 ```text
@@ -39,7 +63,10 @@ addon.
   admission, and a configurable runner timeout protect that process boundary.
 - `MediaClient` owns no runtime; it maps typed OpenAI image requests, native
   `stable-diffusion.cpp` jobs, and explicit Hugging Face fal-ai media jobs onto
-  configured endpoints.
+  configured endpoints. Its native capability contract exposes the loaded
+  model, modes, formats, limits, defaults, samplers, and schedulers so an
+  application can construct valid controls and reject stale contexts before a
+  job is created.
 - `StabilityAudioClient` owns no synthesizer or generic audio abstraction. It
   maps the documented Stable Audio 3 multipart submit/result protocol onto a
   separately configured Stability AI endpoint, validates job IDs and controls,
@@ -53,14 +80,32 @@ addon.
   lexical search. It does not watch directories or accept model-selected paths.
   Per-document, document-count, and total-chunk limits are checked before an
   addition becomes visible, so a rejected document cannot leave a partial index.
+  Chunk and overlap boundaries preserve complete code points in valid UTF-8;
+  this does not add Unicode case folding or repair malformed source text.
 - `ToolRegistry` is the execution allowlist; `ToolLoop` bounds repeated calls.
   Document-search output labels retrieved content as untrusted evidence; the
   regular example also tells the model never to treat source text as instructions.
+  The document tool accepts only its declared one-field JSON object: a non-empty
+  `query` string. Nested/duplicate/extra fields, trailing input and malformed
+  Unicode are rejected; escaped keys and UTF-16 surrogate pairs are decoded.
 - `ToolLoopProgress` exposes only its two observable phases—model request and
   allowlisted tool execution—without introducing a general agent event model.
 - Endpoint inspection, chat, and tool-loop cancellation is cooperative: the
   application owns the cancellation flag, while `ofxIC` forwards it through
   each HTTP request and rolls an incomplete conversational turn back.
+  The tool loop also checks before each handler and after progress callbacks.
+  Already-running handlers are not interrupted and completed tool side effects
+  are not undone. Failed handlers and round limits report `Validation` rather
+  than `None`. Transport/handler/progress exceptions propagate, while incomplete
+  chat history is rolled back. Operations on a session must be serialized and
+  callbacks must not mutate that session.
+- Numeric wire fields use the classic locale, independent of the application's
+  decimal separator and digit grouping. This includes chat sampling, image
+  dimensions, native/fal media parameters, SAM coordinates and document scores.
+  Non-finite sampling/guidance/coordinate values are rejected as `Validation`
+  before transport, including before capability inspection or provider mapping.
+  Finite-value clamping behavior is unchanged; serializers do not change the
+  application's global locale.
 - On headless Windows builds, non-streaming HTTP(S) uses WinHTTP. In an
   openFrameworks build, non-streaming HTTPS uses WinHTTP/Schannel so certificate
   and proxy handling follow native Windows trust, while streaming and
@@ -111,8 +156,27 @@ addon.
 - `example-documents` adds the allowlisted grounded-document path without adding
   process management, credential persistence, or model-selected filesystem access.
 - `ofxICExample` is the full integration workbench. It exercises every public
-  client and keeps credential storage, settings, installers, process control,
-  previews, and support diagnostics outside the addon core.
+  client and keeps credential storage, settings, installation guidance, process control,
+  previews, and support diagnostics outside the addon core. Context
+  fingerprinting, capability reconciliation, and safe-default policy live in a
+  tested example-internal component rather than accumulating in the UI class.
+
+### Runtime installation and compatibility
+
+Installers remain standalone, version-pinned scripts. The workbench copies
+plan/install commands and rescans installed paths; it neither executes
+installers nor checks upstream versions in the render loop. Server start/stop
+and inference remain separate from installation.
+
+Do not infer compatibility from discovery, folder names, version ordering, or
+a successful download. Pin changes require reviewing CLI and HTTP contracts,
+deterministic regression tests, and separately recorded live smoke evidence.
+Reserve `Compatible update available` for an explicitly validated target;
+an upstream release without evidence is `New upstream version - unvalidated`.
+Use `Addon update required` only for a known incompatible change. Currently no
+upstream update checker is implemented, so the GUI makes none of these claims.
+The scripts are the single source of version pins; no ecosystem manifest or
+duplicate GUI registry is introduced.
 
 ## Deliberately absent
 

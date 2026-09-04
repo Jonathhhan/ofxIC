@@ -44,6 +44,9 @@ struct ToolLoopResult {
 class ToolLoop {
 public:
 	ToolLoop(ChatSession & chat, const ToolRegistry & tools);
+	// Cancellation is checked between handlers, not inside a running handler.
+	// An incomplete run rolls back chat history, not side effects of executed
+	// tools. Callback exceptions propagate; callbacks must not mutate the session.
 	ToolLoopResult run(
 		const std::string & userMessage,
 		std::size_t maxToolRounds = 4,

@@ -72,19 +72,26 @@ OFXIC_TEST(media_client_surfaces_openai_image_error_detail) {
 }
 
 OFXIC_TEST(media_client_submits_native_image_job) {
+	int calls = 0;
 	ofxIC::HttpRequest captured;
 	ofxIC::Endpoint endpoint("http://localhost:1234", [&](const ofxIC::HttpRequest & request) {
-		captured = request;
 		ofxIC::HttpResponse response;
 		response.started = true;
-		response.status = 202;
-		response.body = R"({"id":"job-image","kind":"img_gen","status":"queued","poll_url":"/sdcpp/v1/jobs/job-image"})";
+		if (calls++ == 0) {
+			response.status = 200;
+			response.body = R"({"model":{"name":"sd_turbo.safetensors"},"supported_modes":["img_gen"],"output_formats_by_mode":{"img_gen":["png"]}})";
+		} else {
+			captured = request;
+			response.status = 202;
+			response.body = R"({"id":"job-image","kind":"img_gen","status":"queued","poll_url":"/sdcpp/v1/jobs/job-image"})";
+		}
 		return response;
 	});
 	ofxIC::MediaClient media(endpoint);
 	ofxIC::MediaJobRequest request;
 	request.kind = ofxIC::MediaKind::Image;
 	request.prompt = "A paper sculpture";
+	request.model = "G:/Models/sd_turbo.safetensors";
 	request.imageCount = 2;
 
 	const auto job = media.submit(request);
@@ -125,6 +132,11 @@ OFXIC_TEST(media_client_submits_and_polls_native_video_job) {
 	request.prompt = "A paper sculpture turning slowly";
 	request.videoFrames = 29;
 	request.fps = 12;
+	request.seed = 123;
+	request.steps = 24;
+	request.guidance = 4.5f;
+	request.sampleMethod = "euler";
+	request.scheduler = "simple";
 
 	const auto submittedJob = media.submit(request);
 	const auto completedJob = media.poll(submittedJob);
@@ -135,6 +147,11 @@ OFXIC_TEST(media_client_submits_and_polls_native_video_job) {
 	OFXIC_REQUIRE(submitted.url == "http://localhost:1234/sdcpp/v1/vid_gen");
 	OFXIC_REQUIRE(submitted.body.find("\"video_frames\":29") != std::string::npos);
 	OFXIC_REQUIRE(submitted.body.find("\"fps\":12") != std::string::npos);
+	OFXIC_REQUIRE(submitted.body.find("\"seed\":123") != std::string::npos);
+	OFXIC_REQUIRE(submitted.body.find("\"sample_steps\":24") != std::string::npos);
+	OFXIC_REQUIRE(submitted.body.find("\"txt_cfg\":4.5") != std::string::npos);
+	OFXIC_REQUIRE(submitted.body.find("\"sample_method\":\"euler\"") != std::string::npos);
+	OFXIC_REQUIRE(submitted.body.find("\"scheduler\":\"simple\"") != std::string::npos);
 	OFXIC_REQUIRE(submitted.body.find("\"output_format\":\"avi\"") != std::string::npos);
 	OFXIC_REQUIRE(submitted.body.find("batch_count") == std::string::npos);
 	OFXIC_REQUIRE(polled.url == "http://localhost:1234/sdcpp/v1/jobs/job-video");
@@ -311,6 +328,107 @@ OFXIC_TEST(media_client_explains_hugging_face_payment_required) {
 	OFXIC_REQUIRE(!failed);
 	OFXIC_REQUIRE(failed.httpStatus == 402);
 	OFXIC_REQUIRE(failed.error.find("inference credits or pay-as-you-go billing are required") != std::string::npos);
+}
+
+OFXIC_TEST(media_client_inspects_native_runtime_capabilities) {
+	ofxIC::Endpoint endpoint("http://localhost:1234", [](const ofxIC::HttpRequest & request) {
+		OFXIC_REQUIRE(request.url == "http://localhost:1234/sdcpp/v1/capabilities");
+		ofxIC::HttpResponse response;
+		response.started = true;
+		response.status = 200;
+		response.body = R"({"current_mode":"vid_gen","defaults":{"width":512,"height":384,"video_frames":33,"fps":16,"output_format":"avi"},"limits":{"min_width":64,"max_width":2048,"min_height":64,"max_height":1024},"model":{"name":"Wan2.1.gguf"},"output_formats_by_mode":{"vid_gen":["avi","webm"]},"samplers":["euler","dpm++2m"],"schedulers":["simple","karras"],"supported_modes":["vid_gen"]})";
+		return response;
+	});
+	ofxIC::MediaClient media(endpoint);
+	const auto capabilities = media.inspectCapabilities();
+	OFXIC_REQUIRE(capabilities);
+	OFXIC_REQUIRE(capabilities.model == "Wan2.1.gguf");
+	OFXIC_REQUIRE(capabilities.currentMode == "vid_gen");
+	OFXIC_REQUIRE(capabilities.supports(ofxIC::MediaKind::Video));
+	OFXIC_REQUIRE(!capabilities.supports(ofxIC::MediaKind::Image));
+	OFXIC_REQUIRE(capabilities.videoOutputFormats.size() == 2);
+	OFXIC_REQUIRE(capabilities.minWidth == 64);
+	OFXIC_REQUIRE(capabilities.maxWidth == 2048);
+	OFXIC_REQUIRE(capabilities.minHeight == 64);
+	OFXIC_REQUIRE(capabilities.maxHeight == 1024);
+	OFXIC_REQUIRE(capabilities.defaultWidth == 512);
+	OFXIC_REQUIRE(capabilities.defaultHeight == 384);
+	OFXIC_REQUIRE(capabilities.defaultVideoFrames == 33);
+	OFXIC_REQUIRE(capabilities.defaultFps == 16);
+	OFXIC_REQUIRE(capabilities.defaultOutputFormat == "avi");
+	OFXIC_REQUIRE(capabilities.samplers.size() == 2);
+	OFXIC_REQUIRE(capabilities.schedulers.size() == 2);
+}
+
+OFXIC_TEST(media_client_rejects_dimensions_outside_loaded_context_limits) {
+	int calls = 0;
+	ofxIC::Endpoint endpoint("http://localhost:1234", [&](const ofxIC::HttpRequest &) {
+		++calls;
+		ofxIC::HttpResponse response;
+		response.started = true;
+		response.status = 200;
+		response.body = R"({"limits":{"min_width":64,"max_width":1024,"min_height":64,"max_height":1024},"model":{"name":"sd_turbo.safetensors"},"supported_modes":["img_gen"]})";
+		return response;
+	});
+	ofxIC::MediaClient media(endpoint);
+	ofxIC::MediaJobRequest request;
+	request.kind = ofxIC::MediaKind::Image;
+	request.prompt = "Too wide";
+	request.model = "sd_turbo.safetensors";
+	request.width = 2048;
+	request.height = 512;
+
+	const auto failed = media.submit(request);
+	OFXIC_REQUIRE(!failed);
+	OFXIC_REQUIRE(failed.error.find("2048x512") != std::string::npos);
+	OFXIC_REQUIRE(failed.error.find("outside the loaded context limits") != std::string::npos);
+	OFXIC_REQUIRE(calls == 1);
+}
+
+OFXIC_TEST(media_client_rejects_unsupported_capability_choice_before_submission) {
+	int calls = 0;
+	ofxIC::Endpoint endpoint("http://localhost:1234", [&](const ofxIC::HttpRequest &) {
+		++calls;
+		ofxIC::HttpResponse response;
+		response.started = true;
+		response.status = 200;
+		response.body = R"({"model":{"name":"sd_turbo.safetensors"},"supported_modes":["img_gen"],"output_formats_by_mode":{"img_gen":["png"]},"samplers":["euler"],"schedulers":["simple"]})";
+		return response;
+	});
+	ofxIC::MediaClient media(endpoint);
+	ofxIC::MediaJobRequest request;
+	request.kind = ofxIC::MediaKind::Image;
+	request.prompt = "Unsupported sampler";
+	request.model = "sd_turbo.safetensors";
+	request.sampleMethod = "not-a-sampler";
+
+	const auto failed = media.submit(request);
+	OFXIC_REQUIRE(!failed);
+	OFXIC_REQUIRE(failed.error == "loaded context does not support sampler not-a-sampler");
+	OFXIC_REQUIRE(calls == 1);
+}
+
+OFXIC_TEST(media_client_rejects_image_when_another_context_is_loaded) {
+	int calls = 0;
+	ofxIC::Endpoint endpoint("http://localhost:1234", [&](const ofxIC::HttpRequest &) {
+		++calls;
+		ofxIC::HttpResponse response;
+		response.started = true;
+		response.status = 200;
+		response.body = R"({"model":{"name":"Wan2.1-T2V.gguf"},"supported_modes":["vid_gen"]})";
+		return response;
+	});
+	ofxIC::MediaClient media(endpoint);
+	ofxIC::MediaJobRequest request;
+	request.kind = ofxIC::MediaKind::Image;
+	request.prompt = "A paper sculpture";
+	request.model = "G:/Models/sd_turbo.safetensors";
+
+	const auto failed = media.submit(request);
+	OFXIC_REQUIRE(!failed);
+	OFXIC_REQUIRE(failed.error.find("loaded Wan2.1-T2V.gguf") != std::string::npos);
+	OFXIC_REQUIRE(failed.error.find("selected context is sd_turbo.safetensors") != std::string::npos);
+	OFXIC_REQUIRE(calls == 1);
 }
 
 OFXIC_TEST(media_client_rejects_video_when_loaded_model_is_image_only) {

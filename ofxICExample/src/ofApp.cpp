@@ -1,5 +1,6 @@
 #include "ofApp.h"
 #include "ExampleMediaModelPolicy.h"
+#include "ExampleMediaContextPolicy.h"
 #include "ExampleAtomicFile.h"
 #include "ExampleRuntimePaths.h"
 
@@ -193,9 +194,8 @@ std::string installedServerExecutable(const std::string & familyPrefix,
 	const std::filesystem::path root(installedServerRoot());
 	if (root.empty()) return {};
 	// These are the stable locations produced by the pinned Windows installers.
-	// Load them directly instead of making GUI startup depend on a recursive
-	// LocalAppData traversal. The generic search remains available for older or
-	// manually installed runtime layouts.
+	// Probe them first to avoid a recursive traversal for normal installations.
+	// Missing preferred files fall back to version-independent discovery.
 	std::filesystem::path installed;
 	if (familyPrefix == "llama.cpp-" && executableName == "llama-server.exe")
 		installed = root / "llama.cpp-b10516-cuda-13.3" / executableName;
@@ -211,9 +211,8 @@ std::string installedServerExecutable(const std::string & familyPrefix,
 		installed = root / "sam-python-1-cuda-13" / ".venv" / "Scripts" / executableName;
 	else if (familyPrefix == "sam-python-" && executableName == "sam-python-runner.py")
 		installed = root / "sam-python-1-cuda-13" / executableName;
-	if (!installed.empty()) return installed.lexically_normal().string();
 	return ofxICExample::findInstalledExecutable(
-		root.string(), familyPrefix, executableName);
+		root.string(), familyPrefix, executableName, installed.string());
 }
 
 bool isNativeAceStepServer(const std::string & path) {
@@ -432,6 +431,36 @@ std::string bundledScript(const std::string & filename) {
 		directory = directory.parent_path();
 	}
 	return {};
+}
+
+std::string powerShellLiteral(const std::string & value) {
+	std::string quoted = "'";
+	for (char character : value) {
+		quoted += character;
+		if (character == '\'') quoted += '\'';
+	}
+	return quoted + "'";
+}
+
+std::string runtimeInstallerCommand(const std::string & scriptName,
+	const std::string & extraArguments = {}, bool plan = false) {
+	const std::string resolved = bundledScript(scriptName);
+	if (resolved.empty()) return {};
+	std::string command = "powershell.exe -NoProfile -ExecutionPolicy Bypass -File " +
+		powerShellLiteral(resolved);
+	if (!extraArguments.empty()) command += " " + extraArguments;
+	if (plan) command += " -Plan";
+	return command;
+}
+
+std::string runtimeInstallIdentity(const std::string & executable,
+	int parentLevels = 1) {
+	if (executable.empty()) return "not detected";
+	std::filesystem::path directory = std::filesystem::path(executable).parent_path();
+	for (int level = 1; level < parentLevels && directory.has_parent_path(); ++level)
+		directory = directory.parent_path();
+	const std::string identity = directory.filename().string();
+	return identity.empty() ? "installed" : identity;
 }
 
 std::string bundledSamBridgeScript() {
@@ -743,12 +772,22 @@ ofApp::ofApp()
 	applyLocalRuntimeDefaults();
 }
 
+void ofApp::rescanInstalledRuntimes() {
+	// Refresh only discovery evidence. Never reapply settings, choose models,
+	// overwrite selected executables, or restart a process during a rescan.
+	detectedLlamaServerPath = installedServerExecutable("llama.cpp-", "llama-server.exe");
+	detectedStableDiffusionServerPath = installedServerExecutable("stable-diffusion.cpp-", "sd-server.exe");
+	detectedAceStepServerPath = installedAceStepServer();
+	detectedWhisperServerPath = installedServerExecutable("whisper.cpp-", "whisper-server.exe");
+	detectedSamPythonPath = installedServerExecutable("sam-python-", "python.exe");
+	detectedSamRunnerPath = installedServerExecutable("sam-python-", "sam-python-runner.py");
+	ofLogNotice("ofxIC servers") << "search root: " << installedServerRoot();
+}
+
 void ofApp::applyLocalRuntimeDefaults() {
-	const std::string installedLlamaServer = installedServerExecutable("llama.cpp-", "llama-server.exe");
-	ofLogNotice("ofxIC servers") << "search root: " <<
-		(localAppDataDirectory() / "ofxIC" / "servers").string();
+	rescanInstalledRuntimes();
+	const std::string & installedLlamaServer = detectedLlamaServerPath;
 	if (!installedLlamaServer.empty()) {
-		detectedLlamaServerPath = installedLlamaServer;
 		if (!ofxICExample::executableFileExists(llamaServerPath.data()))
 			setTextBuffer(llamaServerPath, installedLlamaServer);
 		llamaServerStatus = "Script-installed llama-server detected.";
@@ -768,10 +807,8 @@ void ofApp::applyLocalRuntimeDefaults() {
 	if (!llamaModelDirectory[0] && externalModels.exists())
 		setTextBuffer(llamaModelDirectory, "G:/Models");
 	detectedLlamaModels = detectedLlamaModelPaths(llamaModelDirectory.data());
-	const std::string installedSdServer = installedServerExecutable(
-		"stable-diffusion.cpp-", "sd-server.exe");
+	const std::string & installedSdServer = detectedStableDiffusionServerPath;
 	if (!installedSdServer.empty()) {
-		detectedStableDiffusionServerPath = installedSdServer;
 		if (!ofxICExample::executableFileExists(stableDiffusionServerPath.data()))
 			setTextBuffer(stableDiffusionServerPath, installedSdServer);
 		stableDiffusionServerStatus = "Script-installed sd-server detected.";
@@ -783,9 +820,8 @@ void ofApp::applyLocalRuntimeDefaults() {
 	}
 	if (!aceStepModelDirectory[0] && externalModels.exists())
 		setTextBuffer(aceStepModelDirectory, "G:/Models");
-	const std::string installedAceStep = installedAceStepServer();
+	const std::string & installedAceStep = detectedAceStepServerPath;
 	if (!installedAceStep.empty()) {
-		detectedAceStepServerPath = installedAceStep;
 		const bool oldManagedPython = !isNativeAceStepServer(aceStepServerPath.data()) &&
 			managedAceStepArguments(aceStepServerArguments.data());
 		if (!ofxICExample::executableFileExists(aceStepServerPath.data()) ||
@@ -808,10 +844,8 @@ void ofApp::applyLocalRuntimeDefaults() {
 			ofxICExample::installedExecutableSearchDiagnostic(installedServerRoot(),
 				"ACE-Step-1.5-", "python.exe");
 	}
-	const std::string installedWhisper = installedServerExecutable(
-		"whisper.cpp-", "whisper-server.exe");
+	const std::string & installedWhisper = detectedWhisperServerPath;
 	if (!installedWhisper.empty()) {
-		detectedWhisperServerPath = installedWhisper;
 		if (!ofxICExample::executableFileExists(whisperServerPath.data()))
 			setTextBuffer(whisperServerPath, installedWhisper);
 		whisperServerStatus = "Script-installed whisper-server detected; select a model.";
@@ -831,12 +865,8 @@ void ofApp::applyLocalRuntimeDefaults() {
 	}
 	const std::string samBridge = bundledSamBridgeScript();
 #if defined(_WIN32)
-	const std::string installedSamPython = installedServerExecutable(
-		"sam-python-", "python.exe");
-	const std::string installedSamRunner = installedServerExecutable(
-		"sam-python-", "sam-python-runner.py");
-	detectedSamPythonPath = installedSamPython;
-	detectedSamRunnerPath = installedSamRunner;
+	const std::string & installedSamPython = detectedSamPythonPath;
+	const std::string & installedSamRunner = detectedSamRunnerPath;
 	const std::string python = installedSamPython.empty()
 		? executableOnPath("python.exe") : installedSamPython;
 	if (!python.empty() && !samBridge.empty() &&
@@ -1067,7 +1097,6 @@ void ofApp::update() {
 	updateManagedProcess(whisperProcess, whisperServerStatus, "whisper.cpp server");
 	updateManagedProcess(samBridgeProcess, samBridgeProcessStatus, "SAM bridge");
 	updateRuntimeAutomation();
-	updateRuntimeInstaller();
 	continueDeferredTask();
 	if (pendingInspectAutorun && !busy) {
 		pendingInspectAutorun = false;
@@ -1136,6 +1165,7 @@ void ofApp::update() {
 		mediaBusy = false;
 		std::string savedPath;
 		bool isVideo = false;
+		bool receivedCapabilities = false;
 		{
 			std::lock_guard<std::mutex> lock(mediaResultMutex);
 			mediaStatus = std::move(pendingMediaStatus);
@@ -1145,6 +1175,22 @@ void ofApp::update() {
 			savedPath = std::move(pendingMediaSavedPath);
 			isVideo = pendingMediaIsVideo;
 			pendingMediaIsVideo = false;
+			if (pendingMediaCapabilitiesReady) {
+				currentMediaCapabilities = std::move(pendingMediaCapabilities);
+				pendingMediaCapabilitiesReady = false;
+				receivedCapabilities = true;
+			}
+		}
+		if (receivedCapabilities && currentMediaCapabilities) {
+			ofxICExample::MediaControlSelection selection{
+				selectedMediaKind, mediaSampler, mediaScheduler, mediaOutputFormat };
+			ofxICExample::reconcileMediaControls(currentMediaCapabilities,
+				ofxICExample::mediaModelMatches(currentMediaCapabilities.model,
+					stableDiffusionModelPath.data()), selection);
+			selectedMediaKind = selection.kind;
+			mediaSampler = std::move(selection.sampler);
+			mediaScheduler = std::move(selection.scheduler);
+			mediaOutputFormat = std::move(selection.outputFormat);
 		}
 		if (!savedPath.empty()) {
 				if (isVideo) {
@@ -1152,7 +1198,13 @@ void ofApp::update() {
 					generatedVideo.close();
 					if (generatedVideo.load(savedPath)) {
 						generatedVideo.setLoopState(OF_LOOP_NORMAL);
+						generatedVideo.setSpeed(1.0f);
+						generatedVideo.setPosition(0.0f);
 						generatedVideo.play();
+						generatedVideo.setPaused(false);
+						mediaOutput += "\nPreview loaded with " +
+							ofToString(currentMediaJob.frameCount) + " frames at " +
+							ofToString(currentMediaJob.fps) + " FPS.";
 					} else {
 						mediaOutput += "\nThe video was generated and saved, but the local player could not decode this container.";
 					}
@@ -1229,6 +1281,8 @@ void ofApp::draw() {
 	bool inspectSegmentationBridgeRequested = false;
 	bool segmentImageRequested = false;
 	bool generateMediaRequested = false;
+	bool inspectMediaContextRequested = false;
+	bool applyMediaDefaultsRequested = false;
 	bool generateMusicRequested = false;
 	bool saveMusicTokenRequested = false;
 	bool forgetMusicTokenRequested = false;
@@ -1263,10 +1317,6 @@ void ofApp::draw() {
 	bool chooseSamModelRequested = false;
 	bool startSamBridgeRequested = false;
 	bool stopSamBridgeRequested = false;
-	bool installAceStepRequested = false;
-	bool installWhisperRequested = false;
-	bool installSamRequested = false;
-	bool cancelInstallerRequested = false;
 	bool rescanInstalledRuntimesRequested = false;
 
 	gui.begin();
@@ -1438,7 +1488,7 @@ void ofApp::draw() {
 			ImGui::TableHeadersRow();
 			const auto configuration = [](bool executable, bool model,
 				const char * modelLabel = "model") {
-				if (executable && model) return std::string("ready");
+				if (executable && model) return std::string("configured");
 				if (!executable && !model)
 					return std::string("missing executable + ") + modelLabel;
 				return executable ? std::string("missing ") + modelLabel
@@ -1448,7 +1498,7 @@ void ofApp::draw() {
 				const char * id, const ofxICExample::ManagedProcess & process,
 				const std::string & configurationState,
 				bool & startRequested, bool & stopRequested) {
-				const bool configured = configurationState == "ready";
+				const bool configured = configurationState == "configured";
 				ImGui::TableNextRow();
 				ImGui::TableSetColumnIndex(0); ImGui::TextUnformatted(name);
 				ImGui::TableSetColumnIndex(1);
@@ -1495,24 +1545,73 @@ void ofApp::draw() {
 			ImGui::EndTable();
 		}
 		ImGui::TextDisabled(
+			"Configured means paths are set, not that files are accessible or the server is ready.");
+		ImGui::TextDisabled(
 			"Failed starts remain actionable: open the matching task tab for the exact status and server output.");
-		if (installerProcess.running()) ImGui::SetNextItemOpen(true, ImGuiCond_Always);
-		if (ImGui::CollapsingHeader("Install missing runtimes")) {
-		ImGui::TextWrapped(
-			"Installers place external CUDA runtimes under %%LOCALAPPDATA%%\\ofxIC\\servers. "
-			"They remain separate processes and are detected automatically when installation completes.");
-		ImGui::BeginDisabled(installerProcess.running());
-		installWhisperRequested = ImGui::Button("Install Whisper + base model");
-		ImGui::SameLine();
-		installAceStepRequested = ImGui::Button("Install ACE-Step native CUDA");
-		ImGui::SameLine();
-		installSamRequested = ImGui::Button("Install SAM CUDA 13");
-		ImGui::EndDisabled();
-		if (installerProcess.running()) {
-			ImGui::SameLine();
-			cancelInstallerRequested = ImGui::Button("Cancel installation");
-		}
-			drawRuntimeStatus(installerProcess, installerStatus, "installer");
+		if (ImGui::CollapsingHeader("Runtime setup (Windows)")) {
+			ImGui::TextWrapped(
+				"Copy a command and run it in PowerShell. Plan shows versions and destinations without "
+				"installing; install uses the bundled script's fixed version. Then rescan above. "
+				"No downloads or update checks run in the GUI.");
+			if (ImGui::BeginTable("runtime-installers", 4,
+				ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingStretchProp)) {
+				ImGui::TableSetupColumn("Runtime");
+				ImGui::TableSetupColumn("Detected package folder");
+				ImGui::TableSetupColumn("Policy");
+				ImGui::TableSetupColumn("Script command");
+				ImGui::TableHeadersRow();
+				const auto installerRow = [&](const char * name, const char * id,
+					const std::string & installedPath, int parentLevels,
+					const char * script, const std::string & arguments, const char * policy) {
+					// Resolve scripts only on user action, never on every rendered frame.
+					const auto copyCommand = [&](bool plan) {
+						const std::string command = runtimeInstallerCommand(script, arguments, plan);
+						if (command.empty()) {
+							runtimeSetupStatus = std::string("Script not found: ") + script +
+								". Use the scripts directory from the addon checkout.";
+							return;
+						}
+						ImGui::SetClipboardText(command.c_str());
+						runtimeSetupStatus = std::string(name) +
+							(plan ? " plan" : " install") + " command copied:\n" + command;
+					};
+					ImGui::TableNextRow();
+					ImGui::TableSetColumnIndex(0); ImGui::TextUnformatted(name);
+					ImGui::TableSetColumnIndex(1);
+					const bool installed = !installedPath.empty();
+					ImGui::TextColored(installed
+						? ImVec4(0.24f, 0.82f, 0.45f, 1.0f)
+						: ImVec4(0.95f, 0.72f, 0.22f, 1.0f), "%s",
+						runtimeInstallIdentity(installedPath, parentLevels).c_str());
+					if (installed && ImGui::IsItemHovered())
+						ImGui::SetTooltip("%s", installedPath.c_str());
+					ImGui::TableSetColumnIndex(2); ImGui::TextWrapped("%s", policy);
+					ImGui::TableSetColumnIndex(3);
+					const std::string planButton = std::string("Copy plan##runtime-plan-") + id;
+					if (ImGui::SmallButton(planButton.c_str())) copyCommand(true);
+					ImGui::SameLine();
+					const std::string installButton = std::string("Copy install##runtime-install-") + id;
+					if (ImGui::SmallButton(installButton.c_str())) copyCommand(false);
+					if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", script);
+				};
+				installerRow("llama.cpp", "llama", detectedLlamaServerPath, 1,
+					"install-llama-server.ps1", "", "Pinned binary + SHA-256");
+				installerRow("stable-diffusion.cpp", "sd", detectedStableDiffusionServerPath, 1,
+					"install-stable-diffusion-server.ps1", "", "Pinned binary + SHA-256");
+				installerRow("whisper.cpp", "whisper", detectedWhisperServerPath, 1,
+					"install-whisper-server.ps1", "", "Pinned binary + base model");
+				installerRow("ACE-Step", "acestep", detectedAceStepServerPath, 1,
+					"install-acestep-server.ps1", "", "Pinned source commit + CUDA build");
+				installerRow("SAM", "sam", detectedSamPythonPath, 3,
+					"install-sam-server.ps1", samModelPath[0]
+						? "-ExistingModel " + powerShellLiteral(samModelPath.data())
+						: "-DownloadModel", "Pinned Python/CUDA environment");
+				ImGui::EndTable();
+			}
+			ImGui::TextWrapped("%s", runtimeSetupStatus.c_str());
+			ImGui::TextWrapped(
+				"Detection is a path snapshot, not a compatibility test. Custom executables remain "
+				"selectable in the task tabs. A newer upstream release is not a validated addon update.");
 		}
 		if (deferredTask != DeferredTask::None) {
 			ImGui::SeparatorText("Queued task");
@@ -1805,16 +1904,50 @@ void ofApp::draw() {
 		selectedMediaBackend == 2 ? "checked from loaded model" :
 			(mediaProfile.supportsVideo ? "yes" : "no"));
 	ImGui::TextWrapped("%s", mediaProfile.capabilityNote);
+	const bool inspectedContextMatchesSelection = selectedMediaBackend == 2 &&
+		currentMediaCapabilities &&
+		ofxICExample::mediaModelMatches(currentMediaCapabilities.model,
+			stableDiffusionModelPath.data());
+	if (selectedMediaBackend == 2 && currentMediaCapabilities) {
+		ImGui::SeparatorText("Loaded context");
+		ImGui::Text("Model: %s", currentMediaCapabilities.model.empty()
+			? "<unknown>" : currentMediaCapabilities.model.c_str());
+		ImGui::Text("Mode: %s", currentMediaCapabilities.currentMode.empty()
+			? "<unspecified>" : currentMediaCapabilities.currentMode.c_str());
+		ImGui::TextDisabled("Image: %s | Video: %s%s",
+			currentMediaCapabilities.supports(ofxIC::MediaKind::Image) ? "yes" : "no",
+			currentMediaCapabilities.supports(ofxIC::MediaKind::Video) ? "yes" : "no",
+			inspectedContextMatchesSelection ? "" : " | selection differs");
+		if (currentMediaCapabilities.minWidth > 0 && currentMediaCapabilities.maxWidth > 0 &&
+			currentMediaCapabilities.minHeight > 0 && currentMediaCapabilities.maxHeight > 0)
+			ImGui::TextDisabled("Size limits: %d-%d x %d-%d",
+				currentMediaCapabilities.minWidth, currentMediaCapabilities.maxWidth,
+				currentMediaCapabilities.minHeight, currentMediaCapabilities.maxHeight);
+		if (currentMediaCapabilities.defaultWidth > 0 && currentMediaCapabilities.defaultHeight > 0)
+			ImGui::TextDisabled("Server defaults: %dx%d | %d frames | %d FPS | %s",
+				currentMediaCapabilities.defaultWidth, currentMediaCapabilities.defaultHeight,
+				currentMediaCapabilities.defaultVideoFrames, currentMediaCapabilities.defaultFps,
+				currentMediaCapabilities.defaultOutputFormat.empty() ? "format unspecified" :
+					currentMediaCapabilities.defaultOutputFormat.c_str());
+		if (inspectedContextMatchesSelection)
+			applyMediaDefaultsRequested = ImGui::Button("Apply server defaults");
+	}
 	if (selectedMediaBackend == 2) {
 		const auto inferred = ofxICExample::inferMediaModelKind(stableDiffusionModelPath.data());
 		if (inferred)
 			ImGui::TextDisabled("Selected model type: %s (inferred from model family)",
 				*inferred == ofxICExample::MediaModelKind::Video ? "Video" : "Image");
 	}
-	if (mediaProfile.supportsImage && mediaProfile.supportsVideo) {
+	const bool effectiveImageSupport = mediaProfile.supportsImage &&
+		(!inspectedContextMatchesSelection ||
+			currentMediaCapabilities.supports(ofxIC::MediaKind::Image));
+	const bool effectiveVideoSupport = mediaProfile.supportsVideo &&
+		(!inspectedContextMatchesSelection ||
+			currentMediaCapabilities.supports(ofxIC::MediaKind::Video));
+	if (effectiveImageSupport && effectiveVideoSupport) {
 		ImGui::Combo("Kind", &selectedMediaKind, mediaKinds, 2);
 	} else {
-		selectedMediaKind = mediaProfile.supportsVideo ? 1 : 0;
+		selectedMediaKind = effectiveVideoSupport ? 1 : 0;
 		ImGui::Text("Kind: %s", mediaKinds[selectedMediaKind]);
 	}
 	if (selectedMediaBackend != 1) {
@@ -1840,12 +1973,41 @@ void ofApp::draw() {
 		ImGui::SameLine();
 		ImGui::InputInt("FPS", &mediaFps);
 	}
+	if (selectedMediaBackend == 2 && ImGui::CollapsingHeader("Advanced generation")) {
+		ImGui::InputInt("Steps", &mediaSteps);
+		ImGui::SliderFloat("Guidance", &mediaGuidance, 0.0f, 30.0f, "%.2f");
+		ImGui::InputInt("Seed (-1 = random)", &mediaSeed);
+		const auto capabilityChoice = [](const char * label, std::string & selected,
+			const std::vector<std::string> & values) {
+			const char * preview = selected.empty() ? "server default" : selected.c_str();
+			if (!ImGui::BeginCombo(label, preview)) return;
+			if (ImGui::Selectable("server default", selected.empty())) selected.clear();
+			for (const auto & value : values)
+				if (ImGui::Selectable(value.c_str(), selected == value)) selected = value;
+			ImGui::EndCombo();
+		};
+		capabilityChoice("Sampler", mediaSampler, currentMediaCapabilities.samplers);
+		capabilityChoice("Scheduler", mediaScheduler, currentMediaCapabilities.schedulers);
+		const auto & formats = selectedMediaKind == 1
+			? currentMediaCapabilities.videoOutputFormats
+			: currentMediaCapabilities.imageOutputFormats;
+		capabilityChoice("Output format", mediaOutputFormat, formats);
+		if (!currentMediaCapabilities)
+			ImGui::TextDisabled("Inspect the loaded context to populate capability choices.");
+	}
 	const char * generateLabel = selectedMediaBackend == 1
 		? (selectedMediaKind == 0 ? "Generate HF image" : "Submit HF video")
 		: (selectedMediaBackend == 2
 			? (selectedMediaKind == 0 ? "Generate local image" : "Generate local video")
 			: "Generate OpenAI image");
 	generateMediaRequested = ImGui::Button(generateLabel);
+	if (selectedMediaBackend == 2) {
+		ImGui::SameLine();
+		ImGui::BeginDisabled(stableDiffusionProcess.state() !=
+			ofxICExample::ManagedProcessState::Ready);
+		inspectMediaContextRequested = ImGui::Button("Inspect loaded context");
+		ImGui::EndDisabled();
+	}
 	ImGui::EndDisabled();
 	if (mediaBusy) {
 		ImGui::SameLine();
@@ -1866,6 +2028,11 @@ void ofApp::draw() {
 		ImGui::Image(
 			(ImTextureID)(uintptr_t)generatedVideo.getTexture().getTextureData().textureID,
 			fitMediaPreview(generatedVideo.getWidth(), generatedVideo.getHeight()));
+		ImGui::TextDisabled("Playback: frame %d / %d | %.1f%% | %s",
+			generatedVideo.getCurrentFrame(), generatedVideo.getTotalNumFrames(),
+			generatedVideo.getPosition() * 100.0f,
+			generatedVideo.isPaused() ? "paused" :
+				(generatedVideo.isPlaying() ? "playing" : "stopped"));
 		if (ImGui::Button(generatedVideo.isPaused() ? "Resume video" : "Pause video"))
 			generatedVideo.setPaused(!generatedVideo.isPaused());
 		ImGui::SameLine();
@@ -1899,8 +2066,8 @@ void ofApp::draw() {
 		ImGui::SameLine();
 		if (ImGui::Button("Detect installed##ace")) {
 			const std::string detected = installedAceStepServer();
+			detectedAceStepServerPath = detected;
 			if (!detected.empty()) {
-				detectedAceStepServerPath = detected;
 				setTextBuffer(aceStepServerPath, detected);
 				if (managedAceStepArguments(aceStepServerArguments.data()))
 					setTextBuffer(aceStepServerArguments, defaultAceStepArguments(
@@ -2087,8 +2254,10 @@ void ofApp::draw() {
 	ImGui::End();
 	gui.end();
 	if (rescanInstalledRuntimesRequested) {
-		applyLocalRuntimeDefaults();
-		ofLogNotice("ofxIC servers") << "Installed runtime rescan completed.";
+		rescanInstalledRuntimes();
+		runtimeSetupStatus = "Rescan completed. Detection refreshed; selected paths, models and running servers unchanged. "
+			"Use Detect installed in a task tab to select a detected executable.";
+		ofLogNotice("ofxIC servers") << runtimeSetupStatus;
 	}
 	if (exportDiagnosticsRequested) {
 		const std::string filename = "ofxIC-diagnostics-" +
@@ -2192,24 +2361,6 @@ void ofApp::draw() {
 	if (chooseSamModelRequested) choosePath("Choose Meta SAM checkpoint", samModelPath);
 	if (startSamBridgeRequested) startLocalSamBridge();
 	if (stopSamBridgeRequested) stopLocalSamBridge();
-	if (installWhisperRequested)
-		startRuntimeInstaller("Whisper", "install-whisper-server.ps1");
-	if (installAceStepRequested)
-		startRuntimeInstaller("ACE-Step native CUDA", "install-acestep-server.ps1");
-	if (installSamRequested) {
-		std::vector<std::string> arguments;
-		const std::string model = ofFile::doesFileExist(samModelPath.data())
-			? std::string(samModelPath.data()) : detectedSamModel();
-		if (!model.empty()) arguments = { "-ExistingModel", model };
-		else arguments = { "-DownloadModel" };
-		startRuntimeInstaller("SAM CUDA 13", "install-sam-server.ps1", arguments);
-	}
-	if (cancelInstallerRequested) {
-		installerProcess.stop();
-		installerCompletionHandled = true;
-		installerStatus = "Runtime installation cancelled; incomplete installers clean their own staging data when possible.";
-	}
-
 	if (loadDocumentRequested && !taskLocked) {
 		ofFileDialogResult selection = ofSystemLoadDialog("Load a Markdown or text document");
 		if (selection.bSuccess) loadDocument(selection.getPath());
@@ -2265,6 +2416,14 @@ void ofApp::draw() {
 	if (generateMediaRequested) {
 		if (mediaConfigurationDirty) applyMediaConfiguration();
 		generateMedia();
+	}
+	if (inspectMediaContextRequested) {
+		if (mediaConfigurationDirty) applyMediaConfiguration();
+		inspectMediaContext();
+	}
+	if (applyMediaDefaultsRequested) {
+		ofxICExample::applySafeMediaDefaults(currentMediaCapabilities,
+			mediaWidth, mediaHeight, mediaFrames, mediaFps);
 	}
 	if (saveMusicTokenRequested) {
 		saveTokenCredential("STABILITY_API_KEY", musicTokenInput);
@@ -2328,7 +2487,6 @@ void ofApp::exit() {
 	stopLocalAceStepServer();
 	stopLocalWhisperServer();
 	stopLocalSamBridge();
-	installerProcess.stop();
 }
 
 void ofApp::startLocalLlamaServer() {
@@ -2781,6 +2939,15 @@ std::string ofApp::diagnosticsReport() const {
 		<< "transcription.endpoint=" << diagnosticEndpoint(transcriptionEndpointUrl.data()) << '\n'
 		<< "media.backend=" << mediaBackends[selectedMediaBackend].name << '\n'
 		<< "media.endpoint=" << diagnosticEndpoint(mediaEndpointUrl.data()) << '\n'
+		<< "media.kind=" << (selectedMediaKind == 1 ? "video" : "image") << '\n'
+		<< "media.size=" << mediaWidth << 'x' << mediaHeight << '\n'
+		<< "media.frames=" << mediaFrames << '\n'
+		<< "media.fps=" << mediaFps << '\n'
+		<< "media.steps=" << mediaSteps << '\n'
+		<< "media.guidance=" << mediaGuidance << '\n'
+		<< "media.sampler=" << diagnosticText(mediaSampler.empty() ? "server-default" : mediaSampler) << '\n'
+		<< "media.scheduler=" << diagnosticText(mediaScheduler.empty() ? "server-default" : mediaScheduler) << '\n'
+		<< "media.output_format=" << diagnosticText(mediaOutputFormat.empty() ? "server-default" : mediaOutputFormat) << '\n'
 		<< "music.backend=" << musicBackends[selectedMusicBackend].name << '\n'
 		<< "music.endpoint=" << diagnosticEndpoint(musicEndpointUrl.data()) << '\n'
 		<< "sam.endpoint=" << diagnosticEndpoint(segmentationEndpointUrl.data()) << '\n'
@@ -2839,9 +3006,10 @@ bool ofApp::exportDiagnostics(const std::string & path) {
 }
 
 void ofApp::startLocalStableDiffusionServer() {
+	const std::string requestedSignature = stableDiffusionRuntimeSignature();
 	if (stableDiffusionProcess.running()) {
-		if (!stableDiffusionActiveModelPath.empty() &&
-			stableDiffusionActiveModelPath != stableDiffusionModelPath.data() &&
+		if (!stableDiffusionActiveRuntimeSignature.empty() &&
+			stableDiffusionActiveRuntimeSignature != requestedSignature &&
 			stableDiffusionProcess.ownsProcess()) {
 			stopLocalStableDiffusionServer();
 		} else return;
@@ -2849,6 +3017,7 @@ void ofApp::startLocalStableDiffusionServer() {
 	if (stableDiffusionProcess.useExisting("sd-server", 8081)) {
 		stableDiffusionProcess.followOutputFiles(localServerLogFiles("sd-server", 8081));
 		stableDiffusionActiveModelPath.clear();
+		stableDiffusionActiveRuntimeSignature.clear();
 		setTextBuffer(mediaEndpointUrl, "http://127.0.0.1:8081");
 		mediaConfigurationDirty = true;
 		stableDiffusionServerStatus = stableDiffusionProcess.status() +
@@ -2885,6 +3054,7 @@ void ofApp::startLocalStableDiffusionServer() {
 	if (stableDiffusionProcess.start(
 		stableDiffusionServerPath.data(), arguments, "sd-server", 8081)) {
 		stableDiffusionActiveModelPath = stableDiffusionModelPath.data();
+		stableDiffusionActiveRuntimeSignature = requestedSignature;
 		setTextBuffer(mediaEndpointUrl, "http://127.0.0.1:8081");
 		mediaConfigurationDirty = true;
 	}
@@ -2894,7 +3064,17 @@ void ofApp::startLocalStableDiffusionServer() {
 void ofApp::stopLocalStableDiffusionServer() {
 	stableDiffusionProcess.stop();
 	stableDiffusionActiveModelPath.clear();
+	stableDiffusionActiveRuntimeSignature.clear();
 	stableDiffusionServerStatus = stableDiffusionProcess.status();
+}
+
+std::string ofApp::stableDiffusionRuntimeSignature() const {
+	return ofxICExample::mediaRuntimeSignature({
+		stableDiffusionServerPath.data(), stableDiffusionModelPath.data(),
+		stableDiffusionVaePath.data(), stableDiffusionClipLPath.data(),
+		stableDiffusionClipGPath.data(), stableDiffusionTextEncoderPath.data(),
+		stableDiffusionCompleteCheckpoint, stableDiffusionFlashAttention,
+		stableDiffusionOffloadToCpu });
 }
 
 void ofApp::startLocalAceStepServer() {
@@ -3058,57 +3238,6 @@ void ofApp::stopLocalSamBridge() {
 	samBridgeProcessStatus = samBridgeProcess.status();
 }
 
-void ofApp::startRuntimeInstaller(const std::string & runtime,
-	const std::string & scriptName, const std::vector<std::string> & extraArguments) {
-#if defined(_WIN32)
-	if (installerProcess.running()) {
-		installerStatus = "Wait for the active " + installerTarget + " installation or cancel it.";
-		return;
-	}
-	const std::string powershell = executableOnPath("powershell.exe");
-	const std::string script = bundledScript(scriptName);
-	if (powershell.empty() || script.empty()) {
-		installerStatus = powershell.empty()
-			? "powershell.exe was not found."
-			: "Installer script was not found: " + scriptName;
-		return;
-	}
-	std::vector<std::string> arguments{
-		"-NoProfile", "-ExecutionPolicy", "Bypass", "-File", script };
-	arguments.insert(arguments.end(), extraArguments.begin(), extraArguments.end());
-	installerTarget = runtime;
-	installerCompletionHandled = false;
-	if (installerProcess.start(powershell, arguments,
-		"Install " + runtime, 0, std::filesystem::path(script).parent_path().string())) {
-		installerStatus = installerProcess.status();
-		ofLogNotice("ofxIC installer") << "Started " << script;
-	} else installerStatus = installerProcess.status();
-#else
-	(void)runtime; (void)scriptName; (void)extraArguments;
-	installerStatus = "Runtime installation from the GUI is currently implemented for Windows.";
-#endif
-}
-
-void ofApp::updateRuntimeInstaller() {
-	if (installerProcess.running()) installerProcess.update();
-	const std::string output = installerProcess.takeNewOutput();
-	if (!output.empty()) ofLogNotice("ofxIC installer") << installerTarget << ":\n" << output;
-	if (installerProcess.running()) {
-		installerStatus = installerProcess.status();
-		return;
-	}
-	if (installerCompletionHandled || installerTarget.empty()) return;
-	installerCompletionHandled = true;
-	if (installerProcess.state() == ofxICExample::ManagedProcessState::Exited &&
-		installerProcess.exitCode() == 0) {
-		installerStatus = installerTarget + " installation completed; runtime paths were detected.";
-		applyLocalRuntimeDefaults();
-	} else {
-		installerStatus = installerProcess.status() +
-			" Expand installer output below for the exact failure.";
-	}
-}
-
 bool ofApp::loadDocument(const std::string & path) {
 	const std::string source = documentSourceName(path);
 	if (source.empty() || !supportedDocumentPath(path)) {
@@ -3191,6 +3320,12 @@ void ofApp::applySettingsToUi(const ofxICExample::ExampleSettings & settings) {
 	mediaHeight = settings.mediaHeight;
 	mediaFrames = settings.mediaFrames;
 	mediaFps = settings.mediaFps;
+	mediaSeed = settings.mediaSeed;
+	mediaSteps = settings.mediaSteps;
+	mediaGuidance = settings.mediaGuidance;
+	mediaSampler = settings.mediaSampler;
+	mediaScheduler = settings.mediaScheduler;
+	mediaOutputFormat = settings.mediaOutputFormat;
 	setTextBuffer(musicEndpointUrl, settings.musicEndpointUrl);
 	musicDuration = settings.musicDuration;
 	musicOutputFormat = settings.musicOutputFormat;
@@ -3262,6 +3397,12 @@ ofxICExample::ExampleSettings ofApp::settingsFromUi() const {
 	settings.mediaHeight = mediaHeight;
 	settings.mediaFrames = mediaFrames;
 	settings.mediaFps = mediaFps;
+	settings.mediaSeed = mediaSeed;
+	settings.mediaSteps = mediaSteps;
+	settings.mediaGuidance = mediaGuidance;
+	settings.mediaSampler = mediaSampler;
+	settings.mediaScheduler = mediaScheduler;
+	settings.mediaOutputFormat = mediaOutputFormat;
 	settings.musicBackend = selectedMusicBackend;
 	settings.musicEndpointUrl = musicEndpointUrl.data();
 	settings.musicDuration = musicDuration;
@@ -3923,6 +4064,67 @@ void ofApp::forgetTokenCredential(const std::string & variable) {
 	credentialStatus = "Removed saved " + variable + ". Environment overrides remain active.";
 }
 
+void ofApp::inspectMediaContext() {
+	if (busy || mediaBusy.exchange(true)) return;
+	pendingMediaCapabilitiesReady = false;
+	cancellationRequested = false;
+	activeMediaTaskKind = "media-context-inspection";
+	mediaStatus = "Inspecting loaded sd-server context...";
+	const std::string selectedContextModel = stableDiffusionModelPath.data();
+	mediaWorker = std::thread([this, selectedContextModel]() {
+		ofxIC::RequestControl control;
+		control.timeoutSeconds = 10;
+		control.shouldCancel = [this]() { return cancellationRequested.load(); };
+		const auto capabilities = media.inspectCapabilities(control);
+		std::string nextStatus;
+		std::string nextOutput;
+		if (!capabilities) {
+			nextStatus = "Context inspection failed: " + capabilities.error;
+		} else {
+			const auto join = [](const std::vector<std::string> & values) {
+				std::string result;
+				for (const auto & value : values) {
+					if (!result.empty()) result += ", ";
+					result += value;
+				}
+				return result.empty() ? std::string("none") : result;
+			};
+			nextStatus = "Loaded context inspected successfully.";
+			nextOutput = "Model: " + (capabilities.model.empty() ? "<unknown>" : capabilities.model) +
+				"\nCurrent mode: " + (capabilities.currentMode.empty() ? "<unspecified>" : capabilities.currentMode) +
+				"\nSupported modes: " + join(capabilities.supportedModes) +
+				"\nImage formats: " + join(capabilities.imageOutputFormats) +
+				"\nVideo formats: " + join(capabilities.videoOutputFormats) +
+				"\nSize limits: " + std::to_string(capabilities.minWidth) + "-" +
+					std::to_string(capabilities.maxWidth) + " x " +
+					std::to_string(capabilities.minHeight) + "-" +
+					std::to_string(capabilities.maxHeight) +
+				"\nDefaults: " + std::to_string(capabilities.defaultWidth) + "x" +
+					std::to_string(capabilities.defaultHeight) + ", " +
+					std::to_string(capabilities.defaultVideoFrames) + " frames, " +
+					std::to_string(capabilities.defaultFps) + " FPS, " +
+					(capabilities.defaultOutputFormat.empty() ? "format unspecified" : capabilities.defaultOutputFormat) +
+				"\nSamplers: " + join(capabilities.samplers) +
+				"\nSchedulers: " + join(capabilities.schedulers);
+			if (!ofxICExample::mediaModelMatches(capabilities.model, selectedContextModel)) {
+				nextStatus = "Loaded context differs from the selected model.";
+				nextOutput += "\nSelected model: " +
+					ofFilePath::getFileName(selectedContextModel) +
+					"\nRestart sd-server to load the selection.";
+			}
+		}
+		std::lock_guard<std::mutex> lock(mediaResultMutex);
+		pendingMediaStatus = std::move(nextStatus);
+		pendingMediaOutput = std::move(nextOutput);
+		pendingMediaSavedPath.clear();
+		pendingMediaIsVideo = false;
+		pendingMediaJob = {};
+		pendingMediaCapabilities = capabilities;
+		pendingMediaCapabilitiesReady = true;
+		mediaFinished = true;
+	});
+}
+
 void ofApp::generateMedia() {
 	if (!mediaInput[0] || busy) return;
 	if (!supportsMediaKind(selectedMediaBackend, selectedMediaKind)) {
@@ -3934,19 +4136,20 @@ void ofApp::generateMedia() {
 		return;
 	}
 	if (selectedMediaBackend == 2 && stableDiffusionProcess.running() &&
-		!stableDiffusionActiveModelPath.empty() &&
-		stableDiffusionActiveModelPath != stableDiffusionModelPath.data()) {
+		!stableDiffusionActiveRuntimeSignature.empty() &&
+		stableDiffusionActiveRuntimeSignature != stableDiffusionRuntimeSignature()) {
 		if (!stableDiffusionProcess.ownsProcess()) {
 			mediaStatus = "The external sd-server still owns its loaded model. Restart it with the selected checkpoint.";
 			mediaOutput.clear();
 			return;
 		}
-		mediaStatus = "Model changed; restarting sd-server with " +
+		mediaStatus = "Context configuration changed; restarting sd-server with " +
 			ofFilePath::getFileName(stableDiffusionModelPath.data()) + "...";
 		stopLocalStableDiffusionServer();
 	}
 	if (selectedMediaBackend == 2 && deferUntilRuntimeReady(DeferredTask::Media)) return;
 	if (mediaBusy.exchange(true)) return;
+	pendingMediaCapabilitiesReady = false;
 	activeMediaTaskKind = selectedMediaKind == 1 ? "video-generation" : "image-generation";
 	cancellationRequested = false;
 	const std::string prompt(mediaInput.data());
@@ -3954,16 +4157,25 @@ void ofApp::generateMedia() {
 	const int height = std::max(1, mediaHeight);
 	const int frames = std::max(1, mediaFrames);
 	const int fps = std::max(1, mediaFps);
+	const int seed = std::max(-1, mediaSeed);
+	const int steps = std::max(1, mediaSteps);
+	const float guidance = std::max(0.0f, mediaGuidance);
+	const std::string sampler = mediaSampler;
+	const std::string scheduler = mediaScheduler;
+	const std::string requestedOutputFormat = mediaOutputFormat;
 	const bool video = selectedMediaKind == 1;
 	const int backend = selectedMediaBackend;
 	const bool autoPoll = backend != 0;
-	const std::string mediaModel = video ? mediaVideoModel.data() : mediaImageModel.data();
+	const std::string mediaModel = backend == 2
+		? std::string(stableDiffusionModelPath.data())
+		: (video ? std::string(mediaVideoModel.data()) : std::string(mediaImageModel.data()));
 	const std::string outputStem = ofToDataPath(
 		timestampedOutputFilename("media", ""), true);
 	mediaStatus = backend == 1
 		? (video ? "Submitting Hugging Face video..." : "Generating Hugging Face image...")
 		: (backend == 2 ? "Submitting native media job..." : "Generating OpenAI image...");
-	mediaWorker = std::thread([this, prompt, width, height, frames, fps, video, backend,
+	mediaWorker = std::thread([this, prompt, width, height, frames, fps, seed, steps,
+		guidance, sampler, scheduler, requestedOutputFormat, video, backend,
 		mediaModel, autoPoll, outputStem]() {
 		ofxIC::RequestControl control;
 		control.shouldCancel = [this]() { return cancellationRequested.load(); };
@@ -4000,6 +4212,14 @@ void ofApp::generateMedia() {
 			request.height = height;
 			request.videoFrames = frames;
 			request.fps = fps;
+			if (backend == 2) {
+				request.seed = seed;
+				request.steps = steps;
+				request.guidance = guidance;
+				request.sampleMethod = sampler;
+				request.scheduler = scheduler;
+				request.outputFormat = requestedOutputFormat;
+			}
 			nextJob = backend == 1
 				? media.submitHuggingFaceFal(request, control)
 				: media.submit(request, control);
@@ -4025,6 +4245,11 @@ void ofApp::generateMedia() {
 				: std::string(video ? "Video" : "Image") + " request failed: " + nextJob.error;
 			nextOutput = nextJob.pollUrl;
 			nextFormat = nextJob.outputFormat;
+			if (video && nextJob.frameCount > 0) {
+				nextOutput += (nextOutput.empty() ? "" : "\n") +
+					std::string("Video metadata: ") + ofToString(nextJob.frameCount) +
+					" frames" + (nextJob.fps > 0 ? " at " + ofToString(nextJob.fps) + " FPS" : "");
+			}
 			if (!nextJob.payloadBytes.empty()) {
 				nextBytes = nextJob.payloadBytes.front();
 				nextOutput = "Received " + ofToString(nextBytes.size()) + " media bytes";

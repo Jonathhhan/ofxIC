@@ -1,6 +1,8 @@
 #include "test_harness.h"
 #include "../src/ofxIC.h"
 
+#include <stdexcept>
+
 OFXIC_TEST(chat_session_keeps_successful_history) {
 	int requestCount = 0;
 	ofxIC::Endpoint endpoint("http://localhost:8001", [&](const ofxIC::HttpRequest & request) {
@@ -73,4 +75,25 @@ OFXIC_TEST(chat_session_forwards_cancellation_and_rolls_back_history) {
 	OFXIC_REQUIRE(result.cancelled);
 	OFXIC_REQUIRE(receivedCancellation);
 	OFXIC_REQUIRE(chat.getMessages().empty());
+}
+
+OFXIC_TEST(chat_session_preserves_successful_history_when_transport_throws) {
+	bool fail = false;
+	ofxIC::Endpoint endpoint("http://example.test", [&](const ofxIC::HttpRequest &) {
+		if (fail) throw std::runtime_error("transport exception");
+		ofxIC::HttpResponse response;
+		response.started = true;
+		response.status = 200;
+		response.body = R"({"choices":[{"message":{"content":"Saved answer"}}]})";
+		return response;
+	});
+	ofxIC::ChatSession session(endpoint);
+	OFXIC_REQUIRE(session.send("Saved question"));
+	fail = true;
+	bool threw = false;
+	try { session.send("Failed question"); }
+	catch (const std::runtime_error &) { threw = true; }
+	OFXIC_REQUIRE(threw);
+	OFXIC_REQUIRE(session.getMessages().size() == 2);
+	OFXIC_REQUIRE(session.getMessages().back().content == "Saved answer");
 }

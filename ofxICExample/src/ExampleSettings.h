@@ -47,6 +47,12 @@ struct ExampleSettings {
 	int mediaHeight = 512;
 	int mediaFrames = 33;
 	int mediaFps = 16;
+	int mediaSeed = -1;
+	int mediaSteps = 28;
+	float mediaGuidance = 7.0f;
+	std::string mediaSampler;
+	std::string mediaScheduler;
+	std::string mediaOutputFormat;
 	int musicBackend = 0;
 	std::string musicEndpointUrl = "http://127.0.0.1:8085";
 	int musicDuration = 30;

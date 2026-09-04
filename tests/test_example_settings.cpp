@@ -53,6 +53,12 @@ OFXIC_TEST(example_settings_round_trip_non_secret_values) {
 	saved.mediaHeight = 432;
 	saved.mediaFrames = 49;
 	saved.mediaFps = 24;
+	saved.mediaSeed = 12345;
+	saved.mediaSteps = 36;
+	saved.mediaGuidance = 5.5f;
+	saved.mediaSampler = "euler_a";
+	saved.mediaScheduler = "karras";
+	saved.mediaOutputFormat = "webm";
 	saved.musicBackend = 1;
 	saved.musicEndpointUrl = "https://music.example.test";
 	saved.musicDuration = 45;
@@ -112,6 +118,12 @@ OFXIC_TEST(example_settings_round_trip_non_secret_values) {
 	OFXIC_REQUIRE(loaded.mediaHeight == saved.mediaHeight);
 	OFXIC_REQUIRE(loaded.mediaFrames == saved.mediaFrames);
 	OFXIC_REQUIRE(loaded.mediaFps == saved.mediaFps);
+	OFXIC_REQUIRE(loaded.mediaSeed == saved.mediaSeed);
+	OFXIC_REQUIRE(loaded.mediaSteps == saved.mediaSteps);
+	OFXIC_REQUIRE(loaded.mediaGuidance == saved.mediaGuidance);
+	OFXIC_REQUIRE(loaded.mediaSampler == saved.mediaSampler);
+	OFXIC_REQUIRE(loaded.mediaScheduler == saved.mediaScheduler);
+	OFXIC_REQUIRE(loaded.mediaOutputFormat == saved.mediaOutputFormat);
 	OFXIC_REQUIRE(loaded.musicBackend == saved.musicBackend);
 	OFXIC_REQUIRE(loaded.musicEndpointUrl == saved.musicEndpointUrl);
 	OFXIC_REQUIRE(loaded.musicDuration == saved.musicDuration);
@@ -307,6 +319,12 @@ OFXIC_TEST(example_environment_overrides_saved_settings_predictably) {
 		{ "OFXIC_MEDIA_HEIGHT", "invalid" },
 		{ "OFXIC_MEDIA_FRAMES", "65" },
 		{ "OFXIC_MEDIA_FPS", "30" },
+		{ "OFXIC_MEDIA_SEED", "42" },
+		{ "OFXIC_MEDIA_STEPS", "32" },
+		{ "OFXIC_MEDIA_GUIDANCE", "4.25" },
+		{ "OFXIC_MEDIA_SAMPLER", "euler" },
+		{ "OFXIC_MEDIA_SCHEDULER", "simple" },
+		{ "OFXIC_MEDIA_OUTPUT_FORMAT", "avi" },
 	};
 	ofxICExample::applyEnvironmentOverrides(settings, environment);
 
@@ -326,6 +344,12 @@ OFXIC_TEST(example_environment_overrides_saved_settings_predictably) {
 	OFXIC_REQUIRE(settings.mediaHeight == 720);
 	OFXIC_REQUIRE(settings.mediaFrames == 65);
 	OFXIC_REQUIRE(settings.mediaFps == 30);
+	OFXIC_REQUIRE(settings.mediaSeed == 42);
+	OFXIC_REQUIRE(settings.mediaSteps == 32);
+	OFXIC_REQUIRE(settings.mediaGuidance == 4.25f);
+	OFXIC_REQUIRE(settings.mediaSampler == "euler");
+	OFXIC_REQUIRE(settings.mediaScheduler == "simple");
+	OFXIC_REQUIRE(settings.mediaOutputFormat == "avi");
 	OFXIC_REQUIRE(ofxICExample::saveSettings(settingsPath, settings));
 	std::ifstream input(settingsPath, std::ios::binary);
 	const std::string serialized(

@@ -72,11 +72,29 @@ The Windows example discovers versioned installations below that directory at
 runtime, lets a manually selected executable take precedence, and starts the
 external process from the GUI. Detection is version-independent and belongs to
 the example application; no runtime is linked into the addon.
-The Overview tab can run the Whisper, ACE-Step, and SAM installers without a
-separate terminal. Whisper installs a verified `base-q5_1` model by default;
+Overview > **Runtime setup (Windows)** offers **Copy plan** and **Copy install**
+for all five runtimes. Paste the command into PowerShell, review the plan,
+install explicitly, then use **Rescan installed runtimes**. The GUI does not
+run installers or query upstream releases. Rescan refreshes detection only: it
+does not overwrite selected executable/model paths, reapply environment settings,
+or restart servers. Use **Detect installed** in a task tab to explicitly select
+the detected executable. Expected script destinations count as detected only
+when the file exists; missing preferred paths fall back to version-independent
+discovery. A **configured** dashboard row means paths are set, not that the
+runtime is reachable or inference has passed.
+Whisper installs a verified `base-q5_1` model by default;
 ACE-Step uses a separately selected complete GGUF model directory; the SAM
 installer can reuse a selected Meta `sam_vit_b`, `vit_l`, or `vit_h` checkpoint
 and creates an isolated PyTorch CUDA 13 environment.
+
+Runtime version pins are owned by the installer scripts, not duplicated in a
+GUI version registry. A detected package folder identifies an installation;
+it does not prove API compatibility or successful inference. A newer upstream
+release is **unvalidated**, not automatically an available addon update.
+Changing a pin requires reviewing start flags and protocol changes, updating
+affected adapters/tests when necessary, and running both deterministic tests
+and the relevant marker-gated live smoke. An unchanged protocol may need only
+a script update; incompatible protocol changes require an addon update too.
 
 The addon does not override the C++ language standard selected by the generated
 openFrameworks project. Its standalone deterministic CMake tests require C++20;
@@ -497,15 +515,21 @@ cannot be used as an `ofxIC` endpoint.
   shows their update age, tails replacements safely, and retains only the most
   recent 64 KiB. **Clear view** clears only the in-memory display; the GUI never
   edits or removes externally owned logs.
-- **Install missing runtimes** in Overview installs Whisper, ACE-Step, or SAM
-  asynchronously, shows bounded live installer output, and refreshes detected
-  paths on success. Every launched process tree is assigned to a Windows job so
-  cancellation and application shutdown do not leave installer descendants.
+- **Runtime setup (Windows)** in Overview shows detected package folders and
+  the installation policy for all five runtimes. It copies explicit PowerShell
+  plan/install commands; installation runs outside the workbench and is not
+  interrupted when the GUI closes. Rescan after completion. Custom executable
+  paths remain independently configurable in their task tabs.
 - For a GUI-owned `sd-server`, the example distinguishes the selected model
   from the checkpoint actually loaded by the running process. Changing from
   SD-Turbo to WAN causes a controlled restart on the next generation and
   selects a matching WAN VAE and UMT5 encoder when found. An externally managed
   server is never restarted implicitly.
+- **Inspect loaded context** queries `sd-server` without blocking the frame
+  thread and retains its loaded model, current/supported modes, output formats,
+  dimension limits, defaults, samplers, and schedulers. The native Advanced
+  section exposes seed, steps, guidance, and only choices advertised by that
+  context. Unsupported persisted choices fall back to the server default.
 - **Export diagnostics...** in Overview writes a bounded, privacy-aware support
   snapshot with addon/build identity, configured endpoint hosts, task state, and
   runtime lifecycle metadata. It deliberately omits credentials, prompts,
@@ -543,7 +567,12 @@ cannot be used as an `ofxIC` endpoint.
 - `scripts\smoke-video-live.ps1` exercises the regular Release GUI against an
   already running video-capable `sd-server`. It first rejects an image-only
   loaded model, then verifies the asynchronous job and saved WebM/WebP/AVI
-  output. Real inference is deliberately gated: set
+  output. It uses FFmpeg to require multiple decoded and distinct frames, so a
+  static one-frame result no longer counts as video evidence. Seed, steps,
+  guidance, sampler, scheduler, and output format can be supplied as script
+  parameters or through `OFXIC_MEDIA_SEED`, `OFXIC_MEDIA_STEPS`,
+  `OFXIC_MEDIA_GUIDANCE`, `OFXIC_MEDIA_SAMPLER`, `OFXIC_MEDIA_SCHEDULER`, and
+  `OFXIC_MEDIA_OUTPUT_FORMAT`. Real inference is deliberately gated: set
   `OFXIC_RUN_LIVE_SDCPP_VIDEO=1` before running it. The default 512x512,
   17-frame test is intended as a small WAN validation, not a quality preset.
 - Start the separate ACE-Step server (the default is `http://127.0.0.1:8085`),

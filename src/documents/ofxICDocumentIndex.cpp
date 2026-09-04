@@ -13,6 +13,10 @@ namespace {
 constexpr std::size_t chunkCharacters = 900;
 constexpr std::size_t chunkOverlap = 120;
 
+bool utf8Continuation(char character) {
+	return (static_cast<unsigned char>(character) & 0xc0U) == 0x80U;
+}
+
 std::string lowerAscii(std::string value) {
 	for (char & c : value) {
 		const unsigned char byte = static_cast<unsigned char>(c);
@@ -79,6 +83,10 @@ bool DocumentIndex::addText(const std::string & source, const std::string & text
 				}
 			}
 		}
+		// Byte budgets must not cut a UTF-8 code point in valid input. Word
+		// boundaries above remain preferred; long words/CJK also stay intact.
+		while (end > begin && end < text.size() && utf8Continuation(text[end])) --end;
+		if (end == begin) end = std::min(begin + chunkCharacters, text.size());
 		std::string chunkText = trimmedChunk(text, begin, end);
 		if (!chunkText.empty()) {
 			if (newChunks.size() >= remainingChunks) return false;
@@ -87,6 +95,7 @@ bool DocumentIndex::addText(const std::string & source, const std::string & text
 		if (end == text.size()) break;
 		const std::size_t next = end > chunkOverlap ? end - chunkOverlap : end;
 		begin = next > begin ? next : end;
+		while (begin < text.size() && utf8Continuation(text[begin])) ++begin;
 	}
 	if (newChunks.empty()) return false;
 	sources.push_back(source);

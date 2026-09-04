@@ -4,7 +4,9 @@
 #include <atomic>
 #include <chrono>
 #include <cctype>
+#include <cmath>
 #include <cstdlib>
+#include <locale>
 #include <sstream>
 #include <thread>
 #include <utility>
@@ -878,6 +880,11 @@ ChatResult Endpoint::chat(
 		result.error = "streaming tool calls are not supported yet";
 		return result;
 	}
+	if (!std::isfinite(request.options.temperature) || !std::isfinite(request.options.topP)) {
+		result.failure = RequestFailure::Validation;
+		result.error = "chat temperature and top_p must be finite numbers";
+		return result;
+	}
 
 	HttpRequest httpRequest;
 	httpRequest.method = HttpMethod::Post;
@@ -925,7 +932,6 @@ ChatResult Endpoint::chat(
 		else if (!response.error.empty()) result.error += ": " + response.error;
 		return result;
 	}
-
 	result.text = request.options.stream
 		? response.streamedText
 		: extractChatText(response.body);
@@ -977,6 +983,7 @@ std::string Endpoint::normalizeBaseUrl(const std::string & baseUrl) {
 
 std::string Endpoint::buildChatBody(const ChatRequest & request) {
 	std::ostringstream body;
+	body.imbue(std::locale::classic());
 	body << "{";
 	if (!request.options.model.empty()) {
 		body << "\"model\":\"" << escapeJson(request.options.model) << "\",";

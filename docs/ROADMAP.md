@@ -270,12 +270,93 @@ regular workbench `update()` loop advances during that same interval. This
 responsiveness smoke is part of Windows release validation. GPU saturation by
 a real CUDA runtime remains separate model-backed performance evidence.
 
+#### M3.10 — Inspectable native media contexts and motion evidence
+
+Status: completed after a selected image model was confused with a stale WAN
+server context and a generated multi-frame video appeared static in the local
+preview.
+
+The public media client now exposes the stable-diffusion.cpp capability result:
+loaded model, current mode, supported modes, and output formats. Native job
+submission uses that same inspection to reject a stale model context or the
+wrong image/video mode before generation. The workbench exposes a non-blocking
+context inspector and restarts its owned server whenever any context-defining
+path or launch option changes.
+
+The inspector also retains server-reported dimension limits, defaults,
+samplers, and schedulers. The workbench can apply safe defaults explicitly and
+the client rejects dimensions outside the loaded context before creating a
+job. A one-frame server default is deliberately not applied to video because
+file creation alone is not motion evidence.
+
+Native image and video jobs expose an Advanced section for seed, steps,
+guidance, sampler, scheduler, and output format. Enumerated choices come only
+from the inspected context; unsupported persisted choices fall back to the
+server default when capabilities change. These values round-trip through the
+backward-compatible version-4 example settings and are covered at the exact
+native request-body boundary.
+
+Video preview startup is explicit and displays live playback state. The gated
+video smoke now decodes the generated container and requires multiple decoded
+and distinct frames, rather than treating file existence as proof of motion.
+This remains protocol inspection and example-layer process orchestration; the
+model context itself stays inside the external server.
+
 Completion evidence for each patch:
 
 - the first meaningful failure is retained in an issue, test, or release note;
 - the smallest responsible adapter changes without widening the addon boundary;
 - deterministic regression coverage passes on Windows and Linux;
 - model-backed or provider-backed claims remain separately marker-gated.
+
+#### M3.11 — Explicit runtime installation and honest update guidance
+
+The workbench no longer launches installers. Overview provides plan/install
+commands for all five runtime scripts and a separate rescan action. Existing
+server lifecycle controls are unchanged. Command resolution runs only on an
+explicit copy action, not on every frame; unavailable scripts produce an
+actionable message instead of a fabricated command.
+
+Version pins remain in the scripts. Detected package folders are installation
+snapshots, never compatibility badges. A future upstream checker must distinguish
+unvalidated releases from validated updates and known addon incompatibilities;
+no such checker or compatibility registry is claimed by this milestone.
+
+Runtime rescans now refresh discovery snapshots only, including empty results.
+They preserve selected paths, model choices, environment-derived settings and
+running processes. Script destination hints must name an existing file before
+being reported as detected; otherwise discovery searches other installed versions.
+The dashboard labels supplied paths as `configured`, not `ready`. Deterministic
+filesystem regressions cover missing hints, directories masquerading as binaries,
+preferred-version precedence, removal/reinstallation and wrong executable names;
+these checks are not model-backed inference evidence.
+
+#### M3.12 — Harden the grounded-chat transaction
+
+Review-driven corrections, without new public abstractions or runtime upgrades:
+
+- Commit chat exchanges only after success; roll back a whole tool-loop turn
+  on failure, cancellation or exceptions without losing earlier conversation.
+- Check cancellation between tool handlers and after progress notifications.
+- Enforce the document tool's declared JSON shape and valid Unicode strings.
+- Preserve UTF-8 code points at document chunk and overlap boundaries.
+- Return a non-`None` failure category for rejected tools and round limits.
+
+Deterministic regression tests first reproduced eight failures. Additional tests
+cover retained prior conversation, progress exceptions, raw/escaped Unicode and
+cancellation before model transport. No new live-model evidence is implied.
+
+#### M3.13 — Locale-independent protocol numbers
+
+Chat, OpenAI-compatible images, native SD jobs, fal jobs, SAM point prompts and
+document-search scores now serialize numeric fields independently of the host
+application's locale. Non-finite sampling parameters, guidance and coordinates
+fail locally before any network request. Existing finite-value clamping remains.
+
+Nine deterministic regressions reproduced the previous failures with an injected
+comma-decimal/grouping locale and NaN/positive/negative infinity. The tests restore
+the process locale after every case and need neither installed language packs
+nor a model server. This is protocol validation, not live-inference evidence.
 
 ### M4 — `0.3` only after real convergence
 

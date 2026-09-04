@@ -2,6 +2,8 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cmath>
+#include <locale>
 #include <sstream>
 #include <utility>
 
@@ -146,6 +148,11 @@ SegmentationResult SegmentationClient::segmentSamBridge(
 		return result;
 	}
 	for (const auto & point : request.points) {
+		if (!std::isfinite(point.x) || !std::isfinite(point.y)) {
+			result.failure = RequestFailure::Validation;
+			result.error = "segmentation coordinates must be finite numbers";
+			return result;
+		}
 		if (point.x < 0.0f || point.x > 1.0f || point.y < 0.0f || point.y > 1.0f) {
 			result.failure = RequestFailure::InvalidResponse;
 			result.error = "segmentation point must use normalized coordinates";
@@ -163,6 +170,7 @@ SegmentationResult SegmentationClient::segmentSamBridge(
 	body += "\r\n";
 	for (const auto & point : request.points) {
 		std::ostringstream value;
+		value.imbue(std::locale::classic());
 		value << point.x << ',' << point.y << ',' << (point.positive ? "positive" : "negative");
 		appendField(body, boundary, "point", value.str());
 	}

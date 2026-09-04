@@ -132,6 +132,45 @@ OFXIC_TEST(example_runtime_paths_returns_empty_for_missing_family) {
 		fixture.root.string(), "llama.cpp-", "llama-server.exe").empty());
 }
 
+OFXIC_TEST(example_runtime_paths_expected_install_location_is_not_detection) {
+	RuntimeFixture fixture;
+	const auto expected = fixture.root / "llama.cpp-pinned/llama-server.exe";
+	OFXIC_REQUIRE(ofxICExample::findInstalledExecutable(
+		fixture.root.string(), "llama.cpp-", "llama-server.exe", expected.string()).empty());
+	// Even a directory with the executable's name is not an installed binary.
+	std::filesystem::create_directories(expected);
+	OFXIC_REQUIRE(ofxICExample::findInstalledExecutable(
+		fixture.root.string(), "llama.cpp-", "llama-server.exe", expected.string()).empty());
+}
+
+OFXIC_TEST(example_runtime_paths_prefers_existing_pin_but_falls_back_after_removal) {
+	RuntimeFixture fixture;
+	const auto now = std::filesystem::file_time_type::clock::now();
+	const auto preferred = fixture.add("llama.cpp-pinned", "llama-server.exe",
+		now - std::chrono::hours(1));
+	const auto alternate = fixture.add("llama.cpp-other", "llama-server.exe", now);
+	const auto scan = [&]() {
+		return ofxICExample::findInstalledExecutable(fixture.root.string(),
+			"llama.cpp-", "llama-server.exe", preferred.string());
+	};
+	OFXIC_REQUIRE(std::filesystem::equivalent(scan(), preferred));
+	std::filesystem::remove(preferred);
+	OFXIC_REQUIRE(std::filesystem::equivalent(scan(), alternate));
+	std::filesystem::remove(alternate);
+	OFXIC_REQUIRE(scan().empty());
+	const auto reinstalled = fixture.add("llama.cpp-pinned", "llama-server.exe", now);
+	OFXIC_REQUIRE(std::filesystem::equivalent(scan(), reinstalled));
+}
+
+OFXIC_TEST(example_runtime_paths_ignores_wrong_executable_hint) {
+	RuntimeFixture fixture;
+	const auto now = std::filesystem::file_time_type::clock::now();
+	const auto wrong = fixture.add("llama.cpp-pinned", "llama-cli.exe", now);
+	const auto server = fixture.add("llama.cpp-other", "llama-server.exe", now);
+	OFXIC_REQUIRE(std::filesystem::equivalent(ofxICExample::findInstalledExecutable(
+		fixture.root.string(), "llama.cpp-", "llama-server.exe", wrong.string()), server));
+}
+
 OFXIC_TEST(example_runtime_paths_reports_search_evidence) {
 	RuntimeFixture fixture;
 	fixture.add("whisper.cpp-build/bin", "whisper-server.exe",

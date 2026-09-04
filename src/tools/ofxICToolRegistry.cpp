@@ -4,6 +4,7 @@
 
 #include <cctype>
 #include <iomanip>
+#include <locale>
 #include <sstream>
 #include <utility>
 
@@ -30,8 +31,13 @@ void appendUtf8(unsigned int codePoint, std::string & output) {
 	else if (codePoint <= 0x7ffU) {
 		output.push_back(static_cast<char>(0xc0U | (codePoint >> 6U)));
 		output.push_back(static_cast<char>(0x80U | (codePoint & 0x3fU)));
-	} else {
+	} else if (codePoint <= 0xffffU) {
 		output.push_back(static_cast<char>(0xe0U | (codePoint >> 12U)));
+		output.push_back(static_cast<char>(0x80U | ((codePoint >> 6U) & 0x3fU)));
+		output.push_back(static_cast<char>(0x80U | (codePoint & 0x3fU)));
+	} else {
+		output.push_back(static_cast<char>(0xf0U | (codePoint >> 18U)));
+		output.push_back(static_cast<char>(0x80U | ((codePoint >> 12U) & 0x3fU)));
 		output.push_back(static_cast<char>(0x80U | ((codePoint >> 6U) & 0x3fU)));
 		output.push_back(static_cast<char>(0x80U | (codePoint & 0x3fU)));
 	}
@@ -56,45 +62,99 @@ std::string escapeJson(const std::string & value) {
 	return escaped.str();
 }
 
-bool extractQuery(const std::string & json, std::string & query) {
-	const std::size_t key = json.find("\"query\"");
-	if (key == std::string::npos) return false;
-	std::size_t position = json.find(':', key + 7);
-	if (position == std::string::npos) return false;
-	do { ++position; } while (position < json.size() && std::isspace(static_cast<unsigned char>(json[position])));
+bool readHexCodeUnit(const std::string & json, std::size_t & position, unsigned int & value) {
+	if (json.size() - position < 4) return false;
+	value = 0;
+	for (int i = 0; i < 4; ++i) {
+		const int digit = hexValue(json[position++]);
+		if (digit < 0) return false;
+		value = (value << 4U) | static_cast<unsigned int>(digit);
+	}
+	return true;
+}
+
+bool readJsonString(const std::string & json, std::size_t & position, std::string & value) {
 	if (position >= json.size() || json[position++] != '"') return false;
 	while (position < json.size()) {
-		const char c = json[position++];
-		if (c == '"') return !query.empty();
+		const unsigned char c = static_cast<unsigned char>(json[position++]);
+		if (c == '"') return true;
+		if (c < 0x20U) return false;
+		if (c >= 0x80U) {
+			const std::size_t start = position - 1;
+			const int length = c >= 0xc2U && c <= 0xdfU ? 2 :
+				(c >= 0xe0U && c <= 0xefU ? 3 : (c >= 0xf0U && c <= 0xf4U ? 4 : 0));
+			if (length == 0) return false;
+			unsigned int codePoint = c & (0x7fU >> length);
+			for (int i = 1; i < length; ++i) {
+				if (position >= json.size()) return false;
+				const unsigned char next = static_cast<unsigned char>(json[position++]);
+				if ((next & 0xc0U) != 0x80U) return false;
+				codePoint = (codePoint << 6U) | (next & 0x3fU);
+			}
+			const unsigned int minimum = length == 2 ? 0x80U : (length == 3 ? 0x800U : 0x10000U);
+			if (codePoint < minimum || codePoint > 0x10ffffU ||
+				(codePoint >= 0xd800U && codePoint <= 0xdfffU)) return false;
+			value.append(json, start, static_cast<std::size_t>(length));
+			continue;
+		}
 		if (c != '\\') {
-			query.push_back(c);
+			value.push_back(static_cast<char>(c));
 			continue;
 		}
 		if (position >= json.size()) return false;
 		switch (json[position++]) {
-		case '"': query.push_back('"'); break;
-		case '\\': query.push_back('\\'); break;
-		case '/': query.push_back('/'); break;
-		case 'b': query.push_back('\b'); break;
-		case 'f': query.push_back('\f'); break;
-		case 'n': query.push_back('\n'); break;
-		case 'r': query.push_back('\r'); break;
-		case 't': query.push_back('\t'); break;
+		case '"': value.push_back('"'); break;
+		case '\\': value.push_back('\\'); break;
+		case '/': value.push_back('/'); break;
+		case 'b': value.push_back('\b'); break;
+		case 'f': value.push_back('\f'); break;
+		case 'n': value.push_back('\n'); break;
+		case 'r': value.push_back('\r'); break;
+		case 't': value.push_back('\t'); break;
 		case 'u': {
-			if (position + 4 > json.size()) return false;
 			unsigned int codePoint = 0;
-			for (int i = 0; i < 4; ++i) {
-				const int digit = hexValue(json[position++]);
-				if (digit < 0) return false;
-				codePoint = (codePoint << 4U) | static_cast<unsigned int>(digit);
+			if (!readHexCodeUnit(json, position, codePoint)) return false;
+			if (codePoint >= 0xd800U && codePoint <= 0xdbffU) {
+				if (json.size() - position < 2 || json[position++] != '\\' || json[position++] != 'u')
+					return false;
+				unsigned int low = 0;
+				if (!readHexCodeUnit(json, position, low) || low < 0xdc00U || low > 0xdfffU) return false;
+				codePoint = 0x10000U + ((codePoint - 0xd800U) << 10U) + (low - 0xdc00U);
+			} else if (codePoint >= 0xdc00U && codePoint <= 0xdfffU) {
+				return false;
 			}
-			appendUtf8(codePoint, query);
+			appendUtf8(codePoint, value);
 			break;
 		}
 		default: return false;
 		}
 	}
 	return false;
+}
+
+bool extractQuery(const std::string & json, std::string & query) {
+	// This tool declares exactly {"query": string}, with no additional fields.
+	// Parse that shape in full; a nested field or a valid-looking prefix is not
+	// an invocation of the declared schema.
+	std::size_t position = 0;
+	const auto skipWhitespace = [&]() {
+		while (position < json.size() && (json[position] == ' ' || json[position] == '\t' ||
+			json[position] == '\r' || json[position] == '\n')) ++position;
+	};
+	const auto consume = [&](char expected) {
+		skipWhitespace();
+		if (position >= json.size() || json[position] != expected) return false;
+		++position;
+		return true;
+	};
+	if (!consume('{')) return false;
+	skipWhitespace();
+	std::string key;
+	if (!readJsonString(json, position, key) || key != "query" || !consume(':')) return false;
+	skipWhitespace();
+	if (!readJsonString(json, position, query) || query.empty() || !consume('}')) return false;
+	skipWhitespace();
+	return position == json.size();
 }
 
 ToolExecutionResult searchDocuments(
@@ -108,6 +168,7 @@ ToolExecutionResult searchDocuments(
 	}
 	const std::vector<DocumentSearchHit> hits = index.search(query);
 	std::ostringstream content;
+	content.imbue(std::locale::classic());
 	content << "{\"query\":\"" << escapeJson(query)
 		<< "\",\"content_trust\":\"untrusted\",\"hits\":[";
 	for (std::size_t i = 0; i < hits.size(); ++i) {

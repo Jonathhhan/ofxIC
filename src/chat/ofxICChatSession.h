@@ -24,6 +24,9 @@ public:
 	const std::vector<ChatMessage> & getMessages() const;
 	void clear();
 
+	// Only complete successful exchanges enter history. Exceptions from
+	// application callbacks/transport propagate without committing the exchange.
+	// Calls on the same session must be serialized; callbacks must not mutate it.
 	ChatResult send(
 		const std::string & message,
 		ChatChunkCallback onChunk = nullptr,
