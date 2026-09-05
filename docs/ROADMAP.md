@@ -42,6 +42,22 @@ do not widen the core addon into a generic runtime or provider framework.
 
 ## Prioritized milestones
 
+### Validation checkpoint — 2026-09-05
+
+- Release workbench: all five installed local runtimes (llama, SD, ACE-Step,
+  Whisper and SAM) reached protocol readiness as example-owned processes and
+  stopped cleanly through `smoke-local-runtime-matrix.ps1 -Live -KeepLogs`.
+  Evidence run: `ofxIC-runtime-matrix-e566c255-8ec1-4712-a610-d6929a15f5b8`.
+- Deterministic GUI workflow: `smoke-one-click-local.ps1 -KeepEvidence` passed
+  delayed ACE-Step model readiness, startup timeout and SAM segmentation.
+  The ACE fixture now exposes the official health response and rejects tasks
+  during its simulated loading phase. SAM environment overrides are restored.
+  Evidence run: `ofxIC-one-click-d0c1bc86-badb-4aab-a7ea-32807517e0f5`.
+
+The first run proves real executable startup and shutdown through the workbench;
+the second proves fixture-backed task execution. Neither is new evidence of
+model-backed image, video, music or segmentation generation.
+
 ### M1 — Reproducible local core path
 
 Status: completed. The Release GUI path passed against a local `llama-server`

@@ -26,7 +26,8 @@ $environmentNames = @(
 	"OFXIC_SEGMENTATION_ENDPOINT_URL", "OFXIC_SEGMENTATION_AUTORUN",
 	"OFXIC_SEGMENTATION_IMAGE", "OFXIC_SEGMENTATION_POINT_X",
 	"OFXIC_SEGMENTATION_POINT_Y", "OFXIC_GUI_RESULT_PATH",
-	"OFXIC_SAM_BRIDGE_EXECUTABLE", "OFXIC_SAM_BRIDGE_ARGS")
+	"OFXIC_SAM_BRIDGE_EXECUTABLE", "OFXIC_SAM_BRIDGE_ARGS",
+	"OFXIC_SAM_RUNNER", "OFXIC_SAM_MODEL")
 $previousEnvironment = @{}
 foreach ($name in $environmentNames) {
 	$previousEnvironment[$name] = [Environment]::GetEnvironmentVariable($name, "Process")
@@ -148,7 +149,7 @@ try {
 	Set-ProcessEnvironment "OFXIC_DIAGNOSTICS_PATH" $musicDiagnostics
 	Set-ProcessEnvironment "OFXIC_ACESTEP_SERVER" $pythonPath
 	Set-ProcessEnvironment "OFXIC_ACESTEP_SERVER_ARGS" (
-		'"' + $aceFixture + '" --port 8085')
+		'"' + $aceFixture + '" --port 8085 --readiness-delay-checks 2')
 	$activeExample = Start-Example "music"
 	Wait-File $musicDiagnostics $activeExample $StartupEvidenceTimeoutSeconds
 	$diagnostics = Get-Content -Raw -LiteralPath $musicDiagnostics

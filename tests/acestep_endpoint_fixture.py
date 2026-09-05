@@ -36,6 +36,9 @@ class Handler(BaseHTTPRequestHandler):
             self.send_json(400, {"error": "expected JSON request"})
             return
         if self.path == "/release_task":
+            if getattr(self.server, "readiness_checks", 0) < getattr(self.server, "readiness_delay_checks", 0):
+                self.send_json(503, {"error": "fixture model is still loading"})
+                return
             valid = (
                 request.get("prompt") == "deterministic timestamp music"
                 and request.get("audio_duration") == 10
@@ -67,6 +70,14 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         parsed = urllib.parse.urlparse(self.path)
+        if parsed.path == "/health":
+            checks = getattr(self.server, "readiness_checks", 0)
+            ready = checks >= getattr(self.server, "readiness_delay_checks", 0)
+            self.server.readiness_checks = checks + 1
+            self.send_json(200, {"code": 200, "data": {
+                "status": "ok", "service": "ACE-Step API",
+                "models_initialized": ready}})
+            return
         if parsed.path != "/v1/audio":
             self.send_error(404)
             return
@@ -84,5 +95,8 @@ class Handler(BaseHTTPRequestHandler):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--port", type=int, default=18086)
+    parser.add_argument("--readiness-delay-checks", type=int, default=0)
     args = parser.parse_args()
-    ThreadingHTTPServer(("127.0.0.1", args.port), Handler).serve_forever()
+    server = ThreadingHTTPServer(("127.0.0.1", args.port), Handler)
+    server.readiness_delay_checks = max(0, args.readiness_delay_checks)
+    server.serve_forever()
