@@ -297,6 +297,11 @@ MediaCapabilities MediaClient::inspectCapabilities(RequestControl control) const
 		result.defaultFps = extractIntField(response.body, "fps", defaultsObject);
 		result.defaultOutputFormat = extractStringField(response.body, "output_format", defaultsObject);
 	}
+	if (result.supportedModes.empty()) {
+		result.failure = RequestFailure::InvalidResponse;
+		result.error = "sd-server capability response is missing supported_modes";
+		return result;
+	}
 	result.success = true;
 	return result;
 }

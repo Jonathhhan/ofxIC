@@ -463,6 +463,21 @@ OFXIC_TEST(media_client_inspects_native_runtime_capabilities) {
 	OFXIC_REQUIRE(capabilities.schedulers.size() == 2);
 }
 
+OFXIC_TEST(media_client_rejects_incomplete_capability_success) {
+	ofxIC::Endpoint endpoint("http://localhost:1234", [](const ofxIC::HttpRequest &) {
+		ofxIC::HttpResponse response;
+		response.started = true;
+		response.status = 200;
+		response.body = R"({"model":{"name":"unknown"}})";
+		return response;
+	});
+	ofxIC::MediaClient media(endpoint);
+	const auto capabilities = media.inspectCapabilities();
+	OFXIC_REQUIRE(!capabilities);
+	OFXIC_REQUIRE(capabilities.failure == ofxIC::RequestFailure::InvalidResponse);
+	OFXIC_REQUIRE(capabilities.error.find("supported_modes") != std::string::npos);
+}
+
 OFXIC_TEST(media_client_rejects_dimensions_outside_loaded_context_limits) {
 	int calls = 0;
 	ofxIC::Endpoint endpoint("http://localhost:1234", [&](const ofxIC::HttpRequest &) {
