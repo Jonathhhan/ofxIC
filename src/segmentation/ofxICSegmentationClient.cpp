@@ -69,7 +69,7 @@ SegmentationBridgeStatus SegmentationClient::inspectSamBridge(
 	RequestControl control) const {
 	SegmentationBridgeStatus result;
 	if (control.timeoutSeconds < 0) {
-		result.failure = RequestFailure::InvalidResponse;
+		result.failure = RequestFailure::Validation;
 		result.error = "request timeout cannot be negative";
 		return result;
 	}
@@ -123,22 +123,22 @@ SegmentationResult SegmentationClient::segmentSamBridge(
 	RequestControl control) const {
 	SegmentationResult result;
 	if (control.timeoutSeconds < 0) {
-		result.failure = RequestFailure::InvalidResponse;
+		result.failure = RequestFailure::Validation;
 		result.error = "request timeout cannot be negative";
 		return result;
 	}
 	if (request.imageBytes.empty()) {
-		result.failure = RequestFailure::InvalidResponse;
+		result.failure = RequestFailure::Validation;
 		result.error = "segmentation image is empty";
 		return result;
 	}
 	if (request.imageBytes.size() > maximumImageBytes) {
-		result.failure = RequestFailure::InvalidResponse;
+		result.failure = RequestFailure::Validation;
 		result.error = "segmentation image exceeds the 60 MiB client limit";
 		return result;
 	}
 	if (request.points.empty()) {
-		result.failure = RequestFailure::InvalidResponse;
+		result.failure = RequestFailure::Validation;
 		result.error = "segmentation requires at least one point";
 		return result;
 	}
@@ -154,7 +154,7 @@ SegmentationResult SegmentationClient::segmentSamBridge(
 			return result;
 		}
 		if (point.x < 0.0f || point.x > 1.0f || point.y < 0.0f || point.y > 1.0f) {
-			result.failure = RequestFailure::InvalidResponse;
+			result.failure = RequestFailure::Validation;
 			result.error = "segmentation point must use normalized coordinates";
 			return result;
 		}

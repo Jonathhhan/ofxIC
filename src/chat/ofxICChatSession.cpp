@@ -49,7 +49,7 @@ ChatResult ChatSession::send(
 	RequestControl control) {
 	if (message.empty()) {
 		ChatResult result;
-		result.failure = RequestFailure::InvalidResponse;
+		result.failure = RequestFailure::Validation;
 		result.error = "message is empty";
 		return result;
 	}

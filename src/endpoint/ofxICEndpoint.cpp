@@ -38,6 +38,18 @@
 namespace ofxIC {
 namespace {
 
+// User-provided cancellation callbacks run on transport-owned threads. Never
+// allow an exception to escape into WinHTTP/libcurl; treat a throwing callback
+// as a cancellation request and let the normal typed result path handle it.
+bool safeShouldCancel(const std::function<bool()> & callback) noexcept {
+	if (!callback) return false;
+	try {
+		return callback();
+	} catch (...) {
+		return true;
+	}
+}
+
 #if defined(_WIN32)
 std::wstring widen(const std::string & value) {
 	if (value.empty()) return {};
@@ -76,7 +88,7 @@ public:
 		if (!this->shouldCancel) return;
 		watcher = std::thread([this]() {
 			while (!finished.load()) {
-				if (this->shouldCancel()) {
+				if (safeShouldCancel(this->shouldCancel)) {
 					cancelled = true;
 					const HINTERNET handle = this->requestHandle.value.exchange(nullptr);
 					if (handle) WinHttpCloseHandle(handle);
@@ -105,7 +117,7 @@ private:
 HttpResponse runWinHttpRequest(const HttpRequest & request) {
 	HttpResponse result;
 	auto cancelled = [&]() {
-		if (!request.shouldCancel || !request.shouldCancel()) return false;
+		if (!safeShouldCancel(request.shouldCancel)) return false;
 		result.cancelled = true;
 		result.failure = RequestFailure::Cancelled;
 		result.error = "request cancelled";
@@ -554,11 +566,21 @@ bool processServerSentEventLine(
 		return true;
 	}
 	response.streamedText += text;
-	if (onChunk && !onChunk(text)) {
-		response.cancelled = true;
-		response.failure = RequestFailure::Cancelled;
-		response.error = "request cancelled";
-		return false;
+	if (onChunk) {
+		bool accepted = false;
+		try {
+			accepted = onChunk(text);
+		} catch (...) {
+			response.failure = RequestFailure::Transport;
+			response.error = "stream callback threw an exception";
+			return false;
+		}
+		if (!accepted) {
+			response.cancelled = true;
+			response.failure = RequestFailure::Cancelled;
+			response.error = "request cancelled";
+			return false;
+		}
 	}
 	return true;
 }
@@ -573,7 +595,7 @@ struct CurlState {
 };
 
 bool shouldCancel(CurlState & state) {
-	if (!state.shouldCancel || !state.shouldCancel()) {
+	if (!safeShouldCancel(state.shouldCancel)) {
 		return false;
 	}
 	state.response->cancelled = true;
@@ -900,7 +922,7 @@ EndpointStatus Endpoint::inspect(std::function<bool()> shouldCancel) const {
 EndpointStatus Endpoint::inspect(RequestControl control) const {
 	EndpointStatus status;
 	if (control.timeoutSeconds < 0) {
-		status.failure = RequestFailure::InvalidResponse;
+		status.failure = RequestFailure::Validation;
 		status.error = "request timeout cannot be negative";
 		return status;
 	}
@@ -961,17 +983,17 @@ ChatResult Endpoint::chat(
 	RequestControl control) const {
 	ChatResult result;
 	if (control.timeoutSeconds < 0) {
-		result.failure = RequestFailure::InvalidResponse;
+		result.failure = RequestFailure::Validation;
 		result.error = "request timeout cannot be negative";
 		return result;
 	}
 	if (request.messages.empty()) {
-		result.failure = RequestFailure::InvalidResponse;
+		result.failure = RequestFailure::Validation;
 		result.error = "chat request has no messages";
 		return result;
 	}
 	if (request.options.stream && !request.tools.empty()) {
-		result.failure = RequestFailure::InvalidResponse;
+		result.failure = RequestFailure::Validation;
 		result.error = "streaming tool calls are not supported yet";
 		return result;
 	}

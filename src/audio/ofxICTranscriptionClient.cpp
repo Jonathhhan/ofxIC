@@ -59,7 +59,7 @@ TranscriptionResult TranscriptionClient::transcribeOpenAI(
 	RequestControl control) const {
 	if (request.audioBytes.size() > kOpenAIMaxAudioBytes) {
 		TranscriptionResult result;
-		result.failure = RequestFailure::InvalidResponse;
+		result.failure = RequestFailure::Validation;
 		result.error = "OpenAI transcription files are limited to 25 MB; loaded file has " +
 			std::to_string(request.audioBytes.size()) + " bytes";
 		return result;
@@ -88,12 +88,12 @@ TranscriptionResult TranscriptionClient::transcribe(
 	RequestControl control) const {
 	TranscriptionResult result;
 	if (control.timeoutSeconds < 0) {
-		result.failure = RequestFailure::InvalidResponse;
+		result.failure = RequestFailure::Validation;
 		result.error = "request timeout cannot be negative";
 		return result;
 	}
 	if (request.audioBytes.empty()) {
-		result.failure = RequestFailure::InvalidResponse;
+		result.failure = RequestFailure::Validation;
 		result.error = "transcription audio is empty";
 		return result;
 	}

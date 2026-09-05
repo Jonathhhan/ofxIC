@@ -117,7 +117,7 @@ OFXIC_TEST(endpoint_rejects_negative_request_timeout_before_transport) {
 	const auto status = endpoint.inspect(control);
 	OFXIC_REQUIRE(!status);
 	OFXIC_REQUIRE(calls == 0);
-	OFXIC_REQUIRE(status.failure == ofxIC::RequestFailure::InvalidResponse);
+	OFXIC_REQUIRE(status.failure == ofxIC::RequestFailure::Validation);
 }
 
 OFXIC_TEST(endpoint_rejects_oversized_model_response) {

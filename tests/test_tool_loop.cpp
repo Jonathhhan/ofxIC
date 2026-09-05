@@ -33,6 +33,29 @@ OFXIC_TEST(tool_registry_is_an_explicit_allowlist) {
 	OFXIC_REQUIRE(rejected.error.find("not allowlisted") != std::string::npos);
 }
 
+OFXIC_TEST(tool_registry_rejects_unsafe_definition_sizes_and_shapes) {
+	ofxIC::ToolRegistry tools;
+	ofxIC::ToolDefinition definition;
+	definition.name = "unsafe_schema";
+	definition.description = "test";
+	definition.parametersJson = "[]";
+	OFXIC_REQUIRE(!tools.add(definition, [](const std::string &) {
+		return ofxIC::ToolExecutionResult{};
+	}));
+	definition.parametersJson = "{\"type\":\"object\"}";
+	OFXIC_REQUIRE(tools.add(definition, [](const std::string &) {
+		ofxIC::ToolExecutionResult result;
+		result.success = true;
+		return result;
+	}));
+	ofxIC::ToolDefinition tooLongName;
+	tooLongName.name.assign(129, 'x');
+	tooLongName.parametersJson = "{}";
+	OFXIC_REQUIRE(!tools.add(tooLongName, [](const std::string &) {
+		return ofxIC::ToolExecutionResult{};
+	}));
+}
+
 OFXIC_TEST(tool_loop_searches_then_returns_grounded_answer) {
 	int requests = 0;
 	ofxIC::Endpoint endpoint("https://example.test/v1", [&](const ofxIC::HttpRequest & request) {

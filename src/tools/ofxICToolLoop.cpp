@@ -29,24 +29,24 @@ ToolLoopResult ToolLoop::run(
 	ToolLoopProgressCallback onProgress) {
 	ToolLoopResult loopResult;
 	if (control.timeoutSeconds < 0) {
-		loopResult.failure = RequestFailure::InvalidResponse;
+		loopResult.failure = RequestFailure::Validation;
 		loopResult.error = "request timeout cannot be negative";
 		return loopResult;
 	}
 	if (userMessage.empty()) {
-		loopResult.failure = RequestFailure::InvalidResponse;
+		loopResult.failure = RequestFailure::Validation;
 		loopResult.error = "message is empty";
 		return loopResult;
 	}
 	ChatSession & session = chat.get();
 	if (session.getOptions().stream) {
-		loopResult.failure = RequestFailure::InvalidResponse;
+		loopResult.failure = RequestFailure::Validation;
 		loopResult.error = "tool loop streaming is not supported yet";
 		return loopResult;
 	}
 	const std::vector<ToolDefinition> definitions = tools.get().definitions();
 	if (definitions.empty()) {
-		loopResult.failure = RequestFailure::InvalidResponse;
+		loopResult.failure = RequestFailure::Validation;
 		loopResult.error = "tool registry is empty";
 		return loopResult;
 	}

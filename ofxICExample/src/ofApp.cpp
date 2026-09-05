@@ -12,6 +12,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
+#include <exception>
 #include <fstream>
 #include <filesystem>
 #include <functional>
@@ -142,6 +143,39 @@ std::string diagnosticEndpoint(std::string value) {
 	const std::size_t privateSuffix = value.find_first_of("?#");
 	if (privateSuffix != std::string::npos) value.resize(privateSuffix);
 	return diagnosticText(std::move(value));
+}
+
+// ACE-Step's registry scans every GGUF in the configured directory. A shared
+// model folder therefore produces one harmless warning for each unrelated
+// architecture (llama, Wan, SD, multimodal, ...). Keep the raw output in the
+// ManagedProcess buffer, but collapse this known informational pattern when it
+// is forwarded to the console/UI so useful startup errors remain readable.
+std::string compactAceStepRegistryOutput(const std::string & output,
+	std::size_t * suppressedWarnings = nullptr) {
+	if (suppressedWarnings) *suppressedWarnings = 0;
+	if (output.empty()) return output;
+	std::istringstream input(output);
+	std::ostringstream compact;
+	std::string line;
+	std::size_t suppressed = 0;
+	while (std::getline(input, line)) {
+		const bool unknownArchitecture =
+			line.find("[Registry] WARNING: skipping ") != std::string::npos &&
+			line.find(" (unknown architecture)") != std::string::npos;
+		if (unknownArchitecture) {
+			++suppressed;
+			continue;
+		}
+		compact << line << '\n';
+	}
+	if (suppressed > 0) {
+		compact << "[Registry] ignored " << suppressed <<
+			" unrelated GGUF file" << (suppressed == 1 ? "" : "s") <<
+			" in the shared model folder; ACE-Step models remain available. "
+			"Use a dedicated ACE-Step model folder to avoid this scan.\n";
+	}
+	if (suppressedWarnings) *suppressedWarnings = suppressed;
+	return compact.str();
 }
 
 bool usesManagedSamBridge(const std::string & endpoint) {
@@ -1521,7 +1555,9 @@ void ofApp::draw() {
 				ImGui::TextDisabled("(%s)", logFileAge(path).c_str());
 			}
 		}
-		const std::string & log = process.recentOutput();
+		const std::string rawLog = process.recentOutput();
+		const std::string log = std::string(id) == "acestep"
+			? compactAceStepRegistryOutput(rawLog) : rawLog;
 		if (log.empty()) return;
 		const std::string header = std::string("Server output##") + id;
 		if (process.state() == ofxICExample::ManagedProcessState::Failed ||
@@ -2798,7 +2834,12 @@ void ofApp::updateManagedProcess(ofxICExample::ManagedProcess & process,
 	process.update();
 	processStatus = process.status();
 	const std::string output = process.takeNewOutput();
-	if (!output.empty()) ofLogNotice("ofxIC servers") << logName << ":\n" << output;
+	if (!output.empty()) {
+		const std::string displayOutput = logName == "ACE-Step"
+			? compactAceStepRegistryOutput(output) : output;
+		if (!displayOutput.empty())
+			ofLogNotice("ofxIC servers") << logName << ":\n" << displayOutput;
+	}
 }
 
 void ofApp::configureRuntimeAutomation() {
@@ -3998,6 +4039,7 @@ void ofApp::transcribeAudio() {
 	const int protocol = transcriptionProtocol;
 	const auto currentModels = availableModels;
 	worker = std::thread([this, request = std::move(request), protocol, currentModels]() {
+		try {
 		ofxIC::RequestControl control;
 		control.shouldCancel = [this]() { return cancellationRequested.load(); };
 		const auto result = protocol == 0
@@ -4012,6 +4054,11 @@ void ofApp::transcribeAudio() {
 			: "Transcription failed: " + result.error;
 		pendingModels = currentModels;
 		finished = true;
+		} catch (const std::exception & exception) {
+			failWorker("Transcription", exception.what());
+		} catch (...) {
+			failWorker("Transcription", "unknown exception");
+		}
 	});
 }
 
@@ -4070,6 +4117,7 @@ void ofApp::inspectSegmentationBridge() {
 	const std::string currentOutput = output;
 	const std::vector<std::string> currentModels = availableModels;
 	worker = std::thread([this, currentOutput, currentModels]() {
+		try {
 		const auto bridge = segmentation.inspectSamBridge([this]() {
 			return cancellationRequested.load();
 		});
@@ -4086,6 +4134,11 @@ void ofApp::inspectSegmentationBridge() {
 		pendingOutput = currentOutput;
 		pendingModels = currentModels;
 		finished = true;
+		} catch (const std::exception & exception) {
+			failWorker("Segmentation bridge inspection", exception.what());
+		} catch (...) {
+			failWorker("Segmentation bridge inspection", "unknown exception");
+		}
 	});
 }
 
@@ -4119,6 +4172,7 @@ void ofApp::segmentImage() {
 	}
 	const auto currentModels = availableModels;
 	worker = std::thread([this, request = std::move(request), currentModels]() {
+		try {
 		const auto result = segmentation.segmentSamBridge(
 			request, [this]() { return cancellationRequested.load(); });
 		std::lock_guard<std::mutex> lock(resultMutex);
@@ -4130,6 +4184,11 @@ void ofApp::segmentImage() {
 			: "Segmentation failed: " + result.error;
 		pendingModels = currentModels;
 		finished = true;
+		} catch (const std::exception & exception) {
+			failWorker("Segmentation", exception.what());
+		} catch (...) {
+			failWorker("Segmentation", "unknown exception");
+		}
 	});
 }
 
@@ -4247,6 +4306,7 @@ void ofApp::inspectEndpoint() {
 		? 0
 		: ofToInt(configuredTimeout);
 	worker = std::thread([this, currentOutput, currentModel, timeoutSeconds]() {
+		try {
 		ofxIC::RequestControl control;
 		control.timeoutSeconds = timeoutSeconds;
 		const bool unattendedInspection =
@@ -4279,6 +4339,11 @@ void ofApp::inspectEndpoint() {
 		else ofLogError("ofxIC inspect") << pendingStatus;
 		pendingOutput = currentOutput;
 		finished = true;
+		} catch (const std::exception & exception) {
+			failWorker("Endpoint inspection", exception.what());
+		} catch (...) {
+			failWorker("Endpoint inspection", "unknown exception");
+		}
 	});
 }
 
@@ -4309,6 +4374,7 @@ void ofApp::sendMessage() {
 	const bool streaming = streamChat;
 	const int profile = selectedProfile;
 	worker = std::thread([this, message, currentModels, streaming, profile]() {
+		try {
 		ofxIC::RequestControl control;
 		control.shouldCancel = [this]() { return cancellationRequested.load(); };
 		ofxIC::ToolLoopResult result;
@@ -4372,6 +4438,11 @@ void ofApp::sendMessage() {
 		}
 		pendingModels = currentModels;
 		finished = true;
+		} catch (const std::exception & exception) {
+			failWorker("Chat request", exception.what());
+		} catch (...) {
+			failWorker("Chat request", "unknown exception");
+		}
 	});
 }
 
@@ -4444,6 +4515,7 @@ void ofApp::inspectMediaContext() {
 	mediaStatus = "Inspecting loaded sd-server context...";
 	const std::string selectedContextModel = stableDiffusionModelPath.data();
 	mediaWorker = std::thread([this, selectedContextModel]() {
+		try {
 		ofxIC::RequestControl control;
 		control.timeoutSeconds = 10;
 		control.shouldCancel = [this]() { return cancellationRequested.load(); };
@@ -4494,6 +4566,11 @@ void ofApp::inspectMediaContext() {
 		pendingMediaCapabilities = capabilities;
 		pendingMediaCapabilitiesReady = true;
 		mediaFinished = true;
+		} catch (const std::exception & exception) {
+			failMediaWorker("Media context inspection", exception.what());
+		} catch (...) {
+			failMediaWorker("Media context inspection", "unknown exception");
+		}
 	});
 }
 
@@ -4549,6 +4626,7 @@ void ofApp::generateMedia() {
 	mediaWorker = std::thread([this, prompt, width, height, frames, fps, seed, steps,
 		guidance, sampler, scheduler, requestedOutputFormat, video, backend,
 		mediaModel, autoPoll, outputStem]() {
+		try {
 		ofxIC::RequestControl control;
 		control.shouldCancel = [this]() { return cancellationRequested.load(); };
 		std::string nextStatus;
@@ -4664,6 +4742,11 @@ void ofApp::generateMedia() {
 		pendingMediaIsVideo = video;
 		pendingMediaJob = std::move(nextJob);
 		mediaFinished = true;
+		} catch (const std::exception & exception) {
+			failMediaWorker(video ? "Video generation" : "Image generation", exception.what());
+		} catch (...) {
+			failMediaWorker(video ? "Video generation" : "Image generation", "unknown exception");
+		}
 	});
 }
 
@@ -4683,6 +4766,7 @@ void ofApp::generateMusic() {
 		: "Submitting Stability Audio 3 music job...";
 	musicOutput.clear();
 	mediaWorker = std::thread([this, prompt, duration, format, backend, autoPoll]() {
+		try {
 		ofxIC::RequestControl control;
 		control.shouldCancel = [this]() { return cancellationRequested.load(); };
 		std::string nextStatus;
@@ -4766,7 +4850,50 @@ void ofApp::generateMusic() {
 		pendingMusicJob = std::move(nextStabilityJob);
 		pendingAceStepMusicJob = std::move(nextAceStepJob);
 		musicFinished = true;
+		} catch (const std::exception & exception) {
+			failMusicWorker("Music generation", exception.what());
+		} catch (...) {
+			failMusicWorker("Music generation", "unknown exception");
+		}
 	});
+}
+
+void ofApp::failWorker(const std::string & task, const std::string & error) {
+	const std::string detail = error.empty() ? "unknown exception" : error;
+	std::lock_guard<std::mutex> lock(resultMutex);
+	pendingOutput.clear();
+	pendingProgressStatus.clear();
+	pendingStreamOutput.clear();
+	pendingSegmentationMask.clear();
+	pendingModelSelection.clear();
+	pendingStatus = task + " failed unexpectedly: " + detail;
+	finished = true;
+}
+
+void ofApp::failMediaWorker(const std::string & task, const std::string & error) {
+	const std::string detail = error.empty() ? "unknown exception" : error;
+	std::lock_guard<std::mutex> lock(mediaResultMutex);
+	pendingMediaStatus = task + " failed unexpectedly: " + detail;
+	pendingMediaProgressStatus.clear();
+	pendingMediaOutput.clear();
+	pendingMediaSavedPath.clear();
+	pendingMediaJob = {};
+	pendingMediaIsVideo = false;
+	pendingMediaCapabilities = {};
+	pendingMediaCapabilitiesReady = false;
+	mediaFinished = true;
+}
+
+void ofApp::failMusicWorker(const std::string & task, const std::string & error) {
+	const std::string detail = error.empty() ? "unknown exception" : error;
+	std::lock_guard<std::mutex> lock(mediaResultMutex);
+	pendingMusicStatus = task + " failed unexpectedly: " + detail;
+	pendingMusicOutput.clear();
+	pendingMusicBytes.clear();
+	pendingMusicFormat.clear();
+	pendingMusicJob = {};
+	pendingAceStepMusicJob = {};
+	musicFinished = true;
 }
 
 void ofApp::finishWorker() {

@@ -245,7 +245,7 @@ MediaClient::MediaClient(Endpoint & endpoint)
 MediaCapabilities MediaClient::inspectCapabilities(RequestControl control) const {
 	MediaCapabilities result;
 	if (control.timeoutSeconds < 0) {
-		result.failure = RequestFailure::InvalidResponse;
+		result.failure = RequestFailure::Validation;
 		result.error = "request timeout cannot be negative";
 		return result;
 	}
@@ -304,12 +304,12 @@ MediaCapabilities MediaClient::inspectCapabilities(RequestControl control) const
 ImageResult MediaClient::generateImage(const ImageRequest & request, RequestControl control) const {
 	ImageResult result;
 	if (control.timeoutSeconds < 0) {
-		result.failure = RequestFailure::InvalidResponse;
+		result.failure = RequestFailure::Validation;
 		result.error = "request timeout cannot be negative";
 		return result;
 	}
 	if (request.prompt.empty()) {
-		result.failure = RequestFailure::InvalidResponse;
+		result.failure = RequestFailure::Validation;
 		result.error = "image prompt is empty";
 		return result;
 	}
@@ -348,7 +348,7 @@ ImageResult MediaClient::generateImage(const ImageRequest & request, RequestCont
 ImageResult MediaClient::downloadImage(const std::string & url, RequestControl control) const {
 	ImageResult result;
 	if (control.timeoutSeconds < 0 || (url.compare(0, 8, "https://") != 0 && url.compare(0, 7, "http://") != 0)) {
-		result.failure = RequestFailure::InvalidResponse;
+		result.failure = RequestFailure::Validation;
 		result.error = "image download requires an HTTP(S) URL and non-negative timeout";
 		return result;
 	}
@@ -385,14 +385,14 @@ MediaJob MediaClient::submit(const MediaJobRequest & request, RequestControl con
 	if (control.timeoutSeconds < 0) {
 		MediaJob result;
 		result.kind = request.kind;
-		result.failure = RequestFailure::InvalidResponse;
+		result.failure = RequestFailure::Validation;
 		result.error = "request timeout cannot be negative";
 		return result;
 	}
 	if (request.prompt.empty()) {
 		MediaJob result;
 		result.kind = request.kind;
-		result.failure = RequestFailure::InvalidResponse;
+		result.failure = RequestFailure::Validation;
 		result.error = "media prompt is empty";
 		return result;
 	}
@@ -498,7 +498,7 @@ MediaJob MediaClient::poll(const MediaJob & job, RequestControl control) const {
 MediaJob MediaClient::poll(const std::string & idOrPollUrl, RequestControl control) const {
 	if (control.timeoutSeconds < 0) {
 		MediaJob result;
-		result.failure = RequestFailure::InvalidResponse;
+		result.failure = RequestFailure::Validation;
 		result.error = "request timeout cannot be negative";
 		return result;
 	}
@@ -507,7 +507,7 @@ MediaJob MediaClient::poll(const std::string & idOrPollUrl, RequestControl contr
 	request.url = jobPath(idOrPollUrl);
 	if (request.url.empty()) {
 		MediaJob result;
-		result.failure = RequestFailure::InvalidResponse;
+		result.failure = RequestFailure::Validation;
 		result.error = "media job id is empty";
 		return result;
 	}
@@ -520,7 +520,7 @@ MediaJob MediaClient::cancel(const MediaJob & job, RequestControl control) const
 	if (control.timeoutSeconds < 0) {
 		MediaJob result = job;
 		result.success = false;
-		result.failure = RequestFailure::InvalidResponse;
+		result.failure = RequestFailure::Validation;
 		result.error = "request timeout cannot be negative";
 		return result;
 	}
@@ -537,7 +537,7 @@ MediaJob MediaClient::cancel(const MediaJob & job, RequestControl control) const
 	if (request.url.empty()) {
 		MediaJob result;
 		result.kind = job.kind;
-		result.failure = RequestFailure::InvalidResponse;
+		result.failure = RequestFailure::Validation;
 		result.error = "media job id is empty";
 		return result;
 	}

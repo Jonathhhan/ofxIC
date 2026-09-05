@@ -169,6 +169,6 @@ OFXIC_TEST(segmentation_rejects_negative_timeout_before_transport) {
 	control.timeoutSeconds = -1;
 	const auto status = client.inspectSamBridge(control);
 	OFXIC_REQUIRE(!status);
-	OFXIC_REQUIRE(status.failure == ofxIC::RequestFailure::InvalidResponse);
+	OFXIC_REQUIRE(status.failure == ofxIC::RequestFailure::Validation);
 	OFXIC_REQUIRE(calls == 0);
 }

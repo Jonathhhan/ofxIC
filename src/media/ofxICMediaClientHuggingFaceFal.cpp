@@ -206,17 +206,17 @@ MediaJob MediaClient::submitHuggingFaceFal(
 	job.fps = request.kind == MediaKind::Video ? std::max(1, request.fps) : 0;
 	job.frameCount = request.kind == MediaKind::Video ? std::max(1, request.videoFrames) : 0;
 	if (control.timeoutSeconds < 0) {
-		job.failure = RequestFailure::InvalidResponse;
+		job.failure = RequestFailure::Validation;
 		job.error = "request timeout cannot be negative";
 		return job;
 	}
 	if (request.prompt.empty()) {
-		job.failure = RequestFailure::InvalidResponse;
+		job.failure = RequestFailure::Validation;
 		job.error = "media prompt is empty";
 		return job;
 	}
 	if (request.model.empty()) {
-		job.failure = RequestFailure::InvalidResponse;
+		job.failure = RequestFailure::Validation;
 		job.error = "Hugging Face / fal-ai media model is empty";
 		return job;
 	}
@@ -346,12 +346,12 @@ MediaJob MediaClient::pollHuggingFaceFal(
 	result.cancelled = false;
 	result.failure = RequestFailure::None;
 	if (control.timeoutSeconds < 0) {
-		result.failure = RequestFailure::InvalidResponse;
+		result.failure = RequestFailure::Validation;
 		result.error = "request timeout cannot be negative";
 		return result;
 	}
 	if (job.pollUrl.empty() || job.resultUrl.empty()) {
-		result.failure = RequestFailure::InvalidResponse;
+		result.failure = RequestFailure::Validation;
 		result.error = "Hugging Face / fal-ai job has no polling URL";
 		return result;
 	}

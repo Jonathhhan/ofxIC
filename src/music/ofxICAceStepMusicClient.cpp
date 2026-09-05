@@ -271,9 +271,9 @@ AceStepMusicClient::AceStepMusicClient(Endpoint & endpoint) : endpoint(endpoint)
 
 AceStepMusicJob AceStepMusicClient::submit(const AceStepMusicRequest & request,
 	RequestControl control) const {
-	if (control.timeoutSeconds < 0) return failure("request timeout cannot be negative");
+	if (control.timeoutSeconds < 0) return failure("request timeout cannot be negative", 0, {}, RequestFailure::Validation);
 	const std::string validationError = validate(request);
-	if (!validationError.empty()) return failure(validationError);
+	if (!validationError.empty()) return failure(validationError, 0, {}, RequestFailure::Validation);
 	if (request.protocol == AceStepMusicProtocol::NativeCpp) {
 		const AceStepMusicJobPhase phase = request.instrumentalOnly
 			? AceStepMusicJobPhase::Synthesis : AceStepMusicJobPhase::LanguageModel;
@@ -358,9 +358,9 @@ AceStepMusicJob AceStepMusicClient::submit(const AceStepMusicRequest & request,
 
 AceStepMusicJob AceStepMusicClient::poll(const AceStepMusicJob & job,
 	RequestControl control) const {
-	if (control.timeoutSeconds < 0) return failure("request timeout cannot be negative");
-	if (!validJobId(job.id)) return failure("ACE-Step music job id is invalid");
-	if (job.outputFormat != "mp3" && job.outputFormat != "wav") return failure("ACE-Step music job output format must be mp3 or wav");
+	if (control.timeoutSeconds < 0) return failure("request timeout cannot be negative", 0, {}, RequestFailure::Validation);
+	if (!validJobId(job.id)) return failure("ACE-Step music job id is invalid", 0, {}, RequestFailure::Validation);
+	if (job.outputFormat != "mp3" && job.outputFormat != "wav") return failure("ACE-Step music job output format must be mp3 or wav", 0, {}, RequestFailure::Validation);
 	if (job.protocol == AceStepMusicProtocol::NativeCpp) {
 		HttpRequest statusRequest;
 		statusRequest.method = HttpMethod::Get;

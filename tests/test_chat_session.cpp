@@ -53,6 +53,7 @@ OFXIC_TEST(chat_session_rejects_empty_messages_without_transport) {
 
 	const auto result = session.send("");
 	OFXIC_REQUIRE(!result);
+	OFXIC_REQUIRE(result.failure == ofxIC::RequestFailure::Validation);
 	OFXIC_REQUIRE(result.error == "message is empty");
 	OFXIC_REQUIRE(calls == 0);
 }

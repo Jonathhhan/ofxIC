@@ -104,6 +104,9 @@ private:
 	void reconcileCurrentMediaControls();
 	void generateMusic();
 	void rebuildMusicWaveform(const std::string & bytes, const std::string & format);
+	void failWorker(const std::string & task, const std::string & error);
+	void failMediaWorker(const std::string & task, const std::string & error);
+	void failMusicWorker(const std::string & task, const std::string & error);
 	void finishWorker();
 	void finishMediaWorker();
 	std::string configuredToken() const;

@@ -140,10 +140,10 @@ StabilityAudioClient::StabilityAudioClient(Endpoint & endpoint)
 StabilityAudioJob StabilityAudioClient::submit(
 	const StabilityAudioRequest & request, RequestControl control) const {
 	if (control.timeoutSeconds < 0) {
-		return failure("request timeout cannot be negative");
+		return failure("request timeout cannot be negative", 0, {}, RequestFailure::Validation);
 	}
 	const std::string validationError = validate(request);
-	if (!validationError.empty()) return failure(validationError);
+	if (!validationError.empty()) return failure(validationError, 0, {}, RequestFailure::Validation);
 
 	std::string boundary;
 	HttpRequest httpRequest;
@@ -184,11 +184,11 @@ StabilityAudioJob StabilityAudioClient::submit(
 StabilityAudioJob StabilityAudioClient::poll(
 	const StabilityAudioJob & job, RequestControl control) const {
 	if (control.timeoutSeconds < 0) {
-		return failure("request timeout cannot be negative");
+		return failure("request timeout cannot be negative", 0, {}, RequestFailure::Validation);
 	}
-	if (!isHexJobId(job.id)) return failure("music job id must be 64 hexadecimal characters");
+	if (!isHexJobId(job.id)) return failure("music job id must be 64 hexadecimal characters", 0, {}, RequestFailure::Validation);
 	if (job.outputFormat != "mp3" && job.outputFormat != "wav") {
-		return failure("music job output format must be mp3 or wav");
+		return failure("music job output format must be mp3 or wav", 0, {}, RequestFailure::Validation);
 	}
 	HttpRequest request;
 	request.method = HttpMethod::Get;

@@ -12,7 +12,7 @@ namespace ofxIC {
 namespace {
 
 bool validToolName(const std::string & name) {
-	if (name.empty()) return false;
+	if (name.empty() || name.size() > 128U) return false;
 	for (const unsigned char c : name) {
 		if (!std::isalnum(c) && c != '_' && c != '-') return false;
 	}
@@ -71,6 +71,34 @@ bool readHexCodeUnit(const std::string & json, std::size_t & position, unsigned 
 		value = (value << 4U) | static_cast<unsigned int>(digit);
 	}
 	return true;
+}
+
+bool validParametersJson(const std::string & json) {
+	constexpr std::size_t maximumSchemaBytes = 64U * 1024U;
+	if (json.empty() || json.size() > maximumSchemaBytes) return false;
+	std::size_t first = 0;
+	while (first < json.size() && std::isspace(static_cast<unsigned char>(json[first]))) ++first;
+	if (first == json.size() || json[first] != '{') return false;
+	int depth = 0;
+	bool quoted = false;
+	bool escaped = false;
+	for (std::size_t i = first; i < json.size(); ++i) {
+		const unsigned char character = static_cast<unsigned char>(json[i]);
+		if (quoted) {
+			if (escaped) escaped = false;
+			else if (character == '\\') escaped = true;
+			else if (character == '"') quoted = false;
+			else if (character < 0x20U) return false;
+			continue;
+		}
+		if (character == '"') quoted = true;
+		else if (character == '{') ++depth;
+		else if (character == '}' && --depth < 0) return false;
+	}
+	if (quoted || escaped || depth != 0) return false;
+	std::size_t last = json.size();
+	while (last > first && std::isspace(static_cast<unsigned char>(json[last - 1]))) --last;
+	return last > first && json[last - 1] == '}';
 }
 
 bool readJsonString(const std::string & json, std::size_t & position, std::string & value) {
@@ -189,7 +217,9 @@ ToolExecutionResult searchDocuments(
 } // namespace
 
 bool ToolRegistry::add(ToolDefinition definition, ToolHandler handler) {
-	if (!validToolName(definition.name) || !handler || entries.count(definition.name) > 0) return false;
+	if (!validToolName(definition.name) || definition.description.size() > 4096U ||
+		!validParametersJson(definition.parametersJson) || !handler ||
+		entries.count(definition.name) > 0) return false;
 	const std::string name = definition.name;
 	entries.emplace(name, Entry{ std::move(definition), std::move(handler) });
 	return true;
