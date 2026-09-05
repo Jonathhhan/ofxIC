@@ -44,6 +44,36 @@ do not widen the core addon into a generic runtime or provider framework.
 
 ### Validation checkpoint — 2026-09-05
 
+- Documents now offers a script-backed webpage preview and explicit session
+  import. `smoke-web-import.ps1 -Live` passed through the actual example:
+  loopback rejection, a public page preview without index mutation, and explicit
+  acceptance adding exactly one document. URL query parameters are supported.
+  Evidence: `ofxIC-web-import-d5f0f08f-f514-4b5f-b938-eac49ab8e984`.
+  This is ingestion evidence, not web search or a model-grounded answer.
+
+- Citation validation now permits one tool-free correction, then reports a
+  validation failure if no retrieved citation marker appears. Deterministic
+  tests cover correction success, omission, invented markers, timeout and
+  cancellation, including history rollback. All four CTest suites passed.
+- Live comparison after that change: Qwen2.5-1.5B still omitted a citation and
+  was rejected; Qwen2.5-Coder-7B emitted tool-shaped ordinary text, which was
+  not executed; Qwen3.6-35B did not finish within the 180-second smoke deadline.
+  These runs do not establish a successful grounded answer. Model defaults
+  were not changed. Evidence runs end in `a13a7d61-cb32-422a-963d-a1082c7c06ee`,
+  `562f54ca-792c-48ce-903f-76b78f47406b`, and
+  `d59c4a95-f22d-4437-8f8c-9c55b2e8ce9a`, respectively.
+
+- SD capabilities now reach the GUI automatically from the bounded readiness
+  worker, before a queued generation starts. Manual context inspection remains
+  available. Stopping the local runtime clears the capability cache.
+- The marker-gated `smoke-local-generation-live.ps1 -Task image` passed with
+  the default SD Turbo checkpoint: automatic nonempty sampler/scheduler lists,
+  a real 512x512 PNG, and clean example-owned shutdown. The retained image was
+  visually checked. Evidence: `ofxIC-generation-live-8bedce0a-c5fd-493a-8b14-245df74588b3`.
+- A separate default Qwen2.5-1.5B chat run completed two model requests and
+  document search but omitted the requested source citation. The grounded
+  validation correctly failed; do not report this run as grounded-answer success.
+
 - Release workbench: all five installed local runtimes (llama, SD, ACE-Step,
   Whisper and SAM) reached protocol readiness as example-owned processes and
   stopped cleanly through `smoke-local-runtime-matrix.ps1 -Live -KeepLogs`.
@@ -54,9 +84,10 @@ do not widen the core addon into a generic runtime or provider framework.
   during its simulated loading phase. SAM environment overrides are restored.
   Evidence run: `ofxIC-one-click-d0c1bc86-badb-4aab-a7ea-32807517e0f5`.
 
-The first run proves real executable startup and shutdown through the workbench;
-the second proves fixture-backed task execution. Neither is new evidence of
-model-backed image, video, music or segmentation generation.
+The runtime matrix proves real executable startup and shutdown through the
+workbench; the one-click fixture test proves deterministic task execution.
+Only the separate SD generation run above proves a new model-backed image result.
+Video, music and segmentation generation have not been revalidated here.
 
 ### M1 — Reproducible local core path
 

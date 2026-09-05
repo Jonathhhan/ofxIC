@@ -89,6 +89,11 @@ private:
 	void saveTokenCredential(const std::string & variable, std::array<char, 512> & input);
 	void forgetTokenCredential(const std::string & variable);
 	bool loadDocument(const std::string & path);
+	void startWebImport();
+	void updateWebImport();
+	void discardWebImport();
+	void acceptWebImport();
+	void writeWebImportEvidence();
 	bool loadAudio(const std::string & path);
 	void transcribeAudio();
 	bool loadSegmentationImage(const std::string & path);
@@ -96,6 +101,7 @@ private:
 	void segmentImage();
 	void generateMedia();
 	void inspectMediaContext();
+	void reconcileCurrentMediaControls();
 	void generateMusic();
 	void finishWorker();
 	void finishMediaWorker();
@@ -240,6 +246,14 @@ private:
 	std::string output;
 	std::string status;
 	std::string documentStatus;
+	std::array<char, 8193> webImportUrl{};
+	ofxICExample::ManagedProcess webImportProcess;
+	std::string webImportPath;
+	std::string webImportText;
+	std::string webImportStatus = "Import one public webpage; review it before adding it to Documents.";
+	bool webImportPending = false;
+	std::size_t webImportDocumentsBefore = 0;
+	std::uint64_t webImportDeadlineMillis = 0;
 	std::vector<std::string> loadedDocumentSources;
 	std::vector<std::string> loadedDocumentContents;
 	int selectedDocument = 0;
@@ -288,6 +302,8 @@ private:
 	ofxIC::MediaCapabilities currentMediaCapabilities;
 	ofxIC::MediaCapabilities pendingMediaCapabilities;
 	bool pendingMediaCapabilitiesReady = false;
+	ofxIC::MediaCapabilities pendingRuntimeMediaCapabilities;
+	bool pendingRuntimeMediaCapabilitiesReady = false;
 	ofxIC::StabilityAudioJob currentMusicJob;
 	ofxIC::StabilityAudioJob pendingMusicJob;
 	ofxIC::AceStepMusicJob currentAceStepMusicJob;

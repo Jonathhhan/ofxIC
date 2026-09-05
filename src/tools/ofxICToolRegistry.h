@@ -15,6 +15,8 @@ struct ToolExecutionResult {
 	bool success = false;
 	std::string content;
 	std::string error;
+	// Citation markers supplied by the handler, never extracted from document text.
+	std::vector<std::string> citations;
 
 	explicit operator bool() const { return success; }
 };

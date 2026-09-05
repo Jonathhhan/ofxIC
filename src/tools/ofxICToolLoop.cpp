@@ -3,6 +3,7 @@
 #include "../chat/ofxICChatSession.h"
 
 #include <utility>
+#include <algorithm>
 
 namespace ofxIC {
 
@@ -118,6 +119,29 @@ ToolLoopResult ToolLoop::run(
 		++loopResult.modelRequests;
 	}
 
+	std::vector<std::string> citations;
+	for (const auto & step : loopResult.steps)
+		for (const auto & citation : step.result.citations)
+			if (!citation.empty() && std::find(citations.begin(), citations.end(), citation) == citations.end())
+				citations.push_back(citation);
+	const auto hasCitation = [&]() {
+		return std::any_of(citations.begin(), citations.end(), [&](const std::string & citation) {
+			return completion.text.find(citation) != std::string::npos;
+		});
+	};
+	if (completion && !citations.empty() && !hasCitation()) {
+		if (stopIfCancelled()) return loopResult;
+		ChatMessage correction;
+		correction.role = ChatRole::System;
+		correction.content = "Rewrite the previous answer using only the retrieved evidence. "
+			"Include at least one of these exact citation markers next to the claim it supports. "
+			"Do not invent sources. Available citation markers:\n";
+		for (const auto & citation : citations) correction.content += citation + "\n";
+		if (onProgress) onProgress({ ToolLoopStage::RequestingModel, loopResult.modelRequests + 1, {} });
+		if (stopIfCancelled()) return loopResult;
+		completion = session.complete({ correction }, {}, nullptr, control);
+		++loopResult.modelRequests;
+	}
 	if (!completion) {
 		loopResult.cancelled = completion.cancelled;
 		loopResult.failure = completion.failure;
@@ -125,6 +149,11 @@ ToolLoopResult ToolLoop::run(
 		return loopResult;
 	}
 	if (stopIfCancelled()) return loopResult;
+	if (!citations.empty() && (!hasCitation() || !completion.toolCalls.empty())) {
+		loopResult.failure = RequestFailure::Validation;
+		loopResult.error = "answer omitted a retrieved source citation after one correction request";
+		return loopResult;
+	}
 	loopResult.success = true;
 	loopResult.text = completion.text;
 	transaction.committed = true;

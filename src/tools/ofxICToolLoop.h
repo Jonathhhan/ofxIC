@@ -47,6 +47,9 @@ public:
 	// Cancellation is checked between handlers, not inside a running handler.
 	// An incomplete run rolls back chat history, not side effects of executed
 	// tools. Callback exceptions propagate; callbacks must not mutate the session.
+	// Retrieved citation markers require at least one exact marker in the answer.
+	// Missing markers trigger at most one extra, tool-free correction request.
+	// This checks attribution presence, not semantic support for every claim.
 	ToolLoopResult run(
 		const std::string & userMessage,
 		std::size_t maxToolRounds = 4,

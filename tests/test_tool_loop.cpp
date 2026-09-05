@@ -23,6 +23,7 @@ OFXIC_TEST(tool_registry_is_an_explicit_allowlist) {
 	ofxIC::ToolCall search{ "call-1", "search_documents", "{\"query\":\"process boundary\"}" };
 	const auto found = tools.execute(search);
 	OFXIC_REQUIRE(found);
+	OFXIC_REQUIRE(found.citations == std::vector<std::string>{"[guide.md#chunk-1]"});
 	OFXIC_REQUIRE(found.content.find("\"content_trust\":\"untrusted\"") != std::string::npos);
 	OFXIC_REQUIRE(found.content.find("[guide.md#chunk-1]") != std::string::npos);
 
@@ -74,6 +75,58 @@ OFXIC_TEST(tool_loop_searches_then_returns_grounded_answer) {
 	OFXIC_REQUIRE(progress[1].toolName == "search_documents");
 	OFXIC_REQUIRE(progress[2].stage == ofxIC::ToolLoopStage::RequestingModel);
 	OFXIC_REQUIRE(progress[2].modelRequest == 2);
+}
+
+OFXIC_TEST(tool_loop_repairs_missing_citation_once_and_rolls_back_invalid_answers) {
+	for (int scenario = 0; scenario < 5; ++scenario) {
+		int requests = 0;
+		ofxIC::Endpoint endpoint("https://example.test", [&](const ofxIC::HttpRequest & request) {
+			++requests;
+			ofxIC::HttpResponse response;
+			response.started = true;
+			response.status = 200;
+			if (requests == 1)
+				response.body = R"({"choices":[{"message":{"tool_calls":[{"id":"c1","type":"function","function":{"name":"search_documents","arguments":"{\"query\":\"boundary\"}"}}]}}]})";
+			else if (requests == 2)
+				response.body = R"({"choices":[{"message":{"content":"The runtime uses a process boundary."}}]})";
+			else {
+				OFXIC_REQUIRE(request.body.find("[guide.md#chunk-1]") != std::string::npos);
+				OFXIC_REQUIRE(request.body.find("\"tools\"") == std::string::npos);
+				if (scenario == 0)
+					response.body = R"({"choices":[{"message":{"content":"The runtime is separate [guide.md#chunk-1]."}}]})";
+				else if (scenario == 1)
+					response.body = R"({"choices":[{"message":{"content":"Still no citation."}}]})";
+				else if (scenario == 2)
+					response.body = R"({"choices":[{"message":{"content":"Invented [other.md#chunk-1]."}}]})";
+				else {
+					response.failure = ofxIC::RequestFailure::Timeout;
+					response.error = "correction timed out";
+				}
+			}
+			return response;
+		});
+		ofxIC::ChatSession chat(endpoint);
+		ofxIC::DocumentIndex index;
+		index.addText("guide.md", "The runtime uses a process boundary.");
+		ofxIC::ToolRegistry registry;
+		registry.addDocumentSearch(index);
+		ofxIC::ToolLoop loop(chat, registry);
+		bool cancel = false;
+		ofxIC::RequestControl control;
+		control.shouldCancel = [&]() { return cancel; };
+		const auto result = loop.run("Why separate?", 4, control,
+			[&](const ofxIC::ToolLoopProgress & progress) {
+				if (scenario == 4 && progress.modelRequest == 3) cancel = true;
+			});
+		OFXIC_REQUIRE(requests == (scenario == 4 ? 2 : 3));
+		OFXIC_REQUIRE(result.modelRequests == (scenario == 4 ? 2 : 3));
+		OFXIC_REQUIRE(static_cast<bool>(result) == (scenario == 0));
+		if (scenario != 0) {
+			OFXIC_REQUIRE(chat.getMessages().empty());
+			OFXIC_REQUIRE(result.failure == (scenario == 4 ? ofxIC::RequestFailure::Cancelled :
+				(scenario == 3 ? ofxIC::RequestFailure::Timeout : ofxIC::RequestFailure::Validation)));
+		}
+	}
 }
 
 OFXIC_TEST(tool_loop_can_be_cancelled_before_transport) {

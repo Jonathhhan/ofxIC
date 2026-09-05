@@ -208,12 +208,23 @@ duplicate GUI registry is introduced.
 - No in-addon crawler, browser renderer, live web-search tool, or model-selected
   URL fetch. `scripts/web_snapshot.py` is a separate, user-invoked ingestion
   utility: one public URL becomes one bounded, provenance-bearing local text
-  file, which then enters the same explicit document-loading path.
+  file. The Windows Documents tab can run that script, preview its output and
+  explicitly add it to the document index. Network work stays in the child
+  process; the addon does not fetch model-selected URLs. Draft files are removed
+  on discard, acceptance or shutdown, and accepted text lives in the session.
 - No provider SDK or claim that chat, image, video, and music share one
   universal API.
 - No ecosystem manifest or cross-repository control plane.
 
 ## Review hardening
+
+Document search returns structured citation metadata alongside its untrusted
+content. After retrieval, the tool loop requires at least one exact returned
+marker in the answer. A missing marker triggers at most one tool-free correction
+request; continued omission returns a validation failure and rolls back the
+turn. Timeout and cancellation retain their original failure kinds. This checks
+citation presence only, not semantic entailment, and does not append synthetic
+citations to a model's answer.
 
 Chat responses are validated as complete JSON documents. Text and tool calls
 are selected from their protocol fields; JSON examples in assistant text never

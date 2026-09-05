@@ -954,6 +954,7 @@ const char * musicJobStateLabel(ofxIC::AceStepMusicJobState state) {
 }
 
 ofApp::~ofApp() {
+	discardWebImport();
 	cancellationRequested = true;
 	finishWorker();
 	finishMediaWorker();
@@ -991,12 +992,18 @@ void ofApp::setup() {
 	llamaProcess.setReadinessProbe(healthProbe(8080));
 	whisperProcess.setReadinessProbe(healthProbe(8082));
 	aceStepProcess.setReadinessProbe(healthProbe(8085));
-	stableDiffusionProcess.setReadinessProbe([]() {
+	stableDiffusionProcess.setReadinessProbe([this]() {
 		ofxIC::Endpoint endpoint("http://127.0.0.1:8081");
 		ofxIC::MediaClient client(endpoint);
 		ofxIC::RequestControl control;
 		control.timeoutSeconds = 2;
-		return static_cast<bool>(client.inspectCapabilities(control));
+		const auto capabilities = client.inspectCapabilities(control);
+		if (capabilities) {
+			std::lock_guard<std::mutex> lock(mediaResultMutex);
+			pendingRuntimeMediaCapabilities = capabilities;
+			pendingRuntimeMediaCapabilitiesReady = true;
+		}
+		return static_cast<bool>(capabilities);
 	});
 	samBridgeProcess.setReadinessProbe([]() {
 		ofxIC::Endpoint endpoint("http://127.0.0.1:18085");
@@ -1112,9 +1119,15 @@ void ofApp::setup() {
 	const std::string diagnosticsPath = environmentValue("OFXIC_DIAGNOSTICS_PATH");
 	if (!diagnosticsPath.empty()) exportDiagnostics(diagnosticsPath);
 	configureRuntimeAutomation();
+	const std::string webAutorun = environmentValue("OFXIC_WEB_IMPORT_AUTORUN");
+	if (!webAutorun.empty()) {
+		setTextBuffer(webImportUrl, webAutorun);
+		startWebImport();
+	}
 }
 
 void ofApp::update() {
+	updateWebImport();
 	if (mediaBusy && !guiHeartbeatPath.empty()) {
 		++guiHeartbeatFrames;
 		const std::uint64_t now = ofGetElapsedTimeMillis();
@@ -1130,6 +1143,27 @@ void ofApp::update() {
 	updateManagedProcess(whisperProcess, whisperServerStatus, "whisper.cpp server");
 	updateManagedProcess(samBridgeProcess, samBridgeProcessStatus, "SAM bridge");
 	updateRuntimeAutomation();
+	if (!mediaBusy && selectedMediaBackend == 2 &&
+		(mediaEndpoint.getBaseUrl() == "http://127.0.0.1:8081" ||
+		 mediaEndpoint.getBaseUrl() == "http://localhost:8081")) {
+		bool refreshed = false;
+		{
+			std::lock_guard<std::mutex> lock(mediaResultMutex);
+			if (pendingRuntimeMediaCapabilitiesReady) {
+				refreshed = !currentMediaCapabilities ||
+					currentMediaCapabilities.rawResponse != pendingRuntimeMediaCapabilities.rawResponse;
+				currentMediaCapabilities = std::move(pendingRuntimeMediaCapabilities);
+				pendingRuntimeMediaCapabilitiesReady = false;
+			}
+		}
+		if (refreshed) {
+			reconcileCurrentMediaControls();
+			ofLogNotice("ofxIC media") << "SD options loaded automatically: "
+				<< currentMediaCapabilities.samplers.size() << " samplers, "
+				<< currentMediaCapabilities.schedulers.size() << " schedulers; model="
+				<< currentMediaCapabilities.model;
+		}
+	}
 	continueDeferredTask();
 	if (pendingInspectAutorun && !busy) {
 		pendingInspectAutorun = false;
@@ -1215,15 +1249,7 @@ void ofApp::update() {
 			}
 		}
 		if (receivedCapabilities && currentMediaCapabilities) {
-			ofxICExample::MediaControlSelection selection{
-				selectedMediaKind, mediaSampler, mediaScheduler, mediaOutputFormat };
-			ofxICExample::reconcileMediaControls(currentMediaCapabilities,
-				ofxICExample::mediaModelMatches(currentMediaCapabilities.model,
-					stableDiffusionModelPath.data()), selection);
-			selectedMediaKind = selection.kind;
-			mediaSampler = std::move(selection.sampler);
-			mediaScheduler = std::move(selection.scheduler);
-			mediaOutputFormat = std::move(selection.outputFormat);
+			reconcileCurrentMediaControls();
 		}
 		if (!savedPath.empty()) {
 				if (isVideo) {
@@ -1308,6 +1334,9 @@ void ofApp::draw() {
 	bool forgetMediaTokenRequested = false;
 	bool clearRequested = false;
 	bool loadDocumentRequested = false;
+	bool fetchWebRequested = false;
+	bool discardWebRequested = false;
+	bool acceptWebRequested = false;
 	bool loadAudioRequested = false;
 	bool transcribeAudioRequested = false;
 	bool loadSegmentationImageRequested = false;
@@ -1787,6 +1816,27 @@ void ofApp::draw() {
 		ImGui::TextDisabled("%zu document(s), %zu chunk(s)",
 			documents.documentCount(), documents.chunkCount());
 		ImGui::TextWrapped("%s", documentStatus.c_str());
+		if (ImGui::CollapsingHeader("Import webpage")) {
+			ImGui::BeginDisabled(webImportPending);
+			ImGui::InputText("Public URL", webImportUrl.data(), webImportUrl.size());
+			fetchWebRequested = ImGui::Button("Fetch preview");
+			ImGui::EndDisabled();
+			ImGui::SameLine();
+			discardWebRequested = ImGui::Button(webImportPending ? "Cancel import" : "Discard preview");
+			ImGui::TextWrapped("%s", webImportStatus.c_str());
+			if (!webImportText.empty()) {
+				ImGui::BeginChild("web-import-preview", ImVec2(0, 180), true);
+				const auto previewBytes = std::min<std::size_t>(webImportText.size(), 64U * 1024U);
+				ImGui::TextUnformatted(webImportText.data(), webImportText.data() + previewBytes);
+				ImGui::EndChild();
+				if (webImportText.size() > 64U * 1024U)
+					ImGui::TextDisabled("Preview truncated; the full document will be imported.");
+				ImGui::BeginDisabled(taskLocked);
+				acceptWebRequested = ImGui::Button("Add to Documents");
+				ImGui::EndDisabled();
+			}
+			ImGui::TextDisabled("Session-only import. No crawling, logins or JavaScript rendering.");
+		}
 		ImGui::SeparatorText("Loaded sources");
 		if (loadedDocumentSources.empty()) ImGui::TextDisabled("No sources loaded.");
 		for (std::size_t index = 0; index < loadedDocumentSources.size(); ++index) {
@@ -2026,7 +2076,7 @@ void ofApp::draw() {
 			: currentMediaCapabilities.imageOutputFormats;
 		capabilityChoice("Output format", mediaOutputFormat, formats);
 		if (!currentMediaCapabilities)
-			ImGui::TextDisabled("Inspect the loaded context to populate capability choices.");
+			ImGui::TextDisabled("SD options load automatically when the local server is ready.");
 	}
 	const char * generateLabel = selectedMediaBackend == 1
 		? (selectedMediaKind == 0 ? "Generate HF image" : "Submit HF video")
@@ -2394,6 +2444,12 @@ void ofApp::draw() {
 	if (chooseSamModelRequested) choosePath("Choose Meta SAM checkpoint", samModelPath);
 	if (startSamBridgeRequested) startLocalSamBridge();
 	if (stopSamBridgeRequested) stopLocalSamBridge();
+	if (discardWebRequested) {
+		discardWebImport();
+		webImportStatus = "Web import discarded.";
+	}
+	if (fetchWebRequested) startWebImport();
+	if (acceptWebRequested && !taskLocked) acceptWebImport();
 	if (loadDocumentRequested && !taskLocked) {
 		ofFileDialogResult selection = ofSystemLoadDialog("Load a Markdown or text document");
 		if (selection.bSuccess) loadDocument(selection.getPath());
@@ -3096,6 +3152,12 @@ void ofApp::startLocalStableDiffusionServer() {
 
 void ofApp::stopLocalStableDiffusionServer() {
 	stableDiffusionProcess.stop();
+	{
+		std::lock_guard<std::mutex> lock(mediaResultMutex);
+		pendingRuntimeMediaCapabilities = {};
+		pendingRuntimeMediaCapabilitiesReady = false;
+	}
+	currentMediaCapabilities = {};
 	stableDiffusionActiveModelPath.clear();
 	stableDiffusionActiveRuntimeSignature.clear();
 	stableDiffusionServerStatus = stableDiffusionProcess.status();
@@ -3269,6 +3331,109 @@ void ofApp::startLocalSamBridge() {
 void ofApp::stopLocalSamBridge() {
 	samBridgeProcess.stop();
 	samBridgeProcessStatus = samBridgeProcess.status();
+}
+
+void ofApp::discardWebImport() {
+	webImportProcess.stop();
+	webImportPending = false;
+	webImportText.clear();
+	if (!webImportPath.empty()) {
+		std::error_code error;
+		std::filesystem::remove(std::filesystem::path(webImportPath), error);
+		webImportPath.clear();
+	}
+}
+
+void ofApp::startWebImport() {
+	if (webImportPending) return;
+	discardWebImport();
+	webImportDocumentsBefore = documents.documentCount();
+	const std::string script = bundledScript("web_snapshot.py");
+	std::string python = executableOnPath("python.exe");
+	if (python.empty()) python = installedServerExecutable("sam-python-", "python.exe");
+	if (script.empty() || python.empty()) {
+		webImportStatus = "Web import requires Python 3 and scripts/web_snapshot.py.";
+		writeWebImportEvidence();
+		return;
+	}
+	const std::string url(webImportUrl.data());
+	if (url.compare(0, 7, "http://") != 0 && url.compare(0, 8, "https://") != 0) {
+		webImportStatus = "Enter a public HTTP(S) URL.";
+		writeWebImportEvidence();
+		return;
+	}
+	std::error_code error;
+	const auto temporary = std::filesystem::temp_directory_path(error);
+	if (error) {
+		webImportStatus = "Could not locate a temporary directory: " + error.message();
+		writeWebImportEvidence();
+		return;
+	}
+	webImportPath = (temporary / ("ofxIC-web-" + ofGetTimestampString("%Y%m%d-%H%M%S-%i") +
+		"-" + std::to_string(ofGetElapsedTimeMicros()) + ".txt")).string();
+	webImportPending = webImportProcess.start(python,
+		{ script, webImportUrl.data(), "--output", webImportPath, "--timeout", "15" },
+		"Web import", 0, ofFilePath::getEnclosingDirectory(script));
+	webImportDeadlineMillis = ofGetElapsedTimeMillis() + 60000;
+	webImportStatus = webImportPending ? "Fetching public webpage; not yet available to chat."
+		: "Could not start web import: " + webImportProcess.status();
+	if (!webImportPending) writeWebImportEvidence();
+}
+
+void ofApp::updateWebImport() {
+	if (!webImportPending) return;
+	webImportProcess.update();
+	if (webImportProcess.running() && ofGetElapsedTimeMillis() < webImportDeadlineMillis) return;
+	webImportPending = false;
+	if (webImportProcess.running()) {
+		webImportProcess.stop();
+		webImportStatus = "Web import timed out after 60 seconds.";
+	} else if (webImportProcess.state() != ofxICExample::ManagedProcessState::Exited ||
+		webImportProcess.exitCode() != 0) {
+		webImportStatus = "Web import failed: " + webImportProcess.recentOutput();
+	} else {
+		std::error_code error;
+		const auto size = std::filesystem::file_size(webImportPath, error);
+		if (error || size == 0 || size > ofxIC::DocumentIndex::maximumDocumentBytes) {
+			webImportStatus = "Web import produced no readable document within the size limit.";
+		} else {
+			webImportText = ofBufferFromFile(webImportPath, true).getText();
+			webImportStatus = webImportText.empty() ? "Could not read the imported text."
+				: "Preview ready. Review the untrusted webpage text, then choose Add to Documents.";
+		}
+	}
+	if (!webImportText.empty() && environmentValue("OFXIC_WEB_IMPORT_ACCEPT") == "1")
+		acceptWebImport();
+	writeWebImportEvidence();
+}
+
+void ofApp::writeWebImportEvidence() {
+	const std::string evidence = environmentValue("OFXIC_WEB_IMPORT_RESULT_PATH");
+	if (!evidence.empty()) {
+		const std::string report = webImportStatus + "\n" +
+			"preview_bytes=" + std::to_string(webImportText.size()) + "\n" +
+			"documents_before=" + std::to_string(webImportDocumentsBefore) + "\n" +
+			"documents=" + std::to_string(documents.documentCount()) + "\n";
+		ofBufferToFile(evidence, ofBuffer(report.data(), report.size()));
+	}
+}
+
+void ofApp::acceptWebImport() {
+	if (webImportPending || webImportText.empty() || busy || mediaBusy ||
+		deferredTask != DeferredTask::None) return;
+	const std::string source = std::filesystem::path(webImportPath).filename().string();
+	if (!documents.addText(source, webImportText)) {
+		webImportStatus = "Could not add the webpage: document index limits reached or duplicate source.";
+		return;
+	}
+	loadedDocumentSources.push_back(source);
+	loadedDocumentContents.push_back(webImportText);
+	selectedDocument = static_cast<int>(loadedDocumentSources.size() - 1);
+	documentStatus = "Loaded webpage " + source;
+	discardWebImport();
+	webImportStatus = "Webpage added to Documents for this session.";
+	writeDocumentAutomationResult(documentStatus, loadedDocumentSources);
+	writeWebImportEvidence();
 }
 
 bool ofApp::loadDocument(const std::string & path) {
@@ -4095,6 +4260,18 @@ void ofApp::forgetTokenCredential(const std::string & variable) {
 	mediaEndpoint.setBearerToken(configuredMediaToken());
 	musicEndpoint.setBearerToken(configuredMusicToken());
 	credentialStatus = "Removed saved " + variable + ". Environment overrides remain active.";
+}
+
+void ofApp::reconcileCurrentMediaControls() {
+	ofxICExample::MediaControlSelection selection{
+		selectedMediaKind, mediaSampler, mediaScheduler, mediaOutputFormat };
+	ofxICExample::reconcileMediaControls(currentMediaCapabilities,
+		ofxICExample::mediaModelMatches(currentMediaCapabilities.model,
+			stableDiffusionModelPath.data()), selection);
+	selectedMediaKind = selection.kind;
+	mediaSampler = std::move(selection.sampler);
+	mediaScheduler = std::move(selection.scheduler);
+	mediaOutputFormat = std::move(selection.outputFormat);
 }
 
 void ofApp::inspectMediaContext() {

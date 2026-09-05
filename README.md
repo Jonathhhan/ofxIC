@@ -207,6 +207,18 @@ arbitrary web content into trusted instructions.
 
 ### Controlled web snapshots
 
+In the Windows workbench, open **Documents → Import webpage**, enter a public
+HTTP(S) URL and choose **Fetch preview**. Review the extracted text and its
+source URL, title and retrieval date, then choose **Add to Documents**.
+Fetching alone does not expose the page to chat. **Cancel import** stops the
+fetch; **Discard preview** removes the draft. Imports are session-only.
+
+The example launches the existing Python utility as a separate process,
+automatically finding Python on PATH or in the installed SAM environment.
+It needs Python 3.10+ and access to `scripts/web_snapshot.py`. The GUI enforces
+a 60-second overall deadline and a bounded preview. This is webpage import,
+not search-engine integration. The standalone command remains available:
+
 Web ingestion stays outside the addon and outside the model tool loop. The
 bundled utility fetches one URL selected by the user and writes a provenance-
 bearing `.txt` or `.md` snapshot that can be loaded through the regular example:

@@ -174,6 +174,7 @@ ToolExecutionResult searchDocuments(
 	for (std::size_t i = 0; i < hits.size(); ++i) {
 		if (i > 0) content << ",";
 		const auto & hit = hits[i];
+		result.citations.push_back(hit.citation);
 		content << "{\"citation\":\"" << escapeJson(hit.citation)
 			<< "\",\"source\":\"" << escapeJson(hit.source)
 			<< "\",\"text\":\"" << escapeJson(hit.text)
