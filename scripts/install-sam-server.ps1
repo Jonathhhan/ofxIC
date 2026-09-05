@@ -40,16 +40,47 @@ if ($Plan) {
 if ($env:PROCESSOR_ARCHITECTURE -ne "AMD64") {
 	throw "The pinned SAM CUDA environment requires 64-bit Windows on x64."
 }
+# Model selection is independent of environment installation and must also run
+# when the environment already exists. Never remove an environment on model failure.
+$modelPath = ""
+if ($ExistingModel) {
+	$modelPath = [System.IO.Path]::GetFullPath($ExistingModel)
+	if (-not (Test-Path -LiteralPath $modelPath -PathType Leaf)) {
+		throw "Existing SAM checkpoint was not found: $modelPath"
+	}
+} elseif ($DownloadModel) {
+	New-Item -ItemType Directory -Path $ModelRoot -Force | Out-Null
+	if (-not (Test-Path -LiteralPath $defaultModel -PathType Leaf)) {
+		$downloadPath = Join-Path $ModelRoot ([Guid]::NewGuid().ToString() + ".partial")
+		try {
+			Invoke-WebRequest -Uri $modelUrl -OutFile $downloadPath
+			if ((Get-Item -LiteralPath $downloadPath).Length -eq 0) { throw "SAM checkpoint download was empty." }
+			Move-Item -LiteralPath $downloadPath -Destination $defaultModel
+		} finally {
+			if (Test-Path -LiteralPath $downloadPath) { Remove-Item -LiteralPath $downloadPath }
+		}
+	}
+	$modelPath = [System.IO.Path]::GetFullPath($defaultModel)
+}
+if ((Test-Path -LiteralPath $python -PathType Leaf) -and
+	(Test-Path -LiteralPath $runner -PathType Leaf) -and -not $Force) {
+	Write-Output "SAM server environment is already installed: $python"
+	if ($modelPath) {
+		$metadataPath = Join-Path $installDirectory "ofxIC-install.json"
+		$metadata = if (Test-Path -LiteralPath $metadataPath) {
+			Get-Content -LiteralPath $metadataPath -Raw | ConvertFrom-Json
+		} else { [PSCustomObject]@{ runner = $runner } }
+		$metadata | Add-Member -NotePropertyName model -NotePropertyValue $modelPath -Force
+		$metadata | ConvertTo-Json | Set-Content -LiteralPath $metadataPath -Encoding utf8
+		Write-Output "SAM checkpoint: $modelPath"
+	}
+	return
+}
 $uv = (Get-Command uv.exe -ErrorAction SilentlyContinue).Source
 if (-not $uv) { throw "uv.exe was not found on PATH. Install uv from https://docs.astral.sh/uv/." }
 if (-not $env:UV_LOCK_TIMEOUT) { $env:UV_LOCK_TIMEOUT = "900" }
 if (-not (Test-Path -LiteralPath $sourceRunner -PathType Leaf)) {
 	throw "SAM runner source was not found: $sourceRunner"
-}
-if ((Test-Path -LiteralPath $python -PathType Leaf) -and
-	(Test-Path -LiteralPath $runner -PathType Leaf) -and -not $Force) {
-	Write-Output "SAM server environment is already installed: $python"
-	return
 }
 if (Test-Path -LiteralPath $installDirectory) {
 	if (-not $Force) { throw "Install directory already exists but is incomplete: $installDirectory" }
@@ -70,19 +101,6 @@ try {
 		("git+https://github.com/facebookresearch/segment-anything.git@" + $samCommit)
 	if ($LASTEXITCODE -ne 0) { throw "Meta Segment Anything installation failed." }
 	Copy-Item -LiteralPath $sourceRunner -Destination $runner -Force
-
-	if ($ExistingModel) {
-		$modelPath = [System.IO.Path]::GetFullPath($ExistingModel)
-		if (-not (Test-Path -LiteralPath $modelPath -PathType Leaf)) {
-			throw "Existing SAM checkpoint was not found: $modelPath"
-		}
-	} elseif ($DownloadModel) {
-		New-Item -ItemType Directory -Path $ModelRoot -Force | Out-Null
-		Invoke-WebRequest -Uri $modelUrl -OutFile $defaultModel
-		$modelPath = $defaultModel
-	} else {
-		$modelPath = ""
-	}
 
 	$versions = & $python -c "import torch; print(torch.__version__); print(torch.version.cuda or '')"
 	if ($LASTEXITCODE -ne 0) { throw "The installed SAM Python environment failed validation." }

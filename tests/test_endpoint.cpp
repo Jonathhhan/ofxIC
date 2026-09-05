@@ -3,6 +3,32 @@
 
 #include <string>
 
+OFXIC_TEST(endpoint_does_not_accept_partial_success_after_transport_failure) {
+	for (auto failure : { ofxIC::RequestFailure::Timeout, ofxIC::RequestFailure::Transport,
+		ofxIC::RequestFailure::InvalidResponse }) {
+		ofxIC::Endpoint endpoint("http://example.test", [&](const ofxIC::HttpRequest &) {
+			ofxIC::HttpResponse response;
+			response.started = true;
+			response.status = 200;
+			response.failure = failure;
+			response.error = "body read interrupted";
+			response.body = R"({"data":[{"id":"partial"}],"choices":[{"message":{"content":"partial answer"}}]})";
+			return response;
+		});
+		const auto inspection = endpoint.inspect();
+		OFXIC_REQUIRE(!inspection);
+		OFXIC_REQUIRE(inspection.models.empty());
+		OFXIC_REQUIRE(inspection.failure == failure);
+		OFXIC_REQUIRE(inspection.httpStatus == 200);
+		ofxIC::ChatSession session(endpoint);
+		const auto answer = session.send("question");
+		OFXIC_REQUIRE(!answer);
+		OFXIC_REQUIRE(answer.failure == failure);
+		OFXIC_REQUIRE(answer.error == "body read interrupted");
+		OFXIC_REQUIRE(session.getMessages().empty());
+	}
+}
+
 OFXIC_TEST(endpoint_normalizes_openai_endpoint_urls) {
 	ofxIC::HttpRequest captured;
 	auto transport = [&](const ofxIC::HttpRequest & request) {
@@ -221,7 +247,7 @@ OFXIC_TEST(endpoint_reports_http_failures) {
 	OFXIC_REQUIRE(result.error.find("HTTP 503") != std::string::npos);
 }
 
-OFXIC_TEST(endpoint_extracts_llama_text_serialized_requested_tool_call) {
+OFXIC_TEST(endpoint_does_not_execute_tool_json_in_message_text) {
 	ofxIC::Endpoint endpoint("http://localhost:8001", [](const ofxIC::HttpRequest &) {
 		ofxIC::HttpResponse response;
 		response.started = true;
@@ -235,10 +261,8 @@ OFXIC_TEST(endpoint_extracts_llama_text_serialized_requested_tool_call) {
 
 	const auto result = endpoint.chat(request);
 	OFXIC_REQUIRE(result);
-	OFXIC_REQUIRE(result.text.empty());
-	OFXIC_REQUIRE(result.toolCalls.size() == 1);
-	OFXIC_REQUIRE(result.toolCalls[0].name == "search_documents");
-	OFXIC_REQUIRE(result.toolCalls[0].argumentsJson.find("process boundary") != std::string::npos);
+	OFXIC_REQUIRE(result.text.find("process boundary") != std::string::npos);
+	OFXIC_REQUIRE(result.toolCalls.empty());
 }
 
 OFXIC_TEST(endpoint_reports_bounded_provider_error_details) {

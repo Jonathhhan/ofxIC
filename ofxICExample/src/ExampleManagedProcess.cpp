@@ -5,6 +5,7 @@
 #include <cwctype>
 #include <filesystem>
 #include <fstream>
+#include <future>
 #include <sstream>
 #include <system_error>
 
@@ -131,6 +132,21 @@ struct ManagedProcess::Impl {
 	unsigned short port = 0;
 	int lastExitCode = 0;
 	std::chrono::steady_clock::time_point startedAt{};
+	std::function<bool()> readinessProbe;
+	std::future<bool> pendingProbe;
+	std::chrono::steady_clock::time_point nextProbe{};
+	bool protocolReady = false;
+	void updateReadiness() {
+		if (!readinessProbe) return;
+		if (pendingProbe.valid() && pendingProbe.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
+			try { protocolReady = pendingProbe.get(); } catch (...) { protocolReady = false; }
+			nextProbe = std::chrono::steady_clock::now() + std::chrono::seconds(1);
+		}
+		if (!pendingProbe.valid() && std::chrono::steady_clock::now() >= nextProbe) {
+			const auto probe = readinessProbe;
+			pendingProbe = std::async(std::launch::async, [probe]() { return probe(); });
+		}
+	}
 #if defined(_WIN32)
 	HANDLE process = nullptr;
 	HANDLE outputRead = nullptr;
@@ -266,6 +282,11 @@ ManagedProcess::~ManagedProcess() {
 	stop();
 }
 
+void ManagedProcess::setReadinessProbe(std::function<bool()> probe) {
+	impl->readinessProbe = std::move(probe);
+	impl->protocolReady = false;
+}
+
 bool ManagedProcess::useExisting(const std::string & name, unsigned short readinessPort) {
 #if defined(_WIN32)
 	if (readinessPort == 0 || !tcpPortIsListening(readinessPort)) return false;
@@ -277,9 +298,12 @@ bool ManagedProcess::useExisting(const std::string & name, unsigned short readin
 	impl->port = readinessPort;
 	impl->pid = 0;
 	impl->processLaunchMethod = "external";
-	impl->processState = ManagedProcessState::Ready;
+	impl->startedAt = std::chrono::steady_clock::now();
+	impl->protocolReady = false;
+	impl->processState = impl->readinessProbe ? ManagedProcessState::Starting : ManagedProcessState::Ready;
 	impl->processStatus = impl->processName + " is already reachable at http://127.0.0.1:" +
 		std::to_string(readinessPort) + "; using the externally managed process.";
+	if (impl->readinessProbe) impl->processStatus = impl->processName + ": listener found; checking protocol readiness.";
 	return true;
 #else
 	(void)name;
@@ -310,6 +334,11 @@ bool ManagedProcess::start(const std::string & executable,
 	const std::vector<std::string> & arguments, const std::string & name,
 	unsigned short readinessPort, const std::string & requestedWorkingDirectory) {
 	if (running()) return true;
+	if (impl->pendingProbe.valid()) {
+		try { impl->pendingProbe.get(); } catch (...) {}
+	}
+	impl->protocolReady = false;
+	impl->nextProbe = {};
 	impl->processName = name.empty() ? "Local process" : name;
 	impl->port = readinessPort;
 	impl->lastExitCode = 0;
@@ -550,7 +579,15 @@ bool ManagedProcess::start(const std::string & executable,
 void ManagedProcess::update() {
 #if defined(_WIN32)
 	if (running()) impl->readFollowedOutput();
+	if (running()) impl->updateReadiness();
 	if (!impl->process) {
+		if (running() && impl->readinessProbe) {
+			impl->processState = impl->protocolReady ? ManagedProcessState::Ready : ManagedProcessState::Starting;
+			impl->processStatus = impl->processName + (impl->protocolReady
+				? ": protocol endpoint ready (externally managed)."
+				: ": waiting for a successful protocol readiness check; see server log.");
+			return;
+		}
 		if (impl->processState == ManagedProcessState::Ready && impl->pid == 0 &&
 			impl->port != 0 && !tcpPortIsListening(impl->port)) {
 			impl->processState = ManagedProcessState::Exited;
@@ -574,7 +611,7 @@ void ManagedProcess::update() {
 		impl->closeHandles();
 		return;
 	}
-	if (impl->port != 0 && tcpPortIsListening(impl->port)) {
+	if (impl->port != 0 && (impl->readinessProbe ? impl->protocolReady : tcpPortIsListening(impl->port))) {
 		const auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(
 			std::chrono::steady_clock::now() - impl->startedAt).count();
 		impl->processState = ManagedProcessState::Ready;
@@ -592,7 +629,7 @@ void ManagedProcess::update() {
 			" s (PID " + std::to_string(impl->pid) + ", launch=" +
 			impl->processLaunchMethod + ")."
 		: impl->processName + " process is running but its endpoint is not ready after " +
-			std::to_string(elapsed) + " s; waiting for TCP port " +
+			std::to_string(elapsed) + (impl->readinessProbe ? " s; waiting for protocol readiness on port " : " s; waiting for TCP port ") +
 			std::to_string(impl->port) + " (PID " + std::to_string(impl->pid) +
 			", launch=" + impl->processLaunchMethod + ").";
 	const std::string lastOutput = impl->latestOutputSummary();
@@ -601,6 +638,12 @@ void ManagedProcess::update() {
 }
 
 void ManagedProcess::stop() {
+	// Consume the bounded probe so a previous launch cannot mark a new one ready.
+	if (impl->pendingProbe.valid()) {
+		try { impl->pendingProbe.get(); } catch (...) {}
+	}
+	impl->protocolReady = false;
+	impl->nextProbe = {};
 	const bool external = impl->processState == ManagedProcessState::Ready && impl->pid == 0;
 #if defined(_WIN32)
 	if (impl->process) {

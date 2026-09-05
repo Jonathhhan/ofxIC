@@ -156,7 +156,7 @@ StabilityAudioJob StabilityAudioClient::submit(
 	httpRequest.shouldCancel = std::move(control.shouldCancel);
 	httpRequest.maxResponseBytes = maxSubmitResponseBytes;
 	const HttpResponse response = endpoint.perform(std::move(httpRequest));
-	if (response.status != 202) {
+	if (!response.started || response.cancelled || response.failure != RequestFailure::None || response.status != 202) {
 		return failure(responseFailure(
 			response, "music", Endpoint::extractErrorText(response.body)),
 			response.status, response.body,
@@ -198,7 +198,7 @@ StabilityAudioJob StabilityAudioClient::poll(
 	request.shouldCancel = std::move(control.shouldCancel);
 	request.maxResponseBytes = maxAudioResponseBytes;
 	const HttpResponse response = endpoint.perform(std::move(request));
-	if (response.status == 202) {
+	if (response.started && !response.cancelled && response.failure == RequestFailure::None && response.status == 202) {
 		StabilityAudioJob result = job;
 		result.success = true;
 		result.httpStatus = 202;
@@ -208,7 +208,7 @@ StabilityAudioJob StabilityAudioClient::poll(
 		result.rawResponse = response.body;
 		return result;
 	}
-	if (response.status != 200) {
+	if (!response.started || response.cancelled || response.failure != RequestFailure::None || response.status != 200) {
 		StabilityAudioJob result = failure(
 			responseFailure(
 				response, "music result", Endpoint::extractErrorText(response.body)),

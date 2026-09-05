@@ -12,6 +12,8 @@ public:
 	explicit MediaClient(Endpoint & endpoint);
 
 	ImageResult generateImage(const ImageRequest & request, RequestControl control = {}) const;
+	// Downloads one returned image URL without forwarding endpoint credentials.
+	ImageResult downloadImage(const std::string & url, RequestControl control = {}) const;
 	MediaCapabilities inspectCapabilities(RequestControl control = {}) const;
 	MediaJob submit(const MediaJobRequest & request, RequestControl control = {}) const;
 	MediaJob submitHuggingFaceFal(const MediaJobRequest & request, RequestControl control = {}) const;

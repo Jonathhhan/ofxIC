@@ -89,7 +89,7 @@ SegmentationBridgeStatus SegmentationClient::inspectSamBridge(
 		result.error = response.error.empty() ? "request cancelled" : response.error;
 		return result;
 	}
-	if (!response.started || response.status < 200 || response.status >= 300) {
+	if (!response.started || result.failure != RequestFailure::None || response.status < 200 || response.status >= 300) {
 		if (result.failure == RequestFailure::None) result.failure = response.status > 0
 			? RequestFailure::Provider : RequestFailure::Transport;
 		result.error = !response.body.empty() && response.body.size() <= 4096U
@@ -194,7 +194,7 @@ SegmentationResult SegmentationClient::segmentSamBridge(
 		result.error = response.error.empty() ? "request cancelled" : response.error;
 		return result;
 	}
-	if (!response.started || response.status < 200 || response.status >= 300) {
+	if (!response.started || result.failure != RequestFailure::None || response.status < 200 || response.status >= 300) {
 		if (result.failure == RequestFailure::None) result.failure = response.status > 0
 			? RequestFailure::Provider : RequestFailure::Transport;
 		if (!response.body.empty() && response.body.size() <= 4096U) {

@@ -371,6 +371,22 @@ Four injected-transport regression tests first reproduced the defects and cover
 failure categories across native operations and all five fal stages. No hosted
 credits or live model runtime is required by this evidence.
 
+#### M3.15 — Scope credentials and stop implicit redirects
+
+The endpoint refuses credentialed cross-origin requests and unsafe token header
+bytes before invoking transport. Origin comparison accounts for host case,
+default ports and bracketed IPv6. WinHTTP and addon curl disable automatic
+redirects; ordinary curl-capable requests no longer go through the redirecting
+openFrameworks loader. The curl-less loader fallback refuses authenticated calls.
+Token-free media downloads remain supported, without claiming a general URL or
+DNS/IP access policy.
+
+Injected-transport tests cover hostile job URLs, tampered fal poll/result URLs,
+token control characters and valid origin equivalents. A loopback-only Windows
+HTTP fixture verifies that an actual 302 does not trigger a second request.
+Existing tests verify that external media downloads receive no bearer header.
+No hosted inference or new runtime package is involved.
+
 ### M4 — `0.3` only after real convergence
 
 Do not schedule `0.3` by date or by backend count. Start it only after two real

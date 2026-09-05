@@ -75,6 +75,7 @@ struct ImageResult {
 	int httpStatus = 0;
 	std::string outputFormat;
 	std::vector<std::string> imagesBase64;
+	std::string imageBytes;
 	std::vector<std::string> urls;
 	std::string error;
 	std::string rawResponse;

@@ -7,6 +7,8 @@
 #include <cmath>
 #include <cstdlib>
 #include <locale>
+#include <limits>
+#include <map>
 #include <sstream>
 #include <thread>
 #include <utility>
@@ -124,8 +126,14 @@ HttpResponse runWinHttpRequest(const HttpRequest & request) {
 	WinHttpHandle session{ WinHttpOpen(L"ofxIC/0.1", WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY,
 		WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0) };
 	if (!session.value) { result.error = winHttpError("WinHttpOpen"); return result; }
-	const int timeout = std::max(1, request.timeoutSeconds) * 1000;
-	WinHttpSetTimeouts(session.value, timeout, timeout, timeout, timeout);
+	const int timeout = static_cast<int>(std::min<long long>(
+		static_cast<long long>(std::max(1, request.timeoutSeconds)) * 1000,
+		std::numeric_limits<int>::max()));
+	if (!WinHttpSetTimeouts(session.value, timeout, timeout, timeout, timeout)) {
+		result.failure = RequestFailure::Transport;
+		result.error = winHttpError("WinHttpSetTimeouts");
+		return result;
+	}
 	WinHttpHandle connection{ WinHttpConnect(session.value, host.c_str(), parts.nPort, 0) };
 	if (!connection.value) { result.error = winHttpError("WinHttpConnect"); return result; }
 	const wchar_t * method = request.method == HttpMethod::Post ? L"POST" : L"GET";
@@ -133,6 +141,12 @@ HttpResponse runWinHttpRequest(const HttpRequest & request) {
 		WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES,
 		parts.nScheme == INTERNET_SCHEME_HTTPS ? WINHTTP_FLAG_SECURE : 0) };
 	if (!operation.get()) { result.error = winHttpError("WinHttpOpenRequest"); return result; }
+	DWORD redirectPolicy = WINHTTP_OPTION_REDIRECT_POLICY_NEVER;
+	if (!WinHttpSetOption(operation.get(), WINHTTP_OPTION_REDIRECT_POLICY,
+		&redirectPolicy, sizeof(redirectPolicy))) {
+		result.error = winHttpError("WinHttpSetOption redirect policy");
+		return result;
+	}
 	WinHttpCancellation cancellation(operation, request.shouldCancel);
 	auto operationFailed = [&](const char * name) {
 		const DWORD error = GetLastError();
@@ -214,6 +228,35 @@ std::string stripTrailingSlash(std::string value) {
 		value.pop_back();
 	}
 	return value;
+}
+
+std::string lowerAscii(std::string value) {
+	for (char & character : value) {
+		if (character >= 'A' && character <= 'Z') character += 'a' - 'A';
+	}
+	return value;
+}
+
+std::string requestOrigin(const std::string & url) {
+	const bool secure = url.compare(0, 8, "https://") == 0;
+	const std::size_t authorityStart = secure ? 8 : 7;
+	if (!secure && url.compare(0, 7, "http://") != 0) return {};
+	for (const unsigned char character : url) {
+		if (character <= 0x20U || character == 0x7fU || character == '\\') return {};
+	}
+	const std::size_t end = url.find_first_of("/?#", authorityStart);
+	const std::string origin = url.substr(0, end);
+	if (!Endpoint::validateBaseUrl(origin) || origin.back() == ':') return {};
+	std::string authority = lowerAscii(origin.substr(authorityStart));
+	const std::size_t portStart = authority.front() == '['
+		? authority.find(':', authority.find(']')) : authority.find(':');
+	std::string port = secure ? "443" : "80";
+	if (portStart != std::string::npos) {
+		port = authority.substr(portStart + 1);
+		port.erase(0, port.find_first_not_of('0'));
+		authority.erase(portStart);
+	}
+	return (secure ? "https://" : "http://") + authority + ":" + port;
 }
 
 std::string configuredCaBundle() {
@@ -312,6 +355,7 @@ bool appendDecodedJsonChar(
 	}
 	const char c = value[index++];
 	if (c != '\\') {
+		if (static_cast<unsigned char>(c) < 0x20) return false;
 		output.push_back(c);
 		return true;
 	}
@@ -342,6 +386,7 @@ bool appendDecodedJsonChar(
 			}
 			codePoint = 0x10000U + ((codePoint - 0xd800U) << 10U) + (low - 0xdc00U);
 		}
+		if (codePoint >= 0xdc00U && codePoint <= 0xdfffU) return false;
 		appendUtf8(codePoint, output);
 		return true;
 	}
@@ -389,77 +434,106 @@ std::string extractJsonStringField(
 	return extractJsonStringAt(json, colon + 1);
 }
 
-std::size_t findMatchingJsonDelimiter(
-	const std::string & json,
-	std::size_t openPosition,
-	char openDelimiter,
-	char closeDelimiter) {
-	if (openPosition >= json.size() || json[openPosition] != openDelimiter) return std::string::npos;
-	int depth = 0;
-	bool inString = false;
-	bool escaped = false;
-	for (std::size_t i = openPosition; i < json.size(); ++i) {
-		const char c = json[i];
-		if (inString) {
-			if (escaped) escaped = false;
-			else if (c == '\\') escaped = true;
-			else if (c == '"') inString = false;
-			continue;
-		}
-		if (c == '"') inString = true;
-		else if (c == openDelimiter) ++depth;
-		else if (c == closeDelimiter && --depth == 0) return i;
-	}
-	return std::string::npos;
-}
 
-std::string extractScopedJsonStringField(
-	const std::string & json,
-	const std::string & key,
-	std::size_t begin,
-	std::size_t end) {
-	const std::string quotedKey = "\"" + key + "\"";
-	const std::size_t keyPosition = json.find(quotedKey, begin);
-	if (keyPosition == std::string::npos || keyPosition >= end) return {};
-	const std::size_t colon = json.find(':', keyPosition + quotedKey.size());
-	if (colon == std::string::npos || colon >= end) return {};
-	return extractJsonStringAt(json, colon + 1);
+// Private protocol parser: validate the complete document before selecting fields.
+// Duplicate keys and excessive nesting are rejected instead of being ambiguous.
+struct JsonValue {
+	char kind = 0;
+	std::string text;
+	std::map<std::string, JsonValue> fields;
+	std::vector<JsonValue> items;
+	const JsonValue & at(const std::string & key) const {
+		static const JsonValue missing;
+		const auto it = fields.find(key);
+		return it == fields.end() ? missing : it->second;
+	}
+	std::string string() const { return kind == '"' ? text : std::string{}; }
+};
+
+class JsonParser {
+	const std::string & input;
+	std::size_t pos = 0;
+	void space() { while (pos < input.size() && (input[pos] == ' ' || input[pos] == '\t' || input[pos] == '\r' || input[pos] == '\n')) ++pos; }
+	bool take(char c) { space(); if (pos == input.size() || input[pos] != c) return false; ++pos; return true; }
+	bool string(std::string & out) {
+		if (!take('"')) return false;
+		while (pos < input.size() && input[pos] != '"')
+			if (!appendDecodedJsonChar(input, pos, out)) return false;
+		return pos < input.size() && input[pos++] == '"';
+	}
+	bool value(JsonValue & out, int depth) {
+		space();
+		if (depth > 64 || pos == input.size()) return false;
+		out.kind = input[pos];
+		if (out.kind == '"') return string(out.text);
+		if (out.kind == '{' || out.kind == '[') {
+			const char close = out.kind == '{' ? '}' : ']';
+			++pos;
+			if (take(close)) return true;
+			do {
+				std::string key;
+				if (out.kind == '{' && (!string(key) || !take(':'))) return false;
+				JsonValue child;
+				if (!value(child, depth + 1)) return false;
+				if (out.kind == '{') {
+					if (!out.fields.emplace(key, std::move(child)).second) return false;
+				} else out.items.push_back(std::move(child));
+				if (take(close)) return true;
+			} while (take(','));
+			return false;
+		}
+		for (const char * literal : { "null", "true", "false" }) {
+			const std::string token(literal);
+			if (input.compare(pos, token.size(), token) == 0) { pos += token.size(); return true; }
+		}
+		const auto begin = pos;
+		if (input[pos] == '-') ++pos;
+		auto digit = [&]() { return pos < input.size() && input[pos] >= '0' && input[pos] <= '9'; };
+		if (!digit()) return false;
+		if (input[pos] == '0') ++pos;
+		else while (digit()) ++pos;
+		if (pos < input.size() && input[pos] == '.') {
+			++pos; if (!digit()) return false; while (digit()) ++pos;
+		}
+		if (pos < input.size() && (input[pos] == 'e' || input[pos] == 'E')) {
+			++pos; if (pos < input.size() && (input[pos] == '+' || input[pos] == '-')) ++pos;
+			if (!digit()) return false; while (digit()) ++pos;
+		}
+		return pos > begin;
+	}
+public:
+	explicit JsonParser(const std::string & text) : input(text) {}
+	JsonValue parse() {
+		JsonValue out;
+		if (!value(out, 0)) return {};
+		space();
+		return pos == input.size() ? out : JsonValue{};
+	}
+};
+
+const JsonValue & firstChoice(const JsonValue & root) {
+	static const JsonValue missing;
+	const auto & choices = root.at("choices");
+	return choices.kind == '[' && !choices.items.empty() ? choices.items.front() : missing;
 }
 
 std::string extractChatTextValue(const std::string & responseBody) {
-	for (const char * keyValue : { "content", "text", "response" }) {
-		const std::string key(keyValue);
-		const std::string value = extractJsonStringField(responseBody, key);
-		if (!trimCopy(value).empty()) {
-			return value;
-		}
+	const auto root = JsonParser(responseBody).parse();
+	if (root.kind != '{') return {};
+	const auto & choice = firstChoice(root);
+	if (root.fields.count("choices")) {
+		const auto & message = choice.at("message");
+		if (message.kind == '{') return message.at("content").string();
+		const auto & delta = choice.at("delta");
+		if (delta.kind == '{') return delta.at("content").string();
+		return choice.at("text").string();
 	}
+	for (const char * key : { "content", "text", "response" })
+		if (root.at(key).kind == '"') return root.at(key).string();
 	return {};
 }
 
-ToolCall extractTextSerializedToolCall(const std::string & text) {
-	const std::size_t nameKey = text.find("\"name\"");
-	const std::size_t argumentsKey = text.find("\"arguments\"", nameKey);
-	if (nameKey == std::string::npos || argumentsKey == std::string::npos) return {};
-	const std::size_t objectStart = text.rfind('{', nameKey);
-	if (objectStart == std::string::npos) return {};
-	const std::size_t objectEnd = findMatchingJsonDelimiter(text, objectStart, '{', '}');
-	if (objectEnd == std::string::npos || argumentsKey >= objectEnd) return {};
-	const std::string name = extractScopedJsonStringField(
-		text, "name", objectStart, objectEnd);
-	const std::size_t argumentsColon = text.find(':', argumentsKey + 11);
-	const std::size_t argumentsStart = text.find('{', argumentsColon);
-	if (name.empty() || argumentsColon == std::string::npos ||
-		argumentsStart == std::string::npos || argumentsStart >= objectEnd) return {};
-	const std::size_t argumentsEnd = findMatchingJsonDelimiter(
-		text, argumentsStart, '{', '}');
-	if (argumentsEnd == std::string::npos || argumentsEnd > objectEnd) return {};
-	ToolCall call;
-	call.id = "llama-text-call-1";
-	call.name = name;
-	call.argumentsJson = text.substr(argumentsStart, argumentsEnd - argumentsStart + 1);
-	return call;
-}
+
 
 #if defined(OFXIC_HAS_CURL_HTTP_RUNTIME)
 bool processServerSentEventLine(
@@ -583,6 +657,7 @@ HttpResponse runCurlRequest(const HttpRequest & request) {
 	state.maxResponseBytes = request.maxResponseBytes;
 
 	curl_easy_setopt(curl, CURLOPT_URL, request.url.c_str());
+	curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 0L);
 	curl_easy_setopt(curl, CURLOPT_ERRORBUFFER, errorBuffer);
 	if (request.method == HttpMethod::Post) {
 		curl_easy_setopt(curl, CURLOPT_POST, 1L);
@@ -764,6 +839,12 @@ bool Endpoint::hasBearerToken() const {
 }
 
 HttpResponse Endpoint::perform(HttpRequest request) const {
+	const auto reject = [](const char * message) {
+		HttpResponse response;
+		response.failure = RequestFailure::Validation;
+		response.error = message;
+		return response;
+	};
 	const EndpointUrlValidation validation = validateBaseUrl(baseUrl);
 	if (!validation) {
 		HttpResponse response;
@@ -773,17 +854,27 @@ HttpResponse Endpoint::perform(HttpRequest request) const {
 	}
 	if (request.url.compare(0, 7, "http://") != 0 &&
 		request.url.compare(0, 8, "https://") != 0) {
+		if (request.url.find("://") != std::string::npos || request.url.compare(0, 2, "//") == 0)
+			return reject("request URL must use HTTP(S) or an endpoint-relative path");
 		if (request.url.empty() || request.url.front() != '/') {
 			request.url.insert(request.url.begin(), '/');
 		}
 		request.url = baseUrl + request.url;
 	}
+	const std::string destinationOrigin = requestOrigin(request.url);
+	if (destinationOrigin.empty()) return reject("request URL has an invalid HTTP(S) authority or unsafe characters");
 	if (request.useBearerToken && !bearerToken.empty()) {
+		if (destinationOrigin != requestOrigin(baseUrl))
+			return reject("refusing to send endpoint credentials to a different origin");
+		for (const unsigned char character : bearerToken) {
+			if (character <= 0x20U || character >= 0x7fU)
+				return reject("bearer token contains whitespace, control or non-ASCII characters");
+		}
 		const auto authorization = std::find_if(
 			request.headers.begin(),
 			request.headers.end(),
 			[](const std::pair<std::string, std::string> & header) {
-				return header.first == "Authorization";
+				return lowerAscii(header.first) == "authorization";
 			});
 		if (authorization == request.headers.end()) {
 			request.headers.emplace_back("Authorization", "Bearer " + bearerToken);
@@ -826,6 +917,10 @@ EndpointStatus Endpoint::inspect(RequestControl control) const {
 	if (response.cancelled) {
 		status.failure = RequestFailure::Cancelled;
 		status.error = response.error.empty() ? "request cancelled" : response.error;
+		return status;
+	}
+	if (status.failure != RequestFailure::None) {
+		status.error = response.error.empty() ? "model response was interrupted" : response.error;
 		return status;
 	}
 	if (!response.started) {
@@ -916,6 +1011,10 @@ ChatResult Endpoint::chat(
 		result.error = response.error.empty() ? "request cancelled" : response.error;
 		return result;
 	}
+	if (result.failure != RequestFailure::None) {
+		result.error = response.error.empty() ? "chat response was interrupted" : response.error;
+		return result;
+	}
 	if (response.status <= 0) {
 		if (result.failure == RequestFailure::None) result.failure = RequestFailure::Transport;
 		result.error = "endpoint is not reachable at " + httpRequest.url;
@@ -937,15 +1036,6 @@ ChatResult Endpoint::chat(
 		: extractChatText(response.body);
 	if (!request.options.stream) {
 		result.toolCalls = extractToolCalls(response.body);
-		if (result.toolCalls.empty() && !request.tools.empty()) {
-			ToolCall textCall = extractTextSerializedToolCall(result.text);
-			const bool requested = std::any_of(request.tools.begin(), request.tools.end(),
-				[&textCall](const ToolDefinition & tool) { return tool.name == textCall.name; });
-			if (requested) {
-				result.toolCalls.push_back(std::move(textCall));
-				result.text.clear();
-			}
-		}
 	}
 	if (result.text.empty() && result.toolCalls.empty()) {
 		result.failure = RequestFailure::InvalidResponse;
@@ -1086,57 +1176,31 @@ std::string Endpoint::extractErrorText(const std::string & responseBody) {
 }
 
 std::vector<ToolCall> Endpoint::extractToolCalls(const std::string & responseBody) {
+	const auto root = JsonParser(responseBody).parse();
+	const auto & array = firstChoice(root).at("message").at("tool_calls");
 	std::vector<ToolCall> calls;
-	const std::size_t keyPosition = responseBody.find("\"tool_calls\"");
-	if (keyPosition == std::string::npos) return calls;
-	const std::size_t arrayStart = responseBody.find('[', keyPosition);
-	if (arrayStart == std::string::npos) return calls;
-	const std::size_t arrayEnd = findMatchingJsonDelimiter(responseBody, arrayStart, '[', ']');
-	if (arrayEnd == std::string::npos) return calls;
-
-	std::size_t searchFrom = arrayStart + 1;
-	while (searchFrom < arrayEnd) {
-		const std::size_t objectStart = responseBody.find('{', searchFrom);
-		if (objectStart == std::string::npos || objectStart >= arrayEnd) break;
-		const std::size_t objectEnd = findMatchingJsonDelimiter(responseBody, objectStart, '{', '}');
-		if (objectEnd == std::string::npos || objectEnd > arrayEnd) break;
-		const std::size_t functionKey = responseBody.find("\"function\"", objectStart);
-		if (functionKey == std::string::npos || functionKey >= objectEnd) break;
-		const std::size_t functionStart = responseBody.find('{', functionKey);
-		const std::size_t functionEnd = findMatchingJsonDelimiter(responseBody, functionStart, '{', '}');
-		if (functionStart == std::string::npos || functionEnd == std::string::npos || functionEnd > objectEnd) break;
-
+	if (array.kind != '[') return calls;
+	for (const auto & item : array.items) {
+		const auto & function = item.at("function");
 		ToolCall call;
-		call.id = extractScopedJsonStringField(responseBody, "id", objectStart, objectEnd);
-		call.name = extractScopedJsonStringField(responseBody, "name", functionStart, functionEnd);
-		call.argumentsJson = extractScopedJsonStringField(
-			responseBody, "arguments", functionStart, functionEnd);
-		if (!call.id.empty() && !call.name.empty()) {
-			calls.push_back(std::move(call));
-		}
-		searchFrom = objectEnd + 1;
+		call.id = item.at("id").string();
+		call.name = function.at("name").string();
+		call.argumentsJson = function.at("arguments").string();
+		if (item.at("type").string() != "function" || call.id.empty() || call.name.empty()
+			|| JsonParser(call.argumentsJson).parse().kind != '{') return {};
+		calls.push_back(std::move(call));
 	}
 	return calls;
 }
 
 std::vector<std::string> Endpoint::extractModelIds(const std::string & responseBody) {
+	const auto root = JsonParser(responseBody).parse();
 	std::vector<std::string> models;
-	const std::string key = "\"id\"";
-	std::size_t searchFrom = 0;
-	while (true) {
-		const std::size_t keyPosition = responseBody.find(key, searchFrom);
-		if (keyPosition == std::string::npos) {
-			break;
-		}
-		const std::size_t colon = responseBody.find(':', keyPosition + key.size());
-		if (colon == std::string::npos) {
-			break;
-		}
-		const std::string id = extractJsonStringAt(responseBody, colon + 1);
-		if (!id.empty()) {
-			models.push_back(id);
-		}
-		searchFrom = colon + 1;
+	const auto & data = root.at("data");
+	if (data.kind != '[') return models;
+	for (const auto & item : data.items) {
+		const auto id = item.at("id").string();
+		if (!id.empty()) models.push_back(id);
 	}
 	return models;
 }
@@ -1159,12 +1223,19 @@ HttpResponse Endpoint::runHttpRequest(const HttpRequest & request) {
 	}
 #endif
 #if defined(OFXIC_HAS_CURL_HTTP_RUNTIME)
-	if (request.stream || request.shouldCancel) {
-		return runCurlRequest(request);
-	}
+	// Use the bounded, no-redirect transport for ordinary requests too. The
+	// openFrameworks loader follows redirects and cannot enforce token scope.
+	return runCurlRequest(request);
 #else
 	if (request.stream) {
 		result.error = "streaming requests require curl";
+		return result;
+	}
+	if (std::any_of(request.headers.begin(), request.headers.end(), [](const auto & header) {
+		return lowerAscii(header.first) == "authorization";
+	})) {
+		result.failure = RequestFailure::Validation;
+		result.error = "credentialed requests require a no-redirect HTTP transport (curl or WinHTTP)";
 		return result;
 	}
 #endif

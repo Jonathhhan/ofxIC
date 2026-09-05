@@ -7,6 +7,8 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 add_executable(ofxIC_tests
 	test_main.cpp
 	test_endpoint.cpp
+	test_review_regressions.cpp
+	test_endpoint_security.cpp
 	test_protocol_numbers.cpp
 	test_media_client.cpp
 	test_acestep_music_client.cpp
@@ -68,6 +70,13 @@ endif()
 
 enable_testing()
 add_test(NAME ofxIC_tests COMMAND ofxIC_tests)
+if(WIN32)
+	find_program(OFXIC_POWERSHELL NAMES pwsh powershell)
+	if(OFXIC_POWERSHELL)
+		add_test(NAME ofxIC_sam_installer_tests COMMAND ${OFXIC_POWERSHELL}
+			-NoProfile -ExecutionPolicy Bypass -File ${CMAKE_CURRENT_SOURCE_DIR}/test_sam_installer.ps1)
+	endif()
+endif()
 
 find_package(Python3 COMPONENTS Interpreter QUIET)
 if(Python3_Interpreter_FOUND)

@@ -2,6 +2,7 @@
 #include "../ofxICExample/src/ExampleManagedProcess.h"
 
 #include <chrono>
+#include <atomic>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
@@ -71,6 +72,19 @@ OFXIC_TEST(example_managed_process_uses_reachable_external_server_without_owning
 	OFXIC_REQUIRE(process.running());
 	OFXIC_REQUIRE(!process.ownsProcess());
 	OFXIC_REQUIRE(process.launchMethod() == "external");
+	std::atomic<bool> modelReady{false};
+	process.setReadinessProbe([&modelReady]() { return modelReady.load(); });
+	process.update();
+	OFXIC_REQUIRE(process.state() == ofxICExample::ManagedProcessState::Starting);
+	modelReady = true;
+	const auto healthDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+	while (process.state() != ofxICExample::ManagedProcessState::Ready &&
+		std::chrono::steady_clock::now() < healthDeadline) {
+		process.update();
+		std::this_thread::sleep_for(std::chrono::milliseconds(10));
+	}
+	OFXIC_REQUIRE(process.state() == ofxICExample::ManagedProcessState::Ready);
+	process.setReadinessProbe({});
 	closesocket(listener);
 	std::this_thread::sleep_for(std::chrono::milliseconds(20));
 	process.update();

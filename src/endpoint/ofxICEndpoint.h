@@ -47,6 +47,8 @@ struct HttpResponse {
 	std::string error;
 };
 
+// Injected transports must preserve the validated request destination and must
+// not forward credentials through redirects to another destination.
 using HttpTransport = std::function<HttpResponse(const HttpRequest &)>;
 
 struct EndpointStatus {
@@ -83,6 +85,8 @@ public:
 
 	static EndpointUrlValidation validateBaseUrl(const std::string & baseUrl);
 
+	// Credentials are scoped to the endpoint's scheme, host and effective port.
+	// Unsafe header bytes and credentialed cross-origin requests fail locally.
 	void setBearerToken(std::string token);
 	bool hasBearerToken() const;
 

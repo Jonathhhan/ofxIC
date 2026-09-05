@@ -345,6 +345,42 @@ ImageResult MediaClient::generateImage(const ImageRequest & request, RequestCont
 	return result;
 }
 
+ImageResult MediaClient::downloadImage(const std::string & url, RequestControl control) const {
+	ImageResult result;
+	if (control.timeoutSeconds < 0 || (url.compare(0, 8, "https://") != 0 && url.compare(0, 7, "http://") != 0)) {
+		result.failure = RequestFailure::InvalidResponse;
+		result.error = "image download requires an HTTP(S) URL and non-negative timeout";
+		return result;
+	}
+	HttpRequest request;
+	request.method = HttpMethod::Get;
+	request.url = url;
+	request.accept = "image/png,image/jpeg,image/webp";
+	request.useBearerToken = false;
+	applyControl(request, std::move(control), 120);
+	request.maxResponseBytes = 64U * 1024U * 1024U;
+	const auto response = endpoint.perform(std::move(request));
+	result.httpStatus = response.status;
+	if (applyResponseFailure(response, result.cancelled, result.failure, result.error, "image download failed")) return result;
+	if (response.status < 200 || response.status >= 300) {
+		result.failure = RequestFailure::Provider;
+		result.error = "image download returned HTTP " + std::to_string(response.status);
+		return result;
+	}
+	const auto & bytes = response.body;
+	if (bytes.size() >= 8 && bytes.compare(0, 8, "\x89PNG\r\n\x1a\n", 8) == 0) result.outputFormat = "png";
+	else if (bytes.size() >= 3 && bytes.compare(0, 3, "\xff\xd8\xff", 3) == 0) result.outputFormat = "jpg";
+	else if (bytes.size() >= 12 && bytes.compare(0, 4, "RIFF") == 0 && bytes.compare(8, 4, "WEBP") == 0) result.outputFormat = "webp";
+	else {
+		result.failure = RequestFailure::InvalidResponse;
+		result.error = "image download did not return a PNG, JPEG or WebP image";
+		return result;
+	}
+	result.imageBytes = bytes;
+	result.success = true;
+	return result;
+}
+
 MediaJob MediaClient::submit(const MediaJobRequest & request, RequestControl control) const {
 	if (control.timeoutSeconds < 0) {
 		MediaJob result;

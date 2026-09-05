@@ -107,14 +107,26 @@ addon.
   Finite-value clamping behavior is unchanged; serializers do not change the
   application's global locale.
 - Media adapters prioritize transport failure over HTTP status and body parsing.
+  Chat and model inspection also reject responses marked with a transport failure,
+  even when HTTP 200 and usable-looking body text have already arrived. Failed
+  exchanges never enter chat history. Windows timeout conversion saturates at
+  the maximum signed millisecond value and checks timeout configuration errors.
   A cancelled/timed-out read after HTTP 200 is not a completed response; a missing
   HTTP status is not a provider error. Native capability/image/job requests and
   all five fal stages stop immediately while preserving the transport cause.
   A server-side cancelled job remains distinct from local request cancellation.
 - On headless Windows builds, non-streaming HTTP(S) uses WinHTTP. In an
   openFrameworks build, non-streaming HTTPS uses WinHTTP/Schannel so certificate
-  and proxy handling follow native Windows trust, while streaming and
-  cancellable local HTTP remain on the curl/openFrameworks transport.
+  and proxy handling follow native Windows trust; other requests use the addon's
+  curl transport when available. WinHTTP and addon curl do not follow redirects.
+  Without either transport, the openFrameworks fallback rejects authenticated
+  requests because its loader cannot enforce the no-redirect policy.
+- Bearer credentials are bound to the configured endpoint origin (scheme, host,
+  effective port). Host case and explicit default ports are equivalent; foreign
+  origins, userinfo, unsafe URL characters and token header injection fail before
+  transport. Explicitly token-free mapping and media-download requests may use
+  other HTTP(S) origins. This is not a general SSRF filter or a DNS/IP allowlist.
+  Application-injected transports must preserve destination and credential scope.
 - Optional credential persistence belongs to the application layer. The
   Windows example uses Credential Manager; the addon core receives only the
   resulting bearer token and has no credential-vault dependency.
@@ -200,6 +212,29 @@ duplicate GUI registry is introduced.
 - No provider SDK or claim that chat, image, video, and music share one
   universal API.
 - No ecosystem manifest or cross-repository control plane.
+
+## Review hardening
+
+Chat responses are validated as complete JSON documents. Text and tool calls
+are selected from their protocol fields; JSON examples in assistant text never
+become executable tool calls. Duplicate keys and excessive nesting are rejected.
+Explicit transport failures remain failures even after successful HTTP headers.
+
+The workbench probes runtime readiness on bounded background workers before
+dispatching deferred requests: llama/Whisper health, native ACE health (official
+ACE also requires initialized models), SD capabilities, and SAM bridge health.
+Readiness means the protocol is available; lazy-loading runtimes can still load
+a model during the first generation request. The generic process supervisor
+retains TCP-only readiness when no protocol probe is configured.
+
+Image URLs are downloaded on the media worker without endpoint credentials,
+with a 64 MiB limit and PNG/JPEG/WebP signature checks. Decoding/rendering remains
+the example's responsibility. Automatic media polling has a monotonic 30-minute
+deadline with bounded requests and cancellation. SAM model options also apply
+to an existing environment and do not require reinstalling Python packages.
+
+These paths have deterministic regression coverage; that is not evidence of
+successful model-backed generation.
 
 ## Growth rule
 

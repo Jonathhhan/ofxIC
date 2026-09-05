@@ -116,6 +116,10 @@ TranscriptionResult TranscriptionClient::transcribe(
 		result.error = response.error.empty() ? "request cancelled" : response.error;
 		return result;
 	}
+	if (response.failure != RequestFailure::None) {
+		result.error = response.error.empty() ? "transcription transport failed" : response.error;
+		return result;
+	}
 	if (!response.started) {
 		if (result.failure == RequestFailure::None) result.failure = RequestFailure::Transport;
 		result.error = response.error.empty() ? "transcription request did not start" : response.error;

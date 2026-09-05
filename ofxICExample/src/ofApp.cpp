@@ -972,6 +972,39 @@ ofApp::~ofApp() {
 }
 
 void ofApp::setup() {
+	const auto healthProbe = [](unsigned short port) {
+		return [port]() {
+		ofHttpRequest request("http://127.0.0.1:" + std::to_string(port) + "/health", "runtime-readiness");
+		request.timeoutSeconds = 2;
+		ofURLFileLoader loader;
+		const auto response = loader.handleRequest(request);
+		if (response.status != 200) return false;
+		const auto body = ofJson::parse(response.data.getText(), nullptr, false);
+		if (port == 8085 && body.is_object() && body.contains("data")) {
+			const auto & data = body["data"];
+			return data.is_object() && data.contains("status") && data["status"] == "ok"
+				&& data.contains("models_initialized") && data["models_initialized"] == true;
+		}
+		return body.is_object() && body.contains("status") && body["status"] == "ok";
+		};
+	};
+	llamaProcess.setReadinessProbe(healthProbe(8080));
+	whisperProcess.setReadinessProbe(healthProbe(8082));
+	aceStepProcess.setReadinessProbe(healthProbe(8085));
+	stableDiffusionProcess.setReadinessProbe([]() {
+		ofxIC::Endpoint endpoint("http://127.0.0.1:8081");
+		ofxIC::MediaClient client(endpoint);
+		ofxIC::RequestControl control;
+		control.timeoutSeconds = 2;
+		return static_cast<bool>(client.inspectCapabilities(control));
+	});
+	samBridgeProcess.setReadinessProbe([]() {
+		ofxIC::Endpoint endpoint("http://127.0.0.1:18085");
+		ofxIC::SegmentationClient client(endpoint);
+		ofxIC::RequestControl control;
+		control.timeoutSeconds = 2;
+		return static_cast<bool>(client.inspectSamBridge(control));
+	});
 	ofDisableArbTex();
 	ofSetWindowTitle("ofxIC Endpoint Workbench");
 	ofSetBackgroundColor(20);
@@ -4202,6 +4235,11 @@ void ofApp::generateMedia() {
 				nextOutput = "Received " + ofToString(result.imagesBase64.size()) + " image payload(s)";
 			} else if (!result.urls.empty()) {
 				nextOutput = result.urls.front();
+				const auto downloaded = media.downloadImage(result.urls.front(), control);
+				if (downloaded) {
+					nextBytes = downloaded.imageBytes;
+					nextFormat = downloaded.outputFormat;
+				} else nextStatus = "Image generated, but download failed: " + downloaded.error;
 			}
 		} else {
 			ofxIC::MediaJobRequest request;
@@ -4223,9 +4261,11 @@ void ofApp::generateMedia() {
 			nextJob = backend == 1
 				? media.submitHuggingFaceFal(request, control)
 				: media.submit(request, control);
-			for (int attempt = 0;
-				autoPoll && nextJob && !nextJob.terminal() && attempt < 3600;
-				++attempt) {
+			const auto pollingDeadline = std::chrono::steady_clock::now() + std::chrono::minutes(30);
+			control.shouldCancel = [this, pollingDeadline]() {
+				return cancellationRequested.load() || std::chrono::steady_clock::now() >= pollingDeadline;
+			};
+			while (autoPoll && nextJob && !nextJob.terminal() && !control.shouldCancel()) {
 				{
 					std::lock_guard<std::mutex> lock(mediaResultMutex);
 					pendingMediaProgressStatus = std::string(video ? "Video" : "Image") +
@@ -4233,11 +4273,20 @@ void ofApp::generateMedia() {
 						"; waiting automatically...";
 				}
 				std::this_thread::sleep_for(std::chrono::milliseconds(500));
+				const auto remaining = std::chrono::duration_cast<std::chrono::seconds>(
+					pollingDeadline - std::chrono::steady_clock::now()).count();
+				if (remaining <= 0 || control.shouldCancel()) break;
+				control.timeoutSeconds = static_cast<int>(std::min<long long>(30, remaining));
 				nextJob = media.poll(nextJob, control);
 			}
-			if (autoPoll && nextJob && !nextJob.terminal()) {
+			if (autoPoll && ((nextJob && !nextJob.terminal()) ||
+				(std::chrono::steady_clock::now() >= pollingDeadline && nextJob.state != ofxIC::MediaJobState::Completed))) {
 				nextJob.success = false;
-				nextJob.error = "media job timed out after 30 minutes of automatic polling";
+				nextJob.cancelled = cancellationRequested.load();
+				nextJob.failure = nextJob.cancelled ? ofxIC::RequestFailure::Cancelled : ofxIC::RequestFailure::Timeout;
+				nextJob.state = nextJob.cancelled ? ofxIC::MediaJobState::Cancelled : ofxIC::MediaJobState::Failed;
+				nextJob.error = nextJob.cancelled ? "media job polling cancelled"
+					: "media job timed out after 30 minutes of automatic polling";
 			}
 			nextStatus = nextJob
 				? std::string(video ? "Video" : "Image") + " job " + nextJob.id +

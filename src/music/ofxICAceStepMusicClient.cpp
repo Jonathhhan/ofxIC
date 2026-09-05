@@ -289,7 +289,7 @@ AceStepMusicJob AceStepMusicClient::submit(const AceStepMusicRequest & request,
 			? maxAudioResponseBytes : maxJsonResponseBytes;
 		nativeRequest.useBearerToken = false;
 		const HttpResponse nativeResponse = endpoint.perform(std::move(nativeRequest));
-		if (nativeResponse.status < 200 || nativeResponse.status >= 300)
+		if (!nativeResponse.started || nativeResponse.cancelled || nativeResponse.failure != RequestFailure::None || nativeResponse.status < 200 || nativeResponse.status >= 300)
 			return failure(responseFailure(nativeResponse, phase == AceStepMusicJobPhase::Synthesis
 				? "acestep.cpp /synth" : "acestep.cpp /lm"), nativeResponse.status,
 				nativeResponse.body, responseFailureKind(nativeResponse), nativeResponse.cancelled,
@@ -318,7 +318,7 @@ AceStepMusicJob AceStepMusicClient::submit(const AceStepMusicRequest & request,
 		synth.maxResponseBytes = maxAudioResponseBytes;
 		synth.useBearerToken = false;
 		const HttpResponse synthResponse = endpoint.perform(std::move(synth));
-		if (synthResponse.status < 200 || synthResponse.status >= 300)
+		if (!synthResponse.started || synthResponse.cancelled || synthResponse.failure != RequestFailure::None || synthResponse.status < 200 || synthResponse.status >= 300)
 			return failure(responseFailure(synthResponse, "acestep.cpp /synth"), synthResponse.status,
 				synthResponse.body, responseFailureKind(synthResponse), synthResponse.cancelled,
 				AceStepMusicProtocol::NativeCpp, AceStepMusicJobPhase::Synthesis);
@@ -342,7 +342,7 @@ AceStepMusicJob AceStepMusicClient::submit(const AceStepMusicRequest & request,
 	httpRequest.maxResponseBytes = maxJsonResponseBytes;
 	httpRequest.useBearerToken = false;
 	const HttpResponse response = endpoint.perform(std::move(httpRequest));
-	if (response.status < 200 || response.status >= 300)
+	if (!response.started || response.cancelled || response.failure != RequestFailure::None || response.status < 200 || response.status >= 300)
 		return failure(responseFailure(response, "ACE-Step /release_task"), response.status,
 			response.body, responseFailureKind(response), response.cancelled);
 	int apiCode = 0;
@@ -371,7 +371,7 @@ AceStepMusicJob AceStepMusicClient::poll(const AceStepMusicJob & job,
 		statusRequest.maxResponseBytes = maxJsonResponseBytes;
 		statusRequest.useBearerToken = false;
 		const HttpResponse statusResponse = endpoint.perform(std::move(statusRequest));
-		if (statusResponse.status < 200 || statusResponse.status >= 300) {
+		if (!statusResponse.started || statusResponse.cancelled || statusResponse.failure != RequestFailure::None || statusResponse.status < 200 || statusResponse.status >= 300) {
 			AceStepMusicJob result = failure(responseFailure(statusResponse, "acestep.cpp /job"),
 				statusResponse.status, statusResponse.body, responseFailureKind(statusResponse),
 				statusResponse.cancelled, AceStepMusicProtocol::NativeCpp, job.phase);
@@ -412,7 +412,7 @@ AceStepMusicJob AceStepMusicClient::poll(const AceStepMusicJob & job,
 			? maxJsonResponseBytes : maxAudioResponseBytes;
 		resultRequest.useBearerToken = false;
 		const HttpResponse resultResponse = endpoint.perform(std::move(resultRequest));
-		if (resultResponse.status < 200 || resultResponse.status >= 300)
+		if (!resultResponse.started || resultResponse.cancelled || resultResponse.failure != RequestFailure::None || resultResponse.status < 200 || resultResponse.status >= 300)
 			return failure(responseFailure(resultResponse, "acestep.cpp job result"), resultResponse.status,
 				resultResponse.body, responseFailureKind(resultResponse), resultResponse.cancelled,
 				AceStepMusicProtocol::NativeCpp, job.phase);
@@ -434,7 +434,7 @@ AceStepMusicJob AceStepMusicClient::poll(const AceStepMusicJob & job,
 		synth.maxResponseBytes = maxJsonResponseBytes;
 		synth.useBearerToken = false;
 		const HttpResponse synthResponse = endpoint.perform(std::move(synth));
-		if (synthResponse.status < 200 || synthResponse.status >= 300)
+		if (!synthResponse.started || synthResponse.cancelled || synthResponse.failure != RequestFailure::None || synthResponse.status < 200 || synthResponse.status >= 300)
 			return failure(responseFailure(synthResponse, "acestep.cpp /synth"), synthResponse.status,
 				synthResponse.body, responseFailureKind(synthResponse), synthResponse.cancelled,
 				AceStepMusicProtocol::NativeCpp, AceStepMusicJobPhase::Synthesis);
@@ -458,7 +458,7 @@ AceStepMusicJob AceStepMusicClient::poll(const AceStepMusicJob & job,
 	query.maxResponseBytes = maxJsonResponseBytes;
 	query.useBearerToken = false;
 	const HttpResponse response = endpoint.perform(std::move(query));
-	if (response.status < 200 || response.status >= 300) {
+	if (!response.started || response.cancelled || response.failure != RequestFailure::None || response.status < 200 || response.status >= 300) {
 		AceStepMusicJob result = failure(responseFailure(response, "ACE-Step /query_result"), response.status,
 			response.body, responseFailureKind(response), response.cancelled);
 		result.id = job.id;
@@ -504,7 +504,7 @@ AceStepMusicJob AceStepMusicClient::poll(const AceStepMusicJob & job,
 	download.maxResponseBytes = maxAudioResponseBytes;
 	download.useBearerToken = false;
 	const HttpResponse audio = endpoint.perform(std::move(download));
-	if (audio.status < 200 || audio.status >= 300)
+	if (!audio.started || audio.cancelled || audio.failure != RequestFailure::None || audio.status < 200 || audio.status >= 300)
 		return failure(responseFailure(audio, "ACE-Step audio download"), audio.status,
 			audio.body, responseFailureKind(audio), audio.cancelled);
 	if (!hasExpectedAudioSignature(audio.body, job.outputFormat)) return failure("ACE-Step audio download returned invalid " + job.outputFormat + " data", audio.status);

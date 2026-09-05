@@ -1,6 +1,7 @@
 #pragma once
 
 #include <memory>
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -30,6 +31,8 @@ public:
 		unsigned short readinessPort,
 		const std::string & workingDirectory = {});
 	bool useExisting(const std::string & name, unsigned short readinessPort);
+	// Called on a worker; must be bounded and capture no mutable GUI state.
+	void setReadinessProbe(std::function<bool()> probe);
 	void followOutputFiles(const std::vector<std::string> & paths);
 	void clearRecentOutput();
 	void update();
