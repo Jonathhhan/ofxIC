@@ -103,6 +103,7 @@ private:
 	void inspectMediaContext();
 	void reconcileCurrentMediaControls();
 	void generateMusic();
+	void rebuildMusicWaveform(const std::string & bytes, const std::string & format);
 	void finishWorker();
 	void finishMediaWorker();
 	std::string configuredToken() const;
@@ -313,6 +314,11 @@ private:
 	ofImage generatedImage;
 	ofVideoPlayer generatedVideo;
 	ofSoundPlayer generatedMusic;
+	std::vector<float> musicWaveformPeaks;
+	float musicPlaybackPosition = 0.0f;
+	float musicPlaybackDuration = 0.0f;
+	bool musicWaveformAvailable = false;
+	bool musicPlaybackPaused = false;
 	std::atomic<bool> mediaBusy{ false };
 	std::atomic<bool> mediaFinished{ false };
 	std::atomic<bool> musicFinished{ false };

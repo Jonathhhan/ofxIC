@@ -8,6 +8,7 @@
 #include <array>
 #include <chrono>
 #include <cctype>
+#include <cmath>
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
@@ -1301,9 +1302,14 @@ void ofApp::update() {
 				savedPath = path;
 				generatedMusic.stop();
 				if (generatedMusic.load(path)) {
+					rebuildMusicWaveform(bytes, format);
+					musicPlaybackDuration = std::max(musicPlaybackDuration, generatedMusic.getDuration());
+					musicPlaybackPaused = false;
 					generatedMusic.play();
 					musicOutput += "\nSaved and playing: " + path;
 				} else {
+					rebuildMusicWaveform({}, {});
+					musicPlaybackPaused = false;
 					musicOutput += "\nSaved, but playback could not load: " + path;
 				}
 			} else {
@@ -1317,6 +1323,98 @@ void ofApp::update() {
 		}
 	}
 	generatedVideo.update();
+}
+
+void ofApp::rebuildMusicWaveform(const std::string & bytes, const std::string & format) {
+	musicWaveformPeaks.clear();
+	musicPlaybackPosition = 0.0f;
+	musicPlaybackDuration = 0.0f;
+	musicWaveformAvailable = false;
+	if (format != "wav" || bytes.size() < 12) return;
+
+	const auto * data = reinterpret_cast<const unsigned char *>(bytes.data());
+	const std::size_t size = bytes.size();
+	if (std::memcmp(data, "RIFF", 4) != 0 || std::memcmp(data + 8, "WAVE", 4) != 0) return;
+
+	std::uint16_t audioFormat = 0;
+	std::uint16_t channels = 0;
+	std::uint16_t bitsPerSample = 0;
+	std::uint32_t sampleRate = 0;
+	std::size_t sampleDataOffset = 0;
+	std::size_t sampleDataSize = 0;
+	std::size_t offset = 12;
+	while (offset + 8 <= size) {
+		const std::uint32_t chunkSize =
+			static_cast<std::uint32_t>(data[offset + 4]) |
+			(static_cast<std::uint32_t>(data[offset + 5]) << 8) |
+			(static_cast<std::uint32_t>(data[offset + 6]) << 16) |
+			(static_cast<std::uint32_t>(data[offset + 7]) << 24);
+		const std::size_t chunkOffset = offset + 8;
+		const std::size_t available = std::min<std::size_t>(chunkSize, size - chunkOffset);
+		if (std::memcmp(data + offset, "fmt ", 4) == 0 && available >= 16) {
+			audioFormat = static_cast<std::uint16_t>(data[chunkOffset]) |
+				(static_cast<std::uint16_t>(data[chunkOffset + 1]) << 8);
+			channels = static_cast<std::uint16_t>(data[chunkOffset + 2]) |
+				(static_cast<std::uint16_t>(data[chunkOffset + 3]) << 8);
+			sampleRate = static_cast<std::uint32_t>(data[chunkOffset + 4]) |
+				(static_cast<std::uint32_t>(data[chunkOffset + 5]) << 8) |
+				(static_cast<std::uint32_t>(data[chunkOffset + 6]) << 16) |
+				(static_cast<std::uint32_t>(data[chunkOffset + 7]) << 24);
+			bitsPerSample = static_cast<std::uint16_t>(data[chunkOffset + 14]) |
+				(static_cast<std::uint16_t>(data[chunkOffset + 15]) << 8);
+		} else if (std::memcmp(data + offset, "data", 4) == 0) {
+			sampleDataOffset = chunkOffset;
+			sampleDataSize = available;
+		}
+		const std::size_t padded = static_cast<std::size_t>(chunkSize) + (chunkSize & 1u);
+		if (padded > size - offset) break;
+		offset += 8 + padded;
+	}
+
+	if (channels == 0 || sampleRate == 0 || sampleDataOffset == 0 || sampleDataSize == 0 ||
+		(audioFormat != 1 && audioFormat != 3) ||
+		(bitsPerSample != 8 && bitsPerSample != 16 && bitsPerSample != 24 && bitsPerSample != 32)) return;
+	const std::size_t bytesPerSample = bitsPerSample / 8;
+	const std::size_t frameBytes = bytesPerSample * channels;
+	if (frameBytes == 0) return;
+	const std::size_t frameCount = sampleDataSize / frameBytes;
+	if (frameCount == 0) return;
+
+	musicPlaybackDuration = static_cast<float>(static_cast<double>(frameCount) / sampleRate);
+	constexpr std::size_t peakCount = 256;
+	musicWaveformPeaks.assign(peakCount, 0.0f);
+	for (std::size_t frame = 0; frame < frameCount; ++frame) {
+		const std::size_t frameOffset = sampleDataOffset + frame * frameBytes;
+		float peak = 0.0f;
+		for (std::size_t channel = 0; channel < channels; ++channel) {
+			const unsigned char * sample = data + frameOffset + channel * bytesPerSample;
+			float value = 0.0f;
+			if (audioFormat == 3 && bitsPerSample == 32) {
+				std::memcpy(&value, sample, sizeof(value));
+			} else if (bitsPerSample == 8) {
+				value = (static_cast<float>(*sample) - 128.0f) / 128.0f;
+			} else if (bitsPerSample == 16) {
+				const std::int16_t v = static_cast<std::int16_t>(
+					static_cast<std::uint16_t>(sample[0]) |
+					(static_cast<std::uint16_t>(sample[1]) << 8));
+				value = static_cast<float>(v) / 32768.0f;
+			} else if (bitsPerSample == 24) {
+				std::int32_t v = static_cast<std::int32_t>(sample[0]) |
+					(static_cast<std::int32_t>(sample[1]) << 8) |
+					(static_cast<std::int32_t>(sample[2]) << 16);
+				if ((v & 0x00800000) != 0) v |= ~0x00ffffff;
+				value = static_cast<float>(v) / 8388608.0f;
+			} else {
+				std::int32_t v = 0;
+				std::memcpy(&v, sample, sizeof(v));
+				value = static_cast<float>(v) / 2147483648.0f;
+			}
+			if (std::isfinite(value)) peak = std::max(peak, std::min(1.0f, std::abs(value)));
+		}
+		const std::size_t bucket = std::min(peakCount - 1, frame * peakCount / frameCount);
+		musicWaveformPeaks[bucket] = std::max(musicWaveformPeaks[bucket], peak);
+	}
+	musicWaveformAvailable = true;
 }
 
 void ofApp::draw() {
@@ -2195,9 +2293,73 @@ void ofApp::draw() {
 	ImGui::TextWrapped("%s", musicStatus.c_str());
 	if (!musicOutput.empty()) ImGui::TextWrapped("%s", musicOutput.c_str());
 	if (generatedMusic.isLoaded()) {
-		if (ImGui::Button("Play generated music")) generatedMusic.play();
+		musicPlaybackPosition = std::clamp(generatedMusic.getPosition(), 0.0f, 1.0f);
+		musicPlaybackDuration = std::max(musicPlaybackDuration, generatedMusic.getDuration());
+		const float duration = std::max(0.0f, musicPlaybackDuration);
+		const float elapsed = duration * musicPlaybackPosition;
+		const auto formatClock = [](float seconds) {
+			const int total = std::max(0, static_cast<int>(seconds + 0.5f));
+			return std::string(std::to_string(total / 60) + ":" +
+				(total % 60 < 10 ? "0" : "") + std::to_string(total % 60));
+		};
+		ImGui::Text("Playback  %s / %s  (%.0f%%)", formatClock(elapsed).c_str(),
+			formatClock(duration).c_str(), musicPlaybackPosition * 100.0f);
 		ImGui::SameLine();
-		if (ImGui::Button("Stop generated music")) generatedMusic.stop();
+		ImGui::TextDisabled("%s", musicPlaybackPaused ? "Paused" :
+			(generatedMusic.isPlaying() ? "Playing" : "Stopped"));
+		if (ImGui::Button(musicPlaybackPaused ? "Resume" : "Pause")) {
+			musicPlaybackPaused = !musicPlaybackPaused;
+			generatedMusic.setPaused(musicPlaybackPaused);
+			if (!musicPlaybackPaused) generatedMusic.play();
+		}
+		ImGui::SameLine();
+		if (ImGui::Button("Restart")) {
+			generatedMusic.stop();
+			generatedMusic.setPosition(0.0f);
+			musicPlaybackPosition = 0.0f;
+			musicPlaybackPaused = false;
+			generatedMusic.play();
+		}
+		ImGui::SameLine();
+		if (ImGui::Button("Stop")) {
+			generatedMusic.stop();
+			musicPlaybackPosition = 0.0f;
+			musicPlaybackPaused = false;
+		}
+
+		if (musicWaveformAvailable && !musicWaveformPeaks.empty()) {
+			const float waveformHeight = 92.0f;
+			ImGui::InvisibleButton("##music-waveform", ImVec2(-1, waveformHeight));
+			const ImVec2 min = ImGui::GetItemRectMin();
+			const ImVec2 max = ImGui::GetItemRectMax();
+			const bool hovered = ImGui::IsItemHovered();
+			if (hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+				musicPlaybackPosition = std::clamp(
+					(ImGui::GetIO().MousePos.x - min.x) / std::max(1.0f, max.x - min.x),
+					0.0f, 1.0f);
+				generatedMusic.setPosition(musicPlaybackPosition);
+			}
+			ImDrawList * drawList = ImGui::GetWindowDrawList();
+			drawList->AddRectFilled(min, max, IM_COL32(24, 28, 36, 255), 4.0f);
+			const float center = (min.y + max.y) * 0.5f;
+			const float halfHeight = (max.y - min.y) * 0.44f;
+			for (std::size_t i = 0; i < musicWaveformPeaks.size(); ++i) {
+				const float x = min.x + (max.x - min.x) *
+					(static_cast<float>(i) + 0.5f) / musicWaveformPeaks.size();
+				const float amplitude = std::max(2.0f, musicWaveformPeaks[i] * halfHeight);
+				const ImU32 color = (static_cast<float>(i) / musicWaveformPeaks.size()) <=
+					musicPlaybackPosition ? IM_COL32(92, 190, 255, 230) : IM_COL32(100, 110, 130, 210);
+				drawList->AddLine(ImVec2(x, center - amplitude), ImVec2(x, center + amplitude), color, 1.5f);
+			}
+			const float playheadX = min.x + (max.x - min.x) * musicPlaybackPosition;
+			drawList->AddLine(ImVec2(playheadX, min.y), ImVec2(playheadX, max.y),
+				IM_COL32(255, 210, 90, 255), 2.0f);
+		} else {
+			ImGui::ProgressBar(musicPlaybackPosition, ImVec2(-1, 14), "");
+			ImGui::TextDisabled("Waveform unavailable for this audio format.");
+		}
+		if (ImGui::SliderFloat("Seek", &musicPlaybackPosition, 0.0f, 1.0f, "%.3f"))
+			generatedMusic.setPosition(musicPlaybackPosition);
 	}
 		ImGui::EndTabItem();
 	}
